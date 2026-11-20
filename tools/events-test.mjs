@@ -172,9 +172,10 @@ function step(dt, ev) {
     fin(b.x, b.z, b.d, b.vol3);
   }
   for (let i = g.objects.length - 1; i >= 0; i--) {
-    const o = g.objects[i], p = o.group.position;
-    if (!o) continue;
-    fin(p.x, p.y, p.z, o.size, o.rad);
+    const o = g.objects[i];
+    if (!o) continue;                                       // the list shrank under us (an event removed things from a callback)
+    const p = o.group.position;
+    if (p.x !== p.x || p.y !== p.y || p.z !== p.z) throw new Error('NaN position on ' + o.spec.id);
     if (o.fly) {
       o.fly.vy -= 9.8 * dt;
       p.x = clamp(p.x + o.fly.vx * dt, BOUNDS.x1 + 5, BOUNDS.x2 - 5); p.y += o.fly.vy * dt; p.z = clamp(p.z + o.fly.vz * dt, BOUNDS.z1 + 5, BOUNDS.z2 - 5);
@@ -183,13 +184,16 @@ function step(dt, ev) {
     }
     if (o.cool > 0) o.cool -= dt;
     if (o.spawnT > 0) { o.spawnT -= dt; if (o.spawnT > 0.3) continue; }
-    let near = null, gap = 1e9;
-    for (const b of g.balls) { const d = Math.hypot(p.x - b.x, p.z - b.z) - b.d; if (d < gap) { gap = d; near = b; } }
-    if (o.kind === 'creature' && o.script && gap < 60 + near.d * 11) { o.script(o, dt, near); if (o.gone || o.on) continue; }
+    if (o.script) {
+      let near = null, gap = 1e9;
+      for (const b of g.balls) { const d = Math.hypot(p.x - b.x, p.z - b.z) - b.d; if (d < gap) { gap = d; near = b; } }
+      if (o.kind === 'creature' && gap < 60 + near.d * 11) { o.script(o, dt, near); if (o.gone || o.on) continue; }
+    }
     for (const b of g.balls) {
       if (o.on || o.gone) break;
-      const dist = Math.hypot(p.x - b.x, p.z - b.z), reach = b.d / 2 + o.rad;
-      if (dist >= reach) continue;
+      const dx = p.x - b.x, dz = p.z - b.z, reach = b.d / 2 + o.rad;
+      if (dx * dx + dz * dz >= reach * reach) continue;
+      const dist = Math.hypot(dx, dz);
       if (!o.noPick && o.size <= b.d * H.pickRatio(b)) { if (o.cool <= 0) { if (b.ratioBonus && o.size > b.d * 0.5) g.stats.ratio++; attach(b, o); } continue; }
       if (o.spec.flat) continue;
       if (o.onBump && o.cool <= 0) { o.onBump(b, o); g.stats.bumps++; }
