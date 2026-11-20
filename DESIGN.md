@@ -105,6 +105,9 @@ The first human playtest reached 24 m against CPUs at 8-13 m, pulling ahead in t
 - **Dash effects:** dust kicked out behind the spinning ball and sparks off it that build with the charge, marching chevrons on the
   ground showing the direction and reach of the burst, a camera pull-in and rumble, a dust ring on release, a team-coloured
   trail and speed lines at the screen edges during the burst. CPU balls show the same dust, sparks, chevrons and trail, so a dash can be seen coming.
+- **Dash brought in line with weight (third pass):** a burst's speed is `dashMult(d)` times top speed (2.35x at 0.6 m, 2.2x at 3 m,
+  1.9x at 8 m, 1.7x at 15 m, was 2.4x at every size) and it lasts less for heavy balls (73% as long at 15 m). Energy now refills
+  in 16 s and gains 1.25% per pick-up (both halved). The dash bar sits in the player panel with ball size, critters held and army power.
 - **Late bloomer:** any ball still under 1 m when Expedition begins is boosted to 1 m, so nobody is stuck in the Green.
 
 ## 5. Events

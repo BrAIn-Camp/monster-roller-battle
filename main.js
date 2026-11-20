@@ -50,8 +50,8 @@ const RUN_STEER = 0.45;   // steering multiplier during a burst: fast, and hard 
 // A longer wind-up gives a longer, faster burst. Energy refills on its own and a little with every thing rolled up.
 const CHARGE_TIME = 1.2;  // seconds of wind-up for a full charge (which costs a full energy meter)
 const CHARGE_CRAWL = 0.3; // share of top speed while winding up
-const ENERGY_FILL = 8;    // seconds for the meter to refill on its own
-const ENERGY_PICK = 0.025;// energy gained per thing rolled up
+const ENERGY_FILL = 16;   // seconds for the meter to refill on its own
+const ENERGY_PICK = 0.0125;// energy gained per thing rolled up
 const DASH_MIN = 0.2;     // the least energy needed to start a wind-up
 const burstTime = (c) => 0.45 + 1.35 * c, burstKick = (c) => 0.75 + 0.55 * c;   // by charge 0..1: seconds of burst, and its speed as a share of RUN x top speed
 const DRIVE = 1.6;        // how quickly the ball gets up to speed (per second); lower = heavier
@@ -78,6 +78,8 @@ const growthOf = (Bq, o) => GROW * o.size ** 3 * (o.spec.mass ?? 1) * (o.bonus ?
 // 3 m = 83%, 8 m = 66%, 15 m = 53% of a small ball's pull), so it carries its momentum.
 const topSpeed = (d) => 3.2 * Math.pow(d + 0.5, 0.85) / Math.pow(1 + d / 10, 0.25);
 const heft = (d) => 1 / Math.pow(1 + d / 8, 0.6);
+// A burst is worth less to a heavy ball: RUN times top speed for a small one, falling with heft (2.2x at 3 m, 1.9x at 8 m, 1.7x at 15 m).
+const dashMult = (d) => 1 + (RUN - 1) * heft(d);
 const CHARGE_STEER = 0.35; // steering (keys and mouse) while winding up a dash: you commit to a direction
 // How many things a crash knocks off: nothing below top speed, then more the faster you were going (a full sprint: about 14).
 const crashLoss = () => 0;      // running into scenery only stops the ball; rams and charging critters are what knock things off
@@ -659,6 +661,10 @@ function updateHud() {
   const en = $('energyfill'), ch = $('chargefill');
   en.style.width = (S.energy * 100).toFixed(1) + '%'; ch.style.width = (S.charge * 100).toFixed(1) + '%';
   $('energy').className = S.charge > 0 ? 'charging' : S.energy >= 0.999 ? 'full' : S.energy < DASH_MIN ? 'empty' : '';
+  $('dashlabel').textContent = S.charge > 0 ? 'CHARGING' : S.boostT > 0 ? 'BURST!' : S.energy >= 0.999 ? 'DASH READY' : 'DASH';
+  const nCrit = String(S.attachedCritters), nPow = String(Math.round(armyPower(S.army)));
+  if ($('statCrit').textContent !== nCrit) $('statCrit').textContent = nCrit;
+  if ($('statPow').textContent !== nPow) $('statPow').textContent = nPow;
   $('size').firstChild.nodeValue = fmtSize(S.d);
   const target = S.mode === 'timed' && LEVEL.targetDiameter > 0;
   $('bar').style.display = target ? 'block' : 'none';
@@ -810,7 +816,7 @@ function aimArrow(Bq, c) {
     for (let i = 0; i < CHEVRONS; i++) { const ch = new THREE.Mesh(arrowGeo, m); ch.renderOrder = 3; g.add(ch); }
     g.userData.mat = m; Bq.arrow = g; arrows.add(g);
   }
-  const r = Bq.d / 2, hx = Math.sin(Bq.heading), hz = Math.cos(Bq.heading), len = r * 1.2 + c * topSpeed(Bq.d) * RUN * burstTime(c) * 0.55, step = Math.max(Bq.d * 0.8, len / CHEVRONS);
+  const r = Bq.d / 2, hx = Math.sin(Bq.heading), hz = Math.cos(Bq.heading), len = r * 1.2 + c * topSpeed(Bq.d) * dashMult(Bq.d) * burstTime(c) * Math.sqrt(heft(Bq.d)) * 0.55, step = Math.max(Bq.d * 0.8, len / CHEVRONS);
   Bq.arrow.visible = true;
   Bq.arrow.userData.mat.opacity = 0.5 + 0.4 * c + (c >= 0.999 ? 0.1 * Math.sin(S.time * 30) : 0);
   Bq.arrow.children.forEach((ch, i) => {
@@ -1114,7 +1120,7 @@ function updateRivals(dt, frozen) {
     R.stallT = Math.max(0, R.stallT - dt); R.boostT = Math.max(0, R.boostT - dt);
     if (!frozen) R.energy = Math.min(1, R.energy + dt / ENERGY_FILL * MODS.energy);
     const band = clamp(1.04 - DIFF.band * Math.log2(R.d / S.d), DIFF.floor, 1.08);     // a CPU well ahead of the player eases off; one behind hurries
-    const r = R.d / 2, vmax = frozen || R.stallT > 0 ? 0 : topSpeed(R.d) * CPU_SPEED * band * (R.boostT > 0 ? RUN * 0.95 : R.wind > 0 ? CHARGE_CRAWL : 1), g0 = groundAt(R.x, R.z);
+    const r = R.d / 2, vmax = frozen || R.stallT > 0 ? 0 : topSpeed(R.d) * CPU_SPEED * band * (R.boostT > 0 ? dashMult(R.d) * 0.95 : R.wind > 0 ? CHARGE_CRAWL : 1), g0 = groundAt(R.x, R.z);
     // choose what to chase: the nearest thing it can roll up on its own level, preferring critters
     R.retarget -= dt;
     if (R.wander > 0) { R.wander -= dt; R.target = null; }
@@ -1145,9 +1151,9 @@ function updateRivals(dt, frozen) {
     aimArrow(R, windC);
     if (R.wind > 0) { chargeFx(R, windC, dt); rollAxis.set(Math.cos(R.heading), 0, -Math.sin(R.heading)); tmpQ.setFromAxisAngle(rollAxis, (6 + 22 * windC) * dt); R.ball.quaternion.premultiply(tmpQ); }
     else if (R.boostT > 0 && !frozen) trailFx(R, dt);
-    if (R.wind > 0) { R.wind -= dt; if (R.wind <= 0) { burstFx(R, 0.65); R.boostT = burstTime(0.65); R.v = Math.max(R.v, topSpeed(R.d) * CPU_SPEED * RUN * burstKick(0.65)); } }
+    if (R.wind > 0) { R.wind -= dt; if (R.wind <= 0) { burstFx(R, 0.65); R.boostT = burstTime(0.65) * Math.sqrt(hf); R.v = Math.max(R.v, topSpeed(R.d) * CPU_SPEED * dashMult(R.d) * burstKick(0.65)); } }
     else if (clear && !frozen && R.boostT <= 0 && R.energy >= 0.7 && rand() < DIFF.dash * dt) { R.wind = CHARGE_TIME * 0.65; R.energy -= 0.65; }
-    R.v += ((Math.abs(diff) < 1 ? vmax : vmax * 0.35) - R.v) * (1 - Math.exp(-DRIVE * (R.boostT > 0 ? 3 : hf) * dt));
+    R.v += ((Math.abs(diff) < 1 ? vmax : vmax * 0.35) - R.v) * (1 - Math.exp(-DRIVE * (R.boostT > 0 ? 3 * Math.sqrt(hf) : hf) * dt));
     const hx = Math.sin(R.heading), hz = Math.cos(R.heading);
     const nx = clamp(R.x + hx * R.v * dt, BOUNDS.x1 + 5, BOUNDS.x2 - 5), nz = clamp(R.z + hz * R.v * dt, BOUNDS.z1 + 5, BOUNDS.z2 - 5);
     const px = nx + hx * r * 0.8, pz = nz + hz * r * 0.8;
@@ -1544,24 +1550,24 @@ function update(dt) {
     S.charge += add; S.energy -= add; charging = true;
     if (add > 0 && Math.floor(S.time * 14) !== Math.floor((S.time - dt) * 14)) tone(180 + 520 * S.charge, 200 + 560 * S.charge, 0.05, 'sawtooth', 0.035);
   } else if (S.charge > 0) { released = S.charge; S.charge = 0; }
-  if (released > 0.05) { S.boostT = burstTime(released); S.boostK = 1 + 0.2 * released; S.dashed = true; burstFx(S, released); tone(240, 1100 + 500 * released, 0.3, 'sawtooth', 0.11); }
+  if (released > 0.05) { S.boostT = burstTime(released) * Math.sqrt(heft(S.d)); S.boostK = 1 + 0.2 * released; S.dashed = true; burstFx(S, released); tone(240, 1100 + 500 * released, 0.3, 'sawtooth', 0.11); }
   if (charging) chargeFx(S, S.charge, dt);
   else if (S.boostT > 0 && S.dashed && !frozen) trailFx(S, dt);
   aimArrow(S, charging ? S.charge : 0);
   const boosting = S.boostT > 0;
   if (boosting) { S.boostT -= dt; f = 1; }
   run = boosting;
-  const top = vmax * (boosting ? RUN * S.boostK : charging ? CHARGE_CRAWL : 1);
+  const top = vmax * (boosting ? dashMult(S.d) * S.boostK : charging ? CHARGE_CRAWL : 1);
   const hf = heft(S.d);
   S.heading -= (t * 2.4 * dt * Math.sqrt(hf) * (boosting ? RUN_STEER : 1) + S.mdx * MOUSE_YAW) * (charging ? CHARGE_STEER : 1);     // a burst dulls the keys; winding up dulls keys and mouse alike
   S.mdx = 0;
   const hx = Math.sin(S.heading), hz = Math.cos(S.heading);
-  if (released > 0.05) { const v = vmax * RUN * burstKick(released); S.vx = hx * v; S.vz = hz * v; S.shake = 0.08; }
+  if (released > 0.05) { const v = vmax * dashMult(S.d) * burstKick(released); S.vx = hx * v; S.vz = hz * v; S.shake = 0.08; }
   if (charging) { const br = Math.exp(-4 * dt); S.vx *= br; S.vz *= br; }          // winding up: the ball digs in
   // Momentum: the ball takes time to get up to speed and to stop, and the faster it is going the less it grips,
   // so at a sprint it keeps sliding the way it was headed long after the camera has turned.
   const fast = Math.hypot(S.vx, S.vz) / vmax;                 // speed as a share of ordinary top speed
-  const drive = DRIVE * (boosting ? 1 : hf);                  // a heavy ball is slower to get going and to stop
+  const drive = DRIVE * (boosting ? Math.sqrt(hf) : hf);                  // a heavy ball is slower to get going and to stop
   S.vx += hx * f * top * drive * dt; S.vz += hz * f * top * drive * dt;
   let vf = S.vx * hx + S.vz * hz, vl = -S.vx * hz + S.vz * hx;
   vf *= Math.exp(-drive * (f * vf < 0 ? 2.2 : 1) * dt);        // pulling back brakes harder than coasting
