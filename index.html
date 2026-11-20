@@ -9,17 +9,20 @@
   canvas#c { display: block; width: 100vw; height: 100vh; }
   .pill { background: rgba(255,255,255,.88); border: 3px solid #2b2540; border-radius: 16px; padding: 8px 14px; box-shadow: 0 4px 0 rgba(43,37,64,.35); }
   #hud { position: fixed; inset: 0; pointer-events: none; display: none; }
-  #size { position: absolute; left: 16px; top: 16px; font-size: 28px; font-weight: 800; }
-  #size small { display: block; font-size: 12px; font-weight: 600; opacity: .7; }
+  /* the player's own panel, bottom centre, just under the ball: critters | size + dash gauge | power */
+  #me { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); display: flex; align-items: flex-end; gap: 10px; }
+  #me .chip { background: rgba(255,250,240,.94); border: 3px solid #2b2540; border-radius: 16px; padding: 5px 12px 6px; min-width: 74px; text-align: center; box-shadow: 0 4px 0 rgba(43,37,64,.35); margin-bottom: 6px; }
+  #me .chip b { display: block; font-size: 24px; font-weight: 800; line-height: 1.05; } #me .chip small { font-size: 10px; font-weight: 800; letter-spacing: 1.5px; text-transform: uppercase; opacity: .65; }
+  #size { position: relative; background: #fffaf0; border: 4px solid #2b2540; border-top: 9px solid #e24a4a; border-radius: 22px; padding: 2px 20px 8px; min-width: 270px; text-align: center; font-size: 34px; font-weight: 800; line-height: 1.15; box-shadow: 0 6px 0 rgba(43,37,64,.4); }
+  #size small { display: block; font-size: 10px; font-weight: 800; letter-spacing: 2px; text-transform: uppercase; opacity: .55; margin-top: -3px; }
   #bar { height: 8px; border: 2px solid #2b2540; border-radius: 6px; margin-top: 4px; overflow: hidden; background: #fff; }
   #barfill { height: 100%; width: 0; background: #ffb52e; }
-  #size { min-width: 210px; }
-  #size .stats { display: flex; gap: 14px; font-size: 13px; font-weight: 700; margin-top: 6px; padding-top: 6px; border-top: 2px solid rgba(43,37,64,.18); }
-  #size .stats b { font-size: 17px; font-weight: 800; }
-  #size .dashrow { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
-  #dashlabel { font-size: 11px; font-weight: 800; letter-spacing: 1px; min-width: 82px; }
-  #energy { position: relative; flex: 1; height: 16px; border: 2px solid #2b2540; border-radius: 9px; overflow: hidden; background: #fff; }
-  #energyfill { height: 100%; width: 100%; background: #4ac2ff; } #chargefill { position: absolute; left: 0; top: 0; height: 100%; width: 0; background: #ffd23f; opacity: .9; }
+  #size .dashrow { display: flex; align-items: center; gap: 8px; margin-top: 5px; }
+  #size .bolt { font-size: 18px; line-height: 1; filter: drop-shadow(0 1px 0 #2b2540); }
+  #dashlabel { font-size: 10px; font-weight: 800; letter-spacing: 2px; margin-top: 3px; opacity: .7; }
+  #energy { position: relative; flex: 1; height: 18px; border: 3px solid #2b2540; border-radius: 10px; overflow: hidden; background: #e9e4f0; }
+  #energy .ticks { position: absolute; inset: 0; background: repeating-linear-gradient(90deg, transparent 0 calc(25% - 2px), rgba(43,37,64,.55) calc(25% - 2px) 25%); pointer-events: none; }
+  #energyfill { height: 100%; width: 100%; background: linear-gradient(#7fdcff, #36b4f5); } #chargefill { position: absolute; left: 0; top: 0; height: 100%; width: 0; background: #ffd23f; opacity: .9; }
   #energy.full #energyfill { background: #36d6ff; box-shadow: 0 0 8px #36d6ff inset; } #energy.empty #energyfill { background: #b8c4d0; }
   #energy.charging { animation: chg .12s infinite alternate; } @keyframes chg { from { transform: translateX(-1px); } to { transform: translateX(1px); } }
   .diffrow { margin: 6px 0 2px; font-size: 14px; font-weight: 700; } .diffrow button { font-size: 14px; padding: 5px 14px; margin: 3px; background: #fff; box-shadow: 0 3px 0 #2b2540; }
@@ -28,14 +31,20 @@
   #seek .arr { display: inline-block; font-size: 18px; font-weight: 900; }
   #seek .type { display: inline-block; padding: 0 8px; border-radius: 8px; color: #fff; font-size: 11px; }
   #timer { position: absolute; left: 50%; top: 16px; transform: translateX(-50%); font-size: 26px; font-weight: 800; min-width: 80px; text-align: center; }
-  #goals { position: absolute; right: 16px; top: 16px; font-size: 14px; font-weight: 700; line-height: 1.6; max-width: 260px; }
+  #goals { position: absolute; left: 16px; top: 16px; font-size: 13px; font-weight: 700; padding: 6px 10px 8px; min-width: 250px; }
+  .sbhead { display: grid; grid-template-columns: 1fr 62px 50px; gap: 0 4px; padding: 0 4px; font-size: 9px; font-weight: 800; letter-spacing: 1.5px; text-transform: uppercase; opacity: .55; text-align: right; margin-bottom: 2px; } .sbhead span:first-child { text-align: left; }
+  .sb { display: grid; grid-template-columns: 20px 54px 1fr 62px 50px; align-items: center; gap: 0 4px; padding: 2px 4px; border-radius: 9px; white-space: nowrap; }
+  .sb.me { background: #ffe9a8; outline: 2px solid #2b2540; }
+  .sb .rk { font-style: normal; font-weight: 800; width: 18px; height: 18px; line-height: 18px; text-align: center; border-radius: 50%; background: #2b2540; color: #fff; font-size: 11px; }
+  .sb .szbar { height: 9px; border: 2px solid #2b2540; border-radius: 6px; background: #fff; overflow: hidden; } .sb .szbar u { display: block; height: 100%; transition: width .3s; }
+  .sb em { font-style: normal; text-align: right; font-weight: 800; } .sb .cr { text-align: right; opacity: .8; }
   #goals .done { color: #2f8a3f; }
-  #pick { position: absolute; left: 50%; bottom: 28px; transform: translateX(-50%); font-size: 18px; font-weight: 800; opacity: 0; white-space: nowrap; }
+  #pick { position: absolute; left: 50%; bottom: 142px; transform: translateX(-50%); font-size: 18px; font-weight: 800; opacity: 0; white-space: nowrap; }
   #pick.show { animation: pop 1.6s ease-out; }
   #pick .type { display: inline-block; padding: 1px 8px; border-radius: 8px; color: #fff; font-size: 13px; margin-left: 6px; }
   @keyframes pop { 0% { opacity: 0; transform: translateX(-50%) scale(.7); } 12% { opacity: 1; transform: translateX(-50%) scale(1.08); } 20% { transform: translateX(-50%) scale(1); } 80% { opacity: 1; } 100% { opacity: 0; } }
-  #hudMute { position: absolute; left: 16px; top: 176px; font-size: 12px; font-weight: 700; padding: 4px 10px; margin: 0; pointer-events: auto; box-shadow: 0 2px 0 #2b2540; }
-  #dexpop { position: absolute; right: 16px; top: 132px; width: 176px; text-align: center; opacity: 0; transform: translateX(40px); transition: opacity .25s, transform .25s; font-size: 13px; font-weight: 700; padding: 8px 10px 10px; }
+  #hudMute { position: absolute; right: 16px; bottom: 16px; font-size: 12px; font-weight: 700; padding: 4px 10px; margin: 0; pointer-events: auto; box-shadow: 0 2px 0 #2b2540; }
+  #dexpop { position: absolute; right: 16px; top: 16px; width: 176px; text-align: center; opacity: 0; transform: translateX(40px); transition: opacity .25s, transform .25s; font-size: 13px; font-weight: 700; padding: 8px 10px 10px; }
   #dexpop.show { opacity: 1; transform: none; }
   #dexpop canvas { width: 150px; height: 150px; display: block; margin: 0 auto; }
   #dexpop .nm { font-size: 16px; font-weight: 800; }
@@ -138,7 +147,11 @@
 <canvas id="c"></canvas>
 
 <div id="hud">
-  <div id="size" class="pill">45.0 cm<small>ball size</small><div id="bar"><div id="barfill"></div></div><div class="stats"><span><b id="statCrit">0</b> critters</span><span>power <b id="statPow">0</b></span></div><div class="dashrow"><span id="dashlabel">DASH</span><div id="energy"><div id="energyfill"></div><div id="chargefill"></div></div></div></div>
+  <div id="me">
+    <div class="chip"><b id="statCrit">0</b><small>critters</small></div>
+    <div id="size">60.0 cm<small>ball size</small><div id="bar"><div id="barfill"></div></div><div class="dashrow"><span class="bolt">&#9889;</span><div id="energy"><div id="energyfill"></div><div id="chargefill"></div><i class="ticks"></i></div></div><div id="dashlabel">DASH</div></div>
+    <div class="chip"><b id="statPow">0</b><small>power</small></div>
+  </div>
   <div id="seek" class="pill"></div>
   <button id="hudMute" class="alt">Sound: on (M)</button>
   <div id="timer" class="pill">5:00</div>

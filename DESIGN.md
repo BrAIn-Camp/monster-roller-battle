@@ -108,6 +108,10 @@ The first human playtest reached 24 m against CPUs at 8-13 m, pulling ahead in t
 - **Dash brought in line with weight (third pass):** a burst's speed is `dashMult(d)` times top speed (2.35x at 0.6 m, 2.2x at 3 m,
   1.9x at 8 m, 1.7x at 15 m, was 2.4x at every size) and it lasts less for heavy balls (73% as long at 15 m). Energy now refills
   in 16 s and gains 1.25% per pick-up (both halved). The dash bar sits in the player panel with ball size, critters held and army power.
+- **Fourth pass:** the burst falls off faster with weight (2.0x at 3 m, 1.65x at 8 m, 1.45x at 15 m; length 83%, 66%, 53%).
+  HUD re-laid: the player's panel (critters, ball size with the dash gauge, army power) sits bottom centre just under the ball;
+  standings are a ranked list with size bars top left; the dex card is top right; the clock, phase bar and event chip stay top centre;
+  the minimap is bottom left and the sound button bottom right.
 - **Late bloomer:** any ball still under 1 m when Expedition begins is boosted to 1 m, so nobody is stuck in the Green.
 
 ## 5. Events

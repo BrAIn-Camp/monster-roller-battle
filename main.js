@@ -78,8 +78,10 @@ const growthOf = (Bq, o) => GROW * o.size ** 3 * (o.spec.mass ?? 1) * (o.bonus ?
 // 3 m = 83%, 8 m = 66%, 15 m = 53% of a small ball's pull), so it carries its momentum.
 const topSpeed = (d) => 3.2 * Math.pow(d + 0.5, 0.85) / Math.pow(1 + d / 10, 0.25);
 const heft = (d) => 1 / Math.pow(1 + d / 8, 0.6);
-// A burst is worth less to a heavy ball: RUN times top speed for a small one, falling with heft (2.2x at 3 m, 1.9x at 8 m, 1.7x at 15 m).
-const dashMult = (d) => 1 + (RUN - 1) * heft(d);
+// A burst is worth much less to a heavy ball: RUN times top speed for a small one, falling fast with heft
+// (2.3x at 0.6 m, 2.0x at 3 m, 1.65x at 8 m, 1.45x at 15 m), and it is shorter too (dashLast).
+const dashMult = (d) => 1 + (RUN - 1) * Math.pow(heft(d), 1.8);
+const dashLast = (d) => heft(d);
 const CHARGE_STEER = 0.35; // steering (keys and mouse) while winding up a dash: you commit to a direction
 // How many things a crash knocks off: nothing below top speed, then more the faster you were going (a full sprint: about 14).
 const crashLoss = () => 0;      // running into scenery only stops the ball; rams and charging critters are what knock things off
@@ -671,11 +673,13 @@ function updateHud() {
   if (target) $('barfill').style.width = Math.min(100, S.d / LEVEL.targetDiameter * 100).toFixed(1) + '%';
   $('timer').textContent = S.mode === 'timed' ? fmtTime(Math.max(0, S.timeLeft)) : 'Free roam';
   let html = '';
-  if (S.mode === 'timed') {
-    const rows = [{ tm: TEAMS[0], name: 'You', d: S.d, army: S.army }, ...rivals.map((R) => ({ tm: TEAMS[R.team], name: TEAMS[R.team].name, d: R.d, army: R.army }))];
-    for (const r of rows) html += `<div class="sb"><span class="dot" style="background:${r.tm.css}"></span><b>${r.name}</b> ${fmtSize(r.d)} · ${r.army.length} critters · power ${Math.round(armyPower(r.army))}</div>`;
-    html += '<div class="sbnote">When time is up, a wheel picks the arena and the teams fight.</div>';
-  } else html += `<div>Critters rolled up: ${S.attachedCritters}</div>`;
+  if (S.mode === 'timed') {                     // standings, biggest ball first
+    const rows = [{ tm: TEAMS[0], name: 'You', d: S.d, army: S.army, me: true }, ...rivals.map((R) => ({ tm: TEAMS[R.team], name: TEAMS[R.team].name, d: R.d, army: R.army }))].sort((a, b) => b.d - a.d);
+    const big = Math.max(rows[0].d, 1);
+    rows.forEach((r, i) => { html += `<div class="sb${r.me ? ' me' : ''}"><i class="rk">${i + 1}</i><b style="color:${r.tm.css}">${r.name}</b><span class="szbar"><u style="width:${(r.d / big * 100).toFixed(0)}%;background:${r.tm.css}"></u></span><em>${fmtSize(r.d)}</em><span class="cr">${r.army.length}</span></div>`; });
+    html = '<div class="sbhead"><span>Standings</span><span>size</span><span>critters</span></div>' + html;
+  }
+  $('goals').style.display = html ? '' : 'none';
   if ($('goals').innerHTML !== html) $('goals').innerHTML = html;
 }
 
@@ -816,7 +820,7 @@ function aimArrow(Bq, c) {
     for (let i = 0; i < CHEVRONS; i++) { const ch = new THREE.Mesh(arrowGeo, m); ch.renderOrder = 3; g.add(ch); }
     g.userData.mat = m; Bq.arrow = g; arrows.add(g);
   }
-  const r = Bq.d / 2, hx = Math.sin(Bq.heading), hz = Math.cos(Bq.heading), len = r * 1.2 + c * topSpeed(Bq.d) * dashMult(Bq.d) * burstTime(c) * Math.sqrt(heft(Bq.d)) * 0.55, step = Math.max(Bq.d * 0.8, len / CHEVRONS);
+  const r = Bq.d / 2, hx = Math.sin(Bq.heading), hz = Math.cos(Bq.heading), len = r * 1.2 + c * topSpeed(Bq.d) * dashMult(Bq.d) * burstTime(c) * dashLast(Bq.d) * 0.55, step = Math.max(Bq.d * 0.8, len / CHEVRONS);
   Bq.arrow.visible = true;
   Bq.arrow.userData.mat.opacity = 0.5 + 0.4 * c + (c >= 0.999 ? 0.1 * Math.sin(S.time * 30) : 0);
   Bq.arrow.children.forEach((ch, i) => {
@@ -1151,7 +1155,7 @@ function updateRivals(dt, frozen) {
     aimArrow(R, windC);
     if (R.wind > 0) { chargeFx(R, windC, dt); rollAxis.set(Math.cos(R.heading), 0, -Math.sin(R.heading)); tmpQ.setFromAxisAngle(rollAxis, (6 + 22 * windC) * dt); R.ball.quaternion.premultiply(tmpQ); }
     else if (R.boostT > 0 && !frozen) trailFx(R, dt);
-    if (R.wind > 0) { R.wind -= dt; if (R.wind <= 0) { burstFx(R, 0.65); R.boostT = burstTime(0.65) * Math.sqrt(hf); R.v = Math.max(R.v, topSpeed(R.d) * CPU_SPEED * dashMult(R.d) * burstKick(0.65)); } }
+    if (R.wind > 0) { R.wind -= dt; if (R.wind <= 0) { burstFx(R, 0.65); R.boostT = burstTime(0.65) * dashLast(R.d); R.v = Math.max(R.v, topSpeed(R.d) * CPU_SPEED * dashMult(R.d) * burstKick(0.65)); } }
     else if (clear && !frozen && R.boostT <= 0 && R.energy >= 0.7 && rand() < DIFF.dash * dt) { R.wind = CHARGE_TIME * 0.65; R.energy -= 0.65; }
     R.v += ((Math.abs(diff) < 1 ? vmax : vmax * 0.35) - R.v) * (1 - Math.exp(-DRIVE * (R.boostT > 0 ? 3 * Math.sqrt(hf) : hf) * dt));
     const hx = Math.sin(R.heading), hz = Math.cos(R.heading);
@@ -1550,7 +1554,7 @@ function update(dt) {
     S.charge += add; S.energy -= add; charging = true;
     if (add > 0 && Math.floor(S.time * 14) !== Math.floor((S.time - dt) * 14)) tone(180 + 520 * S.charge, 200 + 560 * S.charge, 0.05, 'sawtooth', 0.035);
   } else if (S.charge > 0) { released = S.charge; S.charge = 0; }
-  if (released > 0.05) { S.boostT = burstTime(released) * Math.sqrt(heft(S.d)); S.boostK = 1 + 0.2 * released; S.dashed = true; burstFx(S, released); tone(240, 1100 + 500 * released, 0.3, 'sawtooth', 0.11); }
+  if (released > 0.05) { S.boostT = burstTime(released) * dashLast(S.d); S.boostK = 1 + 0.2 * released; S.dashed = true; burstFx(S, released); tone(240, 1100 + 500 * released, 0.3, 'sawtooth', 0.11); }
   if (charging) chargeFx(S, S.charge, dt);
   else if (S.boostT > 0 && S.dashed && !frozen) trailFx(S, dt);
   aimArrow(S, charging ? S.charge : 0);
