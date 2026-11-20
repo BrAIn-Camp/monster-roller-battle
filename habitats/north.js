@@ -1,6 +1,7 @@
 // THE NORTH: Frostfall Tundra (tu_), Rimepeak (su_), Stormworks (wk_) and Thunder Crags (mt_).
 // Every prop here is drawn from a few simple parts (SHAPES) and set out in little scenes (the functions below dress()).
-import { PLACES } from '../map.js';
+// The landmarks are built on these points: they are the same as PLACES in map.js (copied, so this file imports nothing).
+const PLACES = { frozenLake: [-18, -92], peak: [0, -186], glacier: [-44, -158], yard: [62, -62], dam: [96, -70], crag: [133, -133] };
 
 const SNOW = 0xffffff, ICE = 0xbfe6f5, ICE2 = 0x8fd0ea, WOOD = 0x8a5a2b, IRON = 0x4a4f57, STEEL = 0x9aa3ad, RED = 0xd9415f, YEL = 0xf1c935;
 const BLUE = 0x4a9be8, GREEN = 0x57b65a, ORANGE = 0xf2903a, STONE = 0x8a8f96, GOLD = 0xd9a23a, DARK = 0x2a2f36, CREAM = 0xe8e4dc, COPPER = 0xc9743a;
@@ -294,7 +295,7 @@ export const SHAPES = {
   },
   mt_bell(g, c, P) {
     P(g, 'taper', GOLD, [.4, .6, .4], [0, .3, 0], [PI, 0, 0]); P(g, 'sph', GOLD, [.1, .1, .1], [0, .64, 0]); P(g, 'box', c, [.9, .12, .2], [0, .78, 0]);
-    P(g, 'sph', IRON, [.1, .1, .1], [0, .06, 0]);
+    P(g, 'sph', IRON, [.1, .1, .1], [0, .1, 0]);
   },
   mt_station(g, c, P) {
     P(g, 'box', 0x9a968c, [1, .15, .7], [0, .075, 0]); P(g, 'box', 0xd9c7a3, [.6, .4, .6], [-.15, .35, 0]); P(g, 'box', c, [.75, .08, .75], [-.1, .6, 0], [0, 0, .12]);
@@ -357,12 +358,12 @@ function snowballFight(m) {          // two forts, an ammunition stack behind ea
   s('tu_fort', -5, 0, { rot: -H }); s('tu_fort', 5, 0, { rot: H });
   for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) { s('tu_snowball', -7 + i * 0.3, -0.3 + j * 0.3); s('tu_snowball', 6.4 + i * 0.3, -0.3 + j * 0.3); }
   for (let i = 0; i < 7; i++) s('tu_snowball', -3 + i, Math.sin(i * 1.1) * 0.6, { scale: 0.7 });
-  for (let i = 0; i < 6; i++) s('tu_snowball', -2.5 + i, 1.6 + Math.cos(i * 1.7) * 0.5, { scale: 0.45 });
+  for (let i = 0; i < 3; i++) s('tu_snowball', -2 + i * 2, 1.6 + Math.cos(i * 1.7) * 0.5, { scale: 0.45 });
   s('tu_snowman2', -6.6, 2.4, { rot: H }); s('tu_snowman', 7.4, -2.6, { rot: -H }); s('bucket', 6.4, 2);
   s('tu_sled', -6.8, -2.4, { rot: 0.5 }); s('boot', 0.4, -1.6, { rot: 1 }); s('boot', 1.5, 2.6, { rot: 2 });
 }
 function sledRun(m) {                // three tracks down off the high snow, and the pile-up where they all met
-  for (const [x, n] of [[14, 7], [17, 8], [20, 7]]) m.row('tu_snowball', x, -101, x + 1, -87.5, n, { scale: 0.7 });
+  for (const [x, n] of [[14, 5], [17, 5], [20, 5]]) m.row('tu_snowball', x, -101, x + 1, -87.5, n, { scale: 0.7 });
   m.put('tu_sled', 14.3, -97, { rot: 0.1 }); m.put('tu_sled', 17.5, -93.4, { rot: 0.05 }); m.put('tu_sled', 20.4, -98.4, { rot: 0.1 }); m.put('tu_sled', 14.9, -89.6, { rot: 0.2 });
   const s = scene(m, 18, -84);
   s('tu_sled', -0.9, 0, { rot: 1.2 }); s('tu_sled', 0.2, -0.9, { rot: 0.3 }); s('tu_sled', 1.1, 0.2, { rot: 2.4 }); s('tu_sled', 0, 1, { rot: 4 }); s('tu_sled', -1.6, 1.4, { rot: 5.2, scale: 1.5 });
@@ -376,11 +377,11 @@ function frozenLake(m) {             // PLACES.frozenLake: hockey abandoned mid-
   const sticks = [[-8, -1.5, 0.4], [-6, 1.5, 2], [-4, -1, 3.4], [-2.5, 1, 5], [-5, -3, 1.2], [-1.6, -2, 4.2]];
   for (const [x, z, r] of sticks) s('tu_stick', x, z, { rot: r });
   for (const [x, z] of [[-5, 0], [-6.5, -0.6], [-3, 2], [-10.6, -0.2], [-7, -3], [-2, -0.4]]) s('tu_puck', x, z);
-  s('bench', -5, 4.6, { rot: PI }); for (let i = 0; i < 4; i++) s('cup', -5.9 + i * 0.6, 3.6); s('tonic', -3.4, 4.3); s('tonic', -6.8, 4.4);
+  s('bench', -5, 4.6, { rot: PI }); for (let i = 0; i < 3; i++) s('cup', -5.6 + i * 0.6, 3.6); s('tonic', -3.4, 4.3); s('tonic', -6.8, 4.4);
   // curling: three stones waiting, one on its way, the rest crowded round the button
   for (let i = 0; i < 3; i++) s('tu_curl', -8 + i * 0.6, -7.2);
   s('tu_curl', -1, -6.8); for (let i = 0; i < 5; i++) s('tu_curl', 6 + Math.cos(i * 1.257) * 0.9, -7 + Math.sin(i * 1.257) * 0.9); s('tu_curl', 6, -7);
-  s('tu_curl', 9.2, -6.6, { scale: 3 }); m.row('tu_puck', lx - 6, lz - 6.6, lx + 3.6, lz - 6.6, 5);
+  s('tu_curl', 9.2, -6.6, { scale: 3 });
   // ice fishing
   const holes = [[9.5, 3.5], [11.5, -0.5], [8.2, -3], [6.2, 0.8]];
   holes.forEach(([x, z], i) => {
@@ -394,13 +395,13 @@ function iglooVillage(m) {           // igloos of three sizes round a fire, fish
   const s = scene(m, 0, -110);
   s('tu_igloo', 0, -2.5, { scale: 1.9 }); s('tu_igloo', -9, 1.6, { rot: 0.5 }); s('tu_igloo', 9, 1, { rot: -0.5 });
   s('tu_igloo', -4.6, 5.4, { rot: 0.3, scale: 0.6 }); s('tu_igloo', 5.2, 5.2, { rot: -0.3, scale: 0.6 });
-  for (const [x, z] of [[-1.4, 0.6], [1.4, 0.6], [-8.6, 3.6], [-7, 3], [8.4, 3], [7, 2.6], [-3.8, 6.6], [4.4, 6.4]]) s('tu_lantern', x, z);
+  for (const [x, z] of [[-1.4, 0.6], [1.4, 0.6], [-7.6, 3.4], [7.6, 2.8], [-3.8, 6.6], [4.4, 6.4]]) s('tu_lantern', x, z);
   s('campfire', 0, 3.6); s('log', -2, 4.2, { rot: 0.4 }); s('log', 2, 4.2, { rot: -0.4 });
-  for (const [x, z, r] of [[-13.5, 5.6, 0.2], [-15.5, 3, 0.5], [-14, 0, 0.1]]) { s('tu_rack', x, z, { rot: r }); s('tu_fish', x - 0.5, z + 0.9, { rot: 1 }); s('tu_fish', x + 0.3, z + 1.1, { rot: 2 }); s('tu_fish', x + 0.9, z + 0.8, { rot: 3 }); }
+  for (const [x, z, r] of [[-13.5, 5.6, 0.2], [-15.5, 3, 0.5], [-14, 0, 0.1]]) { s('tu_rack', x, z, { rot: r }); s('tu_fish', x - 0.5, z + 0.9, { rot: 1 }); s('tu_fish', x + 0.9, z + 0.8, { rot: 3 }); }
   s('bucket', -12.2, 3.2); s('barrel', -16.6, 5.8);
   // the quarry: blocks cut small and stacked ever bigger
   const q = scene(m, 13, -116);
-  for (let i = 0; i < 4; i++) for (let j = 0; j < 3; j++) q('tu_iceblock', i * 0.65, j * 0.5);
+  for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) q('tu_iceblock', i * 0.65, j * 0.5);
   for (let i = 0; i < 4; i++) q('tu_iceblock', i * 1.25, 2.6, { scale: 2 });
   for (let i = 0; i < 3; i++) q('tu_iceblock', 5.2, i * 1.6 - 0.4, { scale: 3, rot: H });
   q('tu_iceblock', 8, 0, { scale: 4.4, rot: H }); q('tu_iceblock', 8, 2.6, { scale: 4.4, rot: H });
@@ -411,14 +412,14 @@ function iglooVillage(m) {           // igloos of three sizes round a fire, fish
 }
 function tundraPines(m) {
   const P = [[-30, -113, 1], [-27, -116, 1.3], [-33, -116.4, 0.8], [-12, -117, 1.2], [-8, -116.4, 0.7], [24, -116.5, 1.1], [28, -113.8, 0.8], [31, -116.8, 1.4],
-    [-38, -110, 0.9], [-36, -113.4, 1.2], [22, -57.5, 0.6], [25, -77.5, 0.9], [-21, -71, 0.7], [-24.5, -84, 1], [8, -78, 0.5], [34, -110, 1]];
+    [-38, -110, 0.9], [-36, -113.4, 1.2], [18.5, -58.5, 0.6], [25, -77.5, 0.9], [-21, -71, 0.7], [-24.5, -84, 1], [8, -78, 0.5], [34, -110, 1]];
   for (const [x, z, sc] of P) m.put('tu_pine', x, z, { scale: sc });
 }
 function tundraBorders(m) {
   // farm side: the last field of the farm, frozen solid
   let s = scene(m, -20, -63.5);
   s('tu_scarecrow', 0, 0, { rot: H }); s('hay', -0.6, 3.2, { rot: 0.3 }); s('hay', 1.8, 2.4, { rot: 1.2 }); s('hay', -0.4, -2.9, { rot: 0.8 });
-  for (let i = 0; i < 4; i++) s('crop', 2.6, -2.4 + i * 1.3); for (let i = 0; i < 3; i++) s('tu_snowball', 0.6 + i * 0.5, 1 + i * 0.2, { scale: 2 });
+  for (let i = 0; i < 3; i++) s('crop', 2.6, -2 + i * 1.3); for (let i = 0; i < 3; i++) s('tu_snowball', 0.6 + i * 0.5, 1 + i * 0.2, { scale: 2 });
   s('fence', -1.4, 5.4, { rot: H }); s('fence', 0.4, 5.4, { rot: H });
   s = scene(m, -33, -104.5);
   s('tu_scarecrow', 0, 0, { rot: 1, scale: 1.4 }); s('hay', 2.6, 0.6); s('hay', 2.2, -2.2, { rot: 1 }); s('tu_snowman2', -2, 1.2, { rot: 1 });
@@ -436,9 +437,8 @@ function tundraBorders(m) {
 function tundra(m) {
   tundraTrail(m); snowmanLadder(m); snowballFight(m); sledRun(m); frozenLake(m); iglooVillage(m); tundraPines(m); tundraBorders(m);
   // drifts: lumps of snow, bigger the farther out
-  m.blob('tu_snowball', 12, -55, 5, 8, { scale: 0.45 }); m.blob('tu_snowball', -14, -54, 4, 6, { scale: 0.45 });
-  m.blob('tu_snowball', 4, -72, 5, 8, { scale: 0.7 }); m.blob('tu_snowball', 26, -106, 6, 7, { scale: 3 }); m.blob('tu_snowball', -22, -108, 6, 7, { scale: 3 });
-  m.blob('tu_snowball', 8, -94, 4, 6, { scale: 2 });
+  m.blob('tu_snowball', 12, -55, 5, 6, { scale: 0.45 }); m.blob('tu_snowball', 4, -72, 5, 5, { scale: 0.7 });
+  m.blob('tu_snowball', 26, -106, 6, 5, { scale: 3 }); m.blob('tu_snowball', -22, -108, 6, 5, { scale: 3 });
 }
 
 // ---------------------------------------------------------------- RIMEPEAK
@@ -460,7 +460,7 @@ function cairnTrail(m) {             // cairns that grow, leading from the edge 
   m.row('su_flag', 5.6, -126.6, 8.6, -127.6, 3, { scale: 1.5 }); m.row('su_flag', 12, -128.8, 14.4, -129.8, 3, { scale: 2 }); m.row('su_flag', 18.4, -131.4, 20.6, -132.4, 2, { scale: 3 });
 }
 function avalanche(m) {              // it came off the east face: the farther the snowballs rolled the bigger they got
-  const A = [[52, -131, 0.5], [45.5, -133, 0.7], [50, -137.5, 1], [42, -139, 1.45], [47, -145, 2.1], [40.5, -150.5, 2.5], [36, -128.5, 0.7], [39.5, -132, 1], [54, -143, 1.45]];
+  const A = [[52, -131, 0.5], [45.5, -133, 0.7], [50, -139.6, 1], [42, -139, 1.45], [47, -145, 2.1], [40.5, -150.5, 2.5], [36, -128.5, 0.7], [39.5, -132, 1], [54, -143, 1.45]];
   for (const [x, z, sc] of A) m.put('su_avalanche', x, z, { scale: sc, rot: x });
   m.blob('su_avalanche', 46, -128, 6, 6, { scale: 0.5 });
   for (const a of [75, 92]) { const [x, z] = onCone(PLACES.peak, 44, a); m.put('su_avalanche', x, z, { scale: 2.5, rot: a }); }
@@ -481,11 +481,17 @@ function glacierTarn(m) {            // PLACES.glacier: the river's source, an i
   const [gx, gz] = PLACES.glacier, s = scene(m, gx, gz);
   s('su_cave', -11.5, -9.5, { rot: 0.8 });
   s('su_crystal', -16, -16, { scale: 2.07, rot: 1 }); s('su_crystal', -18, -4, { scale: 1.4, rot: 2 }); s('su_crystal', -22, -10, { scale: 0.7, rot: 3 });
-  s('su_crystal', 8, 13, { scale: 0.7 }); s('su_crystal', 3, 15.5, { scale: 1, rot: 4 }); s('su_crystal', -4, -13, { scale: 0.7, rot: 5 });
   const [x, z] = onCone(PLACES.peak, 44, 246); m.put('su_crystal', x, z, { scale: 2.07, rot: 2 });
-  // seracs: ice blocks, ever bigger, marching west from the tarn
-  const B = [[-18, 6, 3], [-21, 5, 3], [-24.5, 3.5, 4.4], [-28.5, 2.5, 4.4], [-33, 1.5, 6.5], [-38.5, 0.5, 6.5], [-45, -1, 9]];
+  // seracs: ice blocks, ever bigger, along the south shore of the tarn
+  const B = [[9, 12.2, 3], [5.6, 13.8, 3], [1.6, 15.2, 4.4], [-3, 16, 4.4], [-8.5, 15.4, 6.5]];
   for (const [dx, dz, sc] of B) s('tu_iceblock', dx, dz, { scale: sc, rot: dx });
+}
+function campTwo(m) {               // a second camp on the east terrace, right where the avalanche stopped
+  const s = scene(m, 50, -152);
+  s('su_tent', -3.4, 0.4, { rot: 1 }); s('su_tent', 3.2, 0, { rot: -1 }); s('su_tent', 0, 3.6, { rot: PI });
+  for (let i = 0; i < 6; i++) s('su_oxygen', -3.8 + i * 1.5, -3.4, { scale: 2.2 });
+  s('crate', 6.4, 2.6, { scale: 2.4 }); s('crate', 7, 4.4, { scale: 2.4, rot: 1 }); s('su_cairn', -6.4, 3, { scale: 2.1 });
+  s('su_flagpole', -6, -1.6); s('su_flagpole', 6.6, -1.8); for (let i = 0; i < 4; i++) s('su_flag', -3.4 + i * 2.3, -5.8, { scale: 3 });
 }
 function fossilDig(m) {              // a mammoth in a block of ice, and the camp of whoever was chipping it out
   const s = scene(m, -82, -176);
@@ -501,8 +507,8 @@ function peak(m) {                   // PLACES.peak: the observatory on the seco
   for (const a of [108, 120, 150, 162]) at('su_flagpole', 32.5, a, { scale: 2, rot: -a * PI / 180 });
   at('su_cairn', 31, 176, { scale: 4.4 }); at('su_cairn', 34, 188, { scale: 6.3 }); at('su_cairn', 31, 94, { scale: 4.4 });
   at('su_crystal', 32.5, 205, { scale: 2.07 }); at('su_crystal', 32.5, 250, { scale: 2.9 }); at('su_crystal', 32.5, 300, { scale: 2.07 }); at('su_crystal', 32.5, 62, { scale: 2.5 }); at('su_crystal', 33, 80, { scale: 1.45 });
-  at('su_crystal', 44, 108, { scale: 1.45 }); at('su_crystal', 44, 222, { scale: 1.45 }); at('su_crystal', 44, 268, { scale: 1.45 }); at('su_crystal', 44, 120, { scale: 1 }); at('su_crystal', 44, 148, { scale: 1 });
-  at('su_flagpole', 44, 126, { scale: 1.5 }); at('su_flagpole', 44, 142, { scale: 1.5 }); at('su_cairn', 44, 232, { scale: 3.05 }); at('su_cairn', 44, 214, { scale: 4.4 });
+  at('su_crystal', 44, 108, { scale: 1.45 }); at('su_crystal', 44, 226, { scale: 1.45 }); at('su_crystal', 44, 268, { scale: 1.45 }); at('su_crystal', 44, 120, { scale: 1 }); at('su_crystal', 44, 148, { scale: 1 });
+  at('su_flagpole', 44, 126, { scale: 1.5 }); at('su_flagpole', 44, 142, { scale: 1.5 }); at('su_cairn', 44, 215, { scale: 4.4 });
   at('su_crystal', 22, 100, { scale: 2.9 }); at('su_crystal', 22, 225, { scale: 2.9 }); at('su_crystal', 22, 160, { scale: 2.07 });
   for (const a of [60, 180, 300]) at('su_flagpole', 13, a, { scale: 3, rot: -a * PI / 180 });
   m.put('su_beacon', pk[0], pk[1]);
@@ -512,17 +518,17 @@ function summitBorders(m) {
   m.put('tu_igloo', 31, -127.5, { scale: 1.9, rot: 0.2 }); m.put('tu_pine', 35.5, -125.6, { scale: 1.1 }); m.put('tu_pine', 27, -125.2, { scale: 0.8 }); m.put('tu_lantern', 30, -124.6, { scale: 3 }); m.put('tu_lantern', 32.4, -124.4, { scale: 3 });
   m.put('tu_snowman', -7, -127, { scale: 2.5 }); m.put('tu_snowman', -10.5, -126, { scale: 1.6, rot: 0.4 }); m.put('tu_pine', -48, -127, { scale: 1.2 }); m.put('tu_pine', -44.5, -125.4, { scale: 0.9 });
   // mountain side: crag boulders furred with ice
-  const s = scene(m, 50, -166);
+  const s = scene(m, 52, -165);
   s('mt_rock', 0, 0, { scale: 4.4 }); s('mt_rock', -3.4, 3, { scale: 2.1, rot: 1 }); s('mt_rock', 2, 4.6, { scale: 3.05, rot: 2 });
   s('su_crystal', -2.6, -3.4, { scale: 0.7 }); s('su_crystal', 1.4, -4.6, { scale: 0.5, rot: 2 }); s('mt_deadtree', -1, 8.4, { scale: 0.5 });
 }
 function summit(m) {
-  baseCamp(m); cairnTrail(m); avalanche(m); climbers(m); glacierTarn(m); fossilDig(m); peak(m); summitBorders(m);
+  baseCamp(m); cairnTrail(m); avalanche(m); climbers(m); glacierTarn(m); campTwo(m); fossilDig(m); peak(m); summitBorders(m);
   // ground cover: frost-split boulders, shards of ice, lumps of old avalanche
-  m.blob('boulder', -74, -152, 9, 6); m.blob('boulder', -96, -190, 7, 4, { scale: 1.5 }); m.blob('boulder', 44, -122.5, 0.1, 1);
-  m.blob('su_crystal', -70, -190, 8, 6, { scale: 0.35 }); m.blob('su_crystal', -46, -134, 7, 6, { scale: 0.35 }); m.blob('su_crystal', 52, -186, 5, 5, { scale: 0.5 });
-  m.blob('su_avalanche', -12, -134.5, 3, 4, { scale: 0.7 }); m.blob('su_avalanche', -62, -140, 6, 5, { scale: 1 }); m.blob('su_avalanche', -56, -196, 6, 5, { scale: 1.45 });
-  m.blob('su_cairn', -90, -160, 7, 5, { scale: 1.5 }); m.blob('su_cairn', 14, -124.5, 2, 3, { scale: 1 });
+  m.blob('boulder', -68, -170, 5, 6);
+  m.blob('su_crystal', -66, -186, 4, 6, { scale: 0.35 }); m.blob('su_crystal', -46, -134, 5, 6, { scale: 0.35 }); m.blob('su_crystal', 51, -190, 2.5, 4, { scale: 0.5 });
+  m.blob('su_avalanche', -12, -134, 2.5, 4, { scale: 0.7 }); m.blob('su_avalanche', -49, -131, 3, 5, { scale: 1 }); m.blob('su_avalanche', -60, -192, 3, 4, { scale: 1.45 });
+  m.blob('su_cairn', -72, -163, 4, 5, { scale: 1.5 }); m.blob('su_cairn', 14, -124.5, 2, 3, { scale: 1 });
 }
 
 // ---------------------------------------------------------------- STORMWORKS
@@ -540,7 +546,6 @@ function yard(m) {                   // PLACES.yard: cable drums parked in the b
   m.put('wk_drum', 64.8, -71.4, { scale: 2.1, rot: H }); m.put('wk_drum', 64.6, -67.6, { rot: 0.4 });
   m.put('cart', 70.3, -71, { rot: 0 }); m.put('wk_toolbox', 69.2, -68); m.put('wk_toolbox', 71, -67.6, { rot: 1 }); m.put('wk_cone', 70.2, -66.2);
   for (let i = 0; i < 6; i++) m.put('wk_fusebox', 76.6, -74 + i * 4, { rot: -H });
-  for (let i = 0; i < 5; i++) m.put('wk_battery', 77, -72 + i * 4, { scale: 3 });
   // the battery ladder: AA, D, car, lorry, and one the size of a silo
   for (let i = 0; i < 6; i++) m.put('wk_battery', 50 + i * 0.4, -52);
   for (let i = 0; i < 4; i++) m.put('wk_battery', 53 + i * 0.6, -52, { scale: 2 });
@@ -560,12 +565,12 @@ function yard(m) {                   // PLACES.yard: cable drums parked in the b
 }
 function dam(m) {                    // PLACES.dam: valve wheels along the bank, the pipe run from the yard, the control hut, life rings
   for (let i = 0; i < 5; i++) m.put('wk_valve', 85.4, -79 + i * 3, { scale: i === 2 ? 1.5 : 1, rot: i });
-  m.put('wk_valve', 87.5, -62.4, { scale: 2.1 }); m.put('wk_valve', 90.5, -82.6, { scale: 3.05, rot: 1 });
+  m.put('wk_valve', 87.5, -62.4, { scale: 2.1 }); m.put('wk_valve', 82, -76.8, { scale: 3.05, rot: 1 });
   for (let i = 0; i < 3; i++) m.put('wk_pipe', 79.8 + i * 3.2, -64.6);
   m.put('shed', 93, -59.8, { scale: 0.75, rot: PI }); m.put('wk_warnsign', 89.6, -60.4, { rot: PI }); m.put('wk_fusebox', 96.4, -60.2, { rot: PI }); m.put('wk_rod', 95.6, -57.6);
-  for (const [x, z] of [[91.5, -68], [95.5, -74.5], [97.5, -67], [93, -77]]) m.put('wk_lifering', x, z);
-  m.put('wk_lifering', 90.4, -62.4, { rot: 1 }); m.put('wk_lifering', 86.6, -81.4); m.put('wk_lifering', 97, -70.6, { scale: 3 });
-  m.row('wk_hardhat', 80.4, -62.4, 85.6, -62.4, 4);
+  for (const [x, z] of [[91.5, -68], [90, -72], [97.5, -67], [92.5, -65.4]]) m.put('wk_lifering', x, z);
+  m.put('wk_lifering', 90.4, -62.4, { rot: 1 }); m.put('wk_lifering', 88.6, -66.6); m.put('wk_lifering', 94.5, -68.4, { scale: 3 });
+  m.row('wk_hardhat', 80.4, -62.4, 85.6, -62.4, 3);
 }
 function substation(m) {             // four transformers behind their warning signs
   const s = scene(m, 42, -76);
@@ -577,7 +582,7 @@ function teslaField(m) {             // three tesla towers ringed with the batte
   m.put('wk_tesla', 50, -91); m.put('wk_tesla', 58, -95); m.put('wk_tesla', 53, -101, { scale: 1.45 });
   m.ring('wk_carbatt', 50, -91, 2.3, 8); m.ring('wk_battery', 58, -95, 2.2, 8, { scale: 4.3 }); m.ring('wk_carbatt', 53, -101, 3, 6, { scale: 2 });
   m.row('wk_rod', 61.5, -89, 66.5, -91.5, 3); m.put('wk_dish', 67, -98, { scale: 2.07, rot: 2.4 }); m.put('wk_warnsign', 55, -87.6);
-  m.row('wk_cone', 60, -78.5, 54, -87, 6);
+  m.row('wk_cone', 60, -78.5, 54, -87, 5);
   m.put('wk_pylon', 68, -82, { scale: 0.7, rot: PI / 4 }); m.put('wk_pylon', 75.5, -87.5, { scale: 0.85, rot: PI / 4 });
 }
 function scrapHeap(m) {              // household junk in a heap, a sofa set in front of a television, small junk leading in from the road
@@ -589,7 +594,7 @@ function scrapHeap(m) {              // household junk in a heap, a sofa set in 
   for (const [x, z] of [[-1, 4.6], [2, 5.2], [-5.6, -1.6]]) s('tonic', x, z); s('pot', -3, -4.2); s('pot', 3.4, -4.8);
   m.row('cup', 49.5, -46, 53.5, -41.5, 5); m.row('wk_battery', 46.4, -44.4, 52, -38.6, 6, { scale: 1.5 });
   m.put('wk_dish', 34, -56, { rot: 0.6 }); m.put('wk_dish', 78, -42.5, { rot: 2 });
-  m.row('wk_hardhat', 36, -53.4, 39.5, -50, 4); m.row('wk_toolbox', 36.5, -58.6, 40.5, -60.6, 3);
+  m.row('wk_hardhat', 36, -53.4, 39.5, -50, 3); m.row('wk_toolbox', 36.5, -58.6, 40.5, -60.6, 3);
 }
 function worksBorders(m) {
   // ashflats side: scorched pipes and geothermal vents with their caps of steam
@@ -609,18 +614,18 @@ function worksBorders(m) {
 function works(m) {
   worksTrail(m); yard(m); dam(m); substation(m); teslaField(m); scrapHeap(m); worksBorders(m);
   m.row('wk_battery', 48, -66, 45.6, -70.4, 6, { scale: 2 });                               // yard -> substation
-  m.row('wk_lifering', 73.5, -79.5, 83, -81.5, 4);                                           // yard -> dam, round the back
-  m.row('wk_toolbox', 80, -52, 84, -57, 4);
+  m.row('wk_lifering', 73.5, -79.5, 80, -81, 3);                                           // yard -> dam, round the back
+  m.row('wk_toolbox', 80, -52, 84, -57, 3);
   // gone to seed: weeds through the concrete
   m.blob('bush', 30, -64, 4, 4); m.blob('bush', 58, -82, 5, 4); m.blob('bush', 90, -53, 3, 3); m.blob('bush', 46, -33, 3, 3);
-  m.blob('flower', 44, -60, 4, 8); m.blob('flower', 62, -46, 4, 8); m.blob('mushroom', 36, -84, 3, 6);
+  m.blob('flower', 44, -60, 4, 5); m.blob('flower', 62, -46, 4, 5);
 }
 
 // ---------------------------------------------------------------- THUNDER CRAGS
 function boulderLadder(m) {          // a rockfall sorted by size: half a metre at the works fence, nine metres under the crag
   const L = [[76, -104, 0.55], [75.6, -106.6, 0.75], [75.2, -109.8, 1], [74.8, -113.6, 1.5], [74.4, -118.2, 2.1], [72, -124, 3.05], [77, -137, 4.4], [81, -146, 6.3], [90, -177, 9.5]];
   for (const [x, z, sc] of L) m.put('mt_rock', x, z, { scale: sc, rot: x });
-  const F = [[97, -172, 3.05], [100.5, -180, 4.4], [83, -183, 3.05], [78, -173, 2.1], [95, -186.5, 2.1], [72, -186, 4.4], [104, -170, 6.3]];
+  const F = [[97, -172, 3.05], [100.5, -180, 4.4], [83, -183, 3.05], [78, -173, 2.1], [95, -186.5, 2.1], [72, -186, 4.4], [92, -169, 6.3]];
   for (const [x, z, sc] of F) m.put('mt_rock', x, z, { scale: sc, rot: z });
 }
 function ropeBridge(m) {             // two rows of posts where a rope bridge crossed the step
@@ -640,9 +645,9 @@ function paddock(m) {                // the gate is open and the goats are gone;
   for (const z of [-1.3, 1.3]) { s('fence', -5.2, z, { scale: 1.5 }); s('fence', 5.2, z, { scale: 1.5 }); }
   for (const [x, z] of [[-3, -1.6], [-1.4, 0.6], [0.4, -2], [2.2, 1.4], [3.4, -0.8]]) s('mt_bell', x, z, { rot: x });
   for (const [x, z] of [[-3.4, 1.6], [0.6, 0.4], [3.6, -2.2]]) s('mt_bell', x, z, { scale: 2, rot: z });
-  s('mt_bell', -1.2, -1.8, { scale: 4 }); s('mt_bell', 2, -0.6, { scale: 3.2, rot: 1 }); s('mt_bell', 2.4, 6.6, { scale: 6.5, rot: 0.4 });
+  s('mt_bell', -1.2, -1.8, { scale: 4 }); s('mt_bell', 2, -0.6, { scale: 3.2, rot: 1 }); s('mt_bell', 8.6, 0, { scale: 6.5, rot: 0.4 });
   s('hay', -7.8, -2.6); s('hay', -7.6, 0.4, { rot: 1 }); s('bucket', -3.6, -2.8, { scale: 2 }); s('bucket', -2.6, -2.9, { scale: 2 });
-  for (let i = 0; i < 6; i++) s('mt_bell', 0.8 - i * 3.2, 6 + i * 1.2 - (i > 2 ? (i - 2) * 3 : 0), { scale: 2 + (i % 2) });           // a trail of bells toward the hut
+  m.row('mt_bell', 90, -96, 71, -108, 6, { scale: 2.5 });                                    // a trail of bells toward the hut
 }
 function cableCar(m) {               // lower station on the terrace, upper station on the second ledge, gondolas fallen along the line
   const cg = PLACES.crag, ux = -0.875, uz = -0.482;
@@ -654,7 +659,7 @@ function cableCar(m) {               // lower station on the terrace, upper stat
   m.put('wk_drum', cg[0] + ux * 55 + 5, cg[1] + uz * 55 - 6, { scale: 2.1 }); m.put('wk_drum', cg[0] + ux * 55 + 8, cg[1] + uz * 55 - 7, { scale: 3.05, rot: 1 });
 }
 function deadTrees(m) {
-  const T = [[150, -100, 1], [160, -108, 0.8], [165, -95, 0.6], [112, -178, 0.8], [96, -192, 1.2], [118, -76, 0.5], [126, -60, 0.4], [66, -150, 0.5], [70, -160, 0.7]];
+  const T = [[150, -100, 1], [160, -108, 0.8], [165, -95, 0.6], [112, -178, 0.8], [90, -187, 1.2], [118, -76, 0.5], [126, -60, 0.4], [66, -150, 0.5], [70, -160, 0.7]];
   for (const [x, z, sc] of T) m.put('mt_deadtree', x, z, { scale: sc, rot: x });
 }
 function standingStones(m) {         // PLACES.crag: a ring of standing stones, each wired to a lightning rod, and the king stone on the top
@@ -662,7 +667,7 @@ function standingStones(m) {         // PLACES.crag: a ring of standing stones, 
   for (let i = 0; i < 8; i++) { const [x, z] = onCone(cg, 17, i * 45 + 10); m.put('mt_stone', x, z, { rot: -(i * 45 + 10) * PI / 180 + PI }); }
   for (let i = 0; i < 4; i++) { const [x, z] = onCone(cg, 17, i * 90 + 32); m.put('wk_rod', x, z, { scale: 2 }); }
   m.put('mt_stone', cg[0], cg[1], { scale: 2, rot: 0.4 }); m.put('wk_rod', cg[0] + 4, cg[1] + 3, { scale: 3 });
-  for (const a of [200, 235, 270]) { const [x, z] = onCone(cg, 28, a + 62); m.put('mt_stone', x, z, { scale: 0.7, rot: a }); }
+  for (const a of [170, 205, 240]) { const [x, z] = onCone(cg, 28, a); m.put('mt_stone', x, z, { scale: 0.7, rot: a }); }
 }
 function climbingWall(m) {           // the training wall along the dam's east bank, chalk bags from pocket-size to absurd
   for (let i = 0; i < 3; i++) m.put('mt_wall', 113.5, -76 + i * 6, { rot: -H });
@@ -688,7 +693,7 @@ function weatherStation(m) {         // spinning-cup masts on the south ledge, i
 function mountainBorders(m) {
   // works side: the pylons march on up toward the crag
   m.put('wk_pylon', 85, -95, { rot: PI / 4 }); m.put('wk_pylon', 103, -106, { scale: 1.2, rot: PI / 4 }); m.put('wk_pylon', 112, -115, { scale: 1.6, rot: PI / 4 });
-  m.put('wk_drum', 82, -99, { scale: 2.1, rot: 1 }); m.put('wk_drum', 84.5, -101.5, { scale: 2.1, rot: 2 }); m.put('wk_warnsign', 87.5, -97.5, { scale: 1.5 }); m.put('wk_transformer', 89, -102.5, { rot: 0.6 });
+  m.put('wk_drum', 88, -100.5, { scale: 2.1, rot: 1 }); m.put('wk_drum', 90.6, -103, { scale: 2.1, rot: 2 }); m.put('wk_warnsign', 83, -93.5, { scale: 1.5 });
   // summit side: spires among the boulders
   const s = scene(m, 64, -170);
   s('su_crystal', 0, 0, { scale: 1 }); s('su_crystal', 3, 3, { scale: 0.5, rot: 2 }); s('mt_rock', -1, 4.4, { scale: 3.05 }); s('mt_rock', 4, -2.6, { scale: 2.1, rot: 1 }); s('tu_snowman', 3.6, 7, { scale: 1.6 });
@@ -697,13 +702,12 @@ function mountainBorders(m) {
 }
 function mountain(m) {
   boulderLadder(m); ropeBridge(m); mountainHut(m); paddock(m); cableCar(m); deadTrees(m); standingStones(m); climbingWall(m); eagleNest(m); weatherStation(m); mountainBorders(m);
-  m.row('mt_rock', 80, -86, 90, -88, 5, { scale: 1.5 });                                     // works -> paddock
   m.row('su_cairn', 70, -128, 76, -131, 3, { scale: 1.5 });
   // scree: natural boulder fields, bigger toward the crag and the far terraces
-  m.blob('mt_rock', 68, -98, 5, 5, { scale: 1 }); m.blob('mt_rock', 84, -114, 5, 7, { scale: 1.5 }); m.blob('mt_rock', 122, -68, 6, 7, { scale: 1.5 });
-  m.blob('mt_rock', 96, -150, 4, 5, { scale: 2.1 }); m.blob('mt_rock', 160, -92, 8, 7, { scale: 2.1 }); m.blob('mt_rock', 76, -196, 0.1, 1, { scale: 3.05 });
-  m.blob('mt_rock', 128, -98, 4, 4, { scale: 3.05 }); m.blob('mt_rock', 110, -98, 4, 4, { scale: 3.05 });
-  m.blob('bigrock', 166, -84, 6, 3); m.blob('boulder', 116, -56, 5, 5); m.blob('bush', 100, -80.5, 2.5, 4, { scale: 1.3 }); m.blob('bush', 68, -142, 4, 5, { scale: 1.3 });
+  m.blob('mt_rock', 86, -108, 3, 5, { scale: 1 }); m.blob('mt_rock', 80, -112, 4, 7, { scale: 1.5 }); m.blob('mt_rock', 122, -68, 6, 7, { scale: 1.5 });
+  m.blob('mt_rock', 96, -150, 4, 5, { scale: 2.1 }); m.blob('mt_rock', 166, -92, 4, 7, { scale: 2.1 });
+  m.blob('mt_rock', 116, -93, 3, 4, { scale: 3.05 }); m.blob('mt_rock', 150, -92.5, 3, 4, { scale: 3.05 });
+  m.blob('bigrock', 160, -86, 5, 3); m.blob('boulder', 116, -56, 5, 5); m.blob('bush', 100, -80.5, 2.5, 4, { scale: 1.3 }); m.blob('bush', 68, -142, 4, 5, { scale: 1.3 });
 }
 
 export function dress(m) { tundra(m); summit(m); works(m); mountain(m); }
