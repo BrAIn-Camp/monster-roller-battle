@@ -1,0 +1,1402 @@
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { BOUNDS, START, STARTS, GATES, AREAS, scenery, layout } from './map.js';
+import { createTerrain, vnoise, SEA_LEVEL, SEA_MIN_D } from './terrain.js';
+import { buildCritterGeometry, critterMaterial } from './critters/kit.js';
+import { createBattle, power } from './battle.js';
+import crittersA from './critters/critters_1.js';
+import crittersB from './critters/critters_2.js';
+import crittersC from './critters/critters_3.js';
+
+const { ITEMS, LEVEL, TYPE_COLORS, RARITY } = window.ROLLUP_DATA;
+const CREATURES = [...crittersA, ...crittersB, ...crittersC].sort((a, b) => a.dex - b.dex);
+// Titans: every critter again at TITAN_SCALE times its size. They live in the outermost ring, tower over the walls,
+// and count as the same species in the dex. `base` points back at the ordinary critter.
+const TITAN_SCALE = 10;
+const TITANS = CREATURES.map((sp) => Object.assign({}, sp, { id: 'titan' + sp.id, base: sp, name: 'Titan ' + sp.name, height: Math.round(sp.height * TITAN_SCALE * 10) / 10, titan: true }));
+const baseOf = (sp) => sp.base || sp;
+
+// ---------- tuning ----------
+const START_D = 0.6;      // starting ball diameter (m): big enough that the 30 cm critters stick straight away
+const TRAINER_H = 1.5;    // the trainer's full height (m), reached once the ball is 1.9 m wide
+const trainerHeight = (d) => clamp(d * 0.6, 0.25, TRAINER_H);    // shorter than the ball, so it never hides it; human-sized from a 1.9 m ball
+const PICK_RATIO = 0.5;   // can roll up things up to this fraction of the ball's diameter, so critters stay big next to it
+const GROW = 0.95;        // d^3 += GROW * size^3 per pickup. Low: the map is packed and a sprinting ball sweeps up a lot
+const MAX_ON_BALL = 300;  // the newest this-many things are drawn on a ball; older ones still count and still fight
+const CPU_SPEED = 0.92;   // CPU balls roll at this fraction of the player's top speed (and sprint on a clear run)
+// The four teams. Team 0 is the player. A team's critters are tinted in its colour once rolled up.
+const TEAMS = [
+  { id: 'red', name: 'Red', hex: 0xe24a4a, css: '#e24a4a' },
+  { id: 'green', name: 'Green', hex: 0x3fae54, css: '#3fae54' },
+  { id: 'yellow', name: 'Yellow', hex: 0xe9c21f, css: '#d9aa00' },
+  { id: 'blue', name: 'Blue', hex: 0x3f7fe0, css: '#3f7fe0' },
+];
+const CLIMB = 0.8;        // the ball climbs steps up to this fraction of its radius (40% of its width): outgrowing walls is the point
+const LUMP_MAX = 1.3;     // a stuck object can prop the ball up to this many radii off the ground
+const RUN = 2.4;          // speed multiplier while sprinting
+const RUN_STEER = 0.25;   // steering multiplier while sprinting: fast, and very hard to turn
+const DRIVE = 1.6;        // how quickly the ball gets up to speed (per second); lower = heavier
+const GRIP = 7;           // sideways grip at a standstill (per second); it falls away as speed rises
+const WAVE_SHARE = 0.3;   // each minute a wave of new critters this big appears (as a share of the starting population)
+const REFILL_AT = 30;     // seconds from the end at which everything rolled up so far is put back for a final push
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const topSpeed = (d) => 2.7 * Math.pow(d + 0.5, 0.85);
+// How many things a crash knocks off: nothing below top speed, then more the faster you were going (a full sprint: about 14).
+const crashLoss = (v, vmax) => (v < 1.05 * vmax ? 0 : Math.max(1, Math.round((v / vmax - 0.9) * 9)));   // a big ball should feel like an avalanche, not a barge
+const V3 = THREE.Vector3;
+const rand = Math.random;
+const $ = (id) => document.getElementById(id);
+
+// ---------- part kit for generated items, the ball and the trainer ----------
+const G = {
+  sph: new THREE.SphereGeometry(1, 20, 14),
+  box: new THREE.BoxGeometry(1, 1, 1),
+  cyl: new THREE.CylinderGeometry(1, 1, 1, 16),
+  taper: new THREE.CylinderGeometry(1, 0.7, 1, 16),
+  cone: new THREE.ConeGeometry(1, 1, 12),
+  pyr: new THREE.ConeGeometry(1, 1, 4),
+  rock: new THREE.DodecahedronGeometry(1, 0),
+};
+const mats = new Map();
+function mat(c) {
+  let m = mats.get(c);
+  if (!m) { m = new THREE.MeshLambertMaterial({ color: c }); mats.set(c, m); }
+  return m;
+}
+function P(g, geo, color, s, p, r) {
+  const m = new THREE.Mesh(G[geo], mat(color));
+  m.scale.set(s[0], s[1], s[2]);
+  m.position.set(p[0], p[1], p[2]);
+  if (r) m.rotation.set(r[0], r[1], r[2]);
+  m.castShadow = true;
+  g.add(m);
+  return m;
+}
+const WOOD = 0x8a5a2b, CREAM = 0xf3ead7, IRON = 0x555b66;
+
+// Fallback shapes for items (used where roster.js names no model, or the model fails to load).
+const SHAPES = {
+  berry(g, c) { P(g, 'sph', c, [.45, .45, .45], [0, .45, 0]); P(g, 'cone', 0x3f8f3a, [.18, .2, .18], [0, .92, 0]); },
+  coin(g, c) { P(g, 'cyl', c, [.5, .14, .5], [0, .07, 0]); },
+  flower(g, c) { P(g, 'cyl', 0x3f8f3a, [.05, .7, .05], [0, .35, 0]); P(g, 'sph', c, [.3, .14, .3], [0, .8, 0]); P(g, 'sph', 0xffd23f, [.12, .12, .12], [0, .88, 0]); },
+  mushroom(g, c) { P(g, 'cyl', CREAM, [.16, .5, .16], [0, .25, 0]); P(g, 'sph', c, [.5, .3, .5], [0, .62, 0]); },
+  bottle(g, c) { P(g, 'cyl', c, [.24, .62, .24], [0, .31, 0]); P(g, 'cyl', c, [.1, .26, .1], [0, .75, 0]); P(g, 'cyl', CREAM, [.13, .12, .13], [0, .94, 0]); },
+  cup(g, c) { P(g, 'taper', c, [.4, .9, .4], [0, .45, 0]); },
+  boot(g, c) { P(g, 'box', c, [.36, 1, .4], [0, .5, -.1]); P(g, 'box', c, [.36, .36, .5], [0, .18, .3]); },
+  pot(g, c) { P(g, 'taper', 0xc7673a, [.42, .5, .42], [0, .25, 0]); P(g, 'sph', c, [.36, .34, .36], [0, .7, 0]); },
+  bucket(g, c) { P(g, 'taper', c, [.48, .9, .48], [0, .45, 0]); },
+  crate(g, c) { P(g, 'box', c, [.9, .9, .9], [0, .45, 0]); P(g, 'box', WOOD, [.94, .12, .94], [0, .45, 0]); },
+  barrel(g, c) { P(g, 'cyl', c, [.38, 1, .38], [0, .5, 0]); P(g, 'cyl', IRON, [.4, .08, .4], [0, .25, 0]); P(g, 'cyl', IRON, [.4, .08, .4], [0, .75, 0]); },
+  sign(g, c) { P(g, 'box', WOOD, [.09, 1, .09], [0, .5, 0]); P(g, 'box', c, [.8, .36, .07], [0, .76, .05]); },
+  mailbox(g, c) { P(g, 'box', WOOD, [.1, .7, .1], [0, .35, 0]); P(g, 'box', c, [.3, .3, .5], [0, .85, 0]); },
+  bush(g, c) { P(g, 'sph', c, [.42, .4, .42], [-.15, .4, 0]); P(g, 'sph', c, [.36, .34, .36], [.25, .34, .1]); P(g, 'sph', c, [.3, .3, .3], [.05, .6, -.1]); },
+  fence(g, c) { for (const x of [-.42, .42]) P(g, 'box', c, [.08, .6, .08], [x, .3, 0]); P(g, 'box', c, [1, .07, .05], [0, .45, 0]); P(g, 'box', c, [1, .07, .05], [0, .22, 0]); },
+  bench(g, c) { P(g, 'box', c, [1, .07, .32], [0, .28, 0]); P(g, 'box', c, [1, .28, .06], [0, .46, -.15]); for (const x of [-.42, .42]) P(g, 'box', IRON, [.07, .28, .3], [x, .14, 0]); },
+  blanket(g, c) { P(g, 'box', c, [1, .03, .7], [0, .015, 0]); P(g, 'box', CREAM, [.2, .036, .72], [0, .018, 0]); },
+  boulder(g, c) { P(g, 'rock', c, [.55, .5, .55], [0, .45, 0]); },
+  cart(g, c) {
+    P(g, 'box', c, [.9, .4, .55], [0, .5, 0]);
+    for (const x of [-.3, .3]) for (const z of [-.3, .3]) P(g, 'cyl', 0x3a3a44, [.18, .08, .18], [x, .18, z], [Math.PI / 2, 0, 0]);
+  },
+  lamp(g, c) { P(g, 'cyl', IRON, [.03, .9, .03], [0, .45, 0]); P(g, 'sph', c, [.09, .09, .09], [0, .94, 0]); },
+  tree(g, c) { P(g, 'cyl', WOOD, [.07, .4, .07], [0, .2, 0]); P(g, 'cone', c, [.32, .45, .32], [0, .55, 0]); P(g, 'cone', c, [.24, .4, .24], [0, .8, 0]); },
+  roundtree(g, c) { P(g, 'cyl', WOOD, [.07, .4, .07], [0, .2, 0]); P(g, 'sph', c, [.32, .34, .32], [0, .66, 0]); },
+  shed(g, c) { P(g, 'box', 0xd9c7a3, [.85, .6, .85], [0, .3, 0]); P(g, 'pyr', c, [.68, .4, .68], [0, .8, 0], [0, Math.PI / 4, 0]); P(g, 'box', WOOD, [.25, .4, .04], [0, .2, .43]); },
+  house(g, c) {
+    P(g, 'box', CREAM, [.9, .55, .9], [0, .275, 0]);
+    P(g, 'pyr', c, [.72, .45, .72], [0, .775, 0], [0, Math.PI / 4, 0]);
+    P(g, 'box', WOOD, [.18, .3, .04], [0, .15, .46]);
+    P(g, 'box', 0x9fd8ff, [.16, .14, .04], [.28, .32, .46]);
+    P(g, 'box', 0x9fd8ff, [.16, .14, .04], [-.28, .32, .46]);
+  },
+  tallhouse(g, c) {
+    P(g, 'box', CREAM, [.55, .75, .55], [0, .375, 0]);
+    P(g, 'pyr', c, [.45, .25, .45], [0, .875, 0], [0, Math.PI / 4, 0]);
+    P(g, 'box', WOOD, [.14, .2, .04], [0, .1, .28]);
+    for (const y of [.35, .58]) for (const x of [-.14, .14]) P(g, 'box', 0x9fd8ff, [.12, .1, .04], [x, y, .28]);
+  },
+  windmill(g, c) {
+    P(g, 'taper', CREAM, [.28, .8, .28], [0, .4, 0], [Math.PI, 0, 0]);
+    P(g, 'cone', c, [.22, .2, .22], [0, .9, 0]);
+    for (let k = 0; k < 4; k++) { const a = k * Math.PI / 2 + .4; P(g, 'box', WOOD, [.06, .46, .02], [Math.cos(a) * .23, .72 + Math.sin(a) * .23, .24], [0, 0, a - Math.PI / 2]); }
+  },
+  tower(g, c) { P(g, 'cyl', 0xe8e2d0, [.2, .8, .2], [0, .4, 0]); P(g, 'cyl', 0xffd23f, [.24, .05, .24], [0, .72, 0]); P(g, 'cone', c, [.28, .2, .28], [0, .9, 0]); },
+};
+
+// ---------- item models (GLB files named in roster.js) ----------
+const gltfLoader = new GLTFLoader();
+const gltfCache = new Map();
+function loadModel(path) {
+  if (!gltfCache.has(path)) {
+    gltfCache.set(path, new Promise((res, rej) => gltfLoader.load(path, (gltf) => {
+      const m = gltf.scene;
+      m.traverse((n) => {
+        if (!n.isMesh) return;
+        n.castShadow = true;
+        for (const mm of Array.isArray(n.material) ? n.material : [n.material]) if ('metalness' in mm) { mm.metalness = 0; mm.roughness = Math.max(mm.roughness, 0.75); }
+      });
+      m.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(m), size = box.getSize(new V3()), c = box.getCenter(new V3());
+      m.position.sub(new V3(c.x, box.min.y, c.z));
+      const wrap = new THREE.Group();
+      wrap.add(m);
+      wrap.scale.setScalar(1 / (Math.max(size.x, size.y, size.z) || 1));   // longest side = 1 unit
+      res(wrap);
+    }, undefined, rej)));
+  }
+  return gltfCache.get(path);
+}
+function buildItem(spec) {
+  const g = new THREE.Group();
+  SHAPES[spec.shape](g, spec.colors[Math.floor(rand() * spec.colors.length)]);
+  const path = Array.isArray(spec.model) ? spec.model[Math.floor(rand() * spec.model.length)] : spec.model;
+  if (path) loadModel(path).then((wrap) => { g.clear(); g.add(wrap.clone(true)); }).catch((e) => console.warn('Could not load model for', spec.id, path, e));
+  return g;
+}
+// Critters are generated in code from the parts lists in critters/*.js: one merged mesh per species.
+const critterGeo = new Map();
+function buildCreature(spec) {
+  const key = baseOf(spec).id;                 // a titan shares its species' mesh, just drawn bigger
+  let geo = critterGeo.get(key);
+  if (!geo) { geo = buildCritterGeometry(spec); critterGeo.set(key, geo); }
+  const m = new THREE.Mesh(geo, critterMaterial);
+  m.castShadow = true;
+  return m;
+}
+const teamMats = TEAMS.map((tm) => new THREE.MeshLambertMaterial({ vertexColors: true, color: new THREE.Color(tm.hex).lerp(new THREE.Color(0xffffff), 0.35), emissive: tm.hex, emissiveIntensity: 0.22 }));
+function setTeamLook(o, team) { if (o.kind === 'creature') o.group.material = team === null ? critterMaterial : teamMats[team]; }
+
+// ---------- renderer, lights, sky ----------
+const canvas = $('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, logarithmicDepthBuffer: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+const SKY = 0x9ad8f5;
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(SKY);
+scene.fog = new THREE.Fog(SKY, 60, 260);
+const camera = new THREE.PerspectiveCamera(55, 1, 0.05, 2500);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x8fae7a, 1.7));
+const sun = new THREE.DirectionalLight(0xfff4d6, 2.1);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.bias = -0.0004;
+scene.add(sun, sun.target);
+const SUN_DIR = new V3(0.45, 1, 0.35).normalize();
+function aimSun(x, y, z, d) {                 // the shadow box follows the ball and scales with it
+  const W = d * 12 + 9, sc = sun.shadow.camera;
+  sc.left = -W; sc.right = W; sc.top = W; sc.bottom = -W; sc.near = 1; sc.far = W * 6 + 80;
+  sc.updateProjectionMatrix();
+  sun.shadow.normalBias = W * 0.0015;
+  sun.target.position.set(x, y, z);
+  sun.position.copy(sun.target.position).addScaledVector(SUN_DIR, W * 3 + 40);
+}
+(function buildClouds() {
+  const white = new THREE.MeshBasicMaterial({ color: 0xffffff, fog: false });
+  const puff = new THREE.SphereGeometry(1, 12, 8);
+  for (let i = 0; i < 24; i++) {
+    const a = rand() * Math.PI * 2, R = 120 + rand() * 560, y = 170 + rand() * 90, s = 14 + rand() * 22;
+    for (let k = 0; k < 5; k++) {
+      const m = new THREE.Mesh(puff, white);
+      m.scale.set(s * (0.7 + rand() * 0.6), s * 0.38, s * (0.6 + rand() * 0.4));
+      m.position.set(Math.cos(a) * R + (k - 2) * s * 0.75, y + rand() * s * 0.2, Math.sin(a) * R + (rand() - 0.5) * s);
+      scene.add(m);
+    }
+  }
+})();
+
+// ---------- terrain (data in terrain.js, painted by map.js) ----------
+const T = createTerrain(BOUNDS, scenery);
+const { NX, NZ, tH, tC, tR, tW, groundAt } = T;
+(function buildTerrainMesh() {
+  // One mesh: a top face per tile, plus a cliff face wherever a tile's edge stands above its neighbour's.
+  const pos = [], col = [], c = new THREE.Color(), cliff = new THREE.Color(), cliffA = new THREE.Color(0xb89a6a), cliffB = new THREE.Color(0x8f7a5c);
+  const hOf = (i, j, x, z) => { const k = j * NX + i; return tR[k] ? T.rampH(T.ramps[tR[k]], x, z) : tH[k]; };
+  const quad = (ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz, cc) => {
+    pos.push(ax, ay, az, bx, by, bz, cx, cy, cz, ax, ay, az, cx, cy, cz, dx, dy, dz);
+    for (let n = 0; n < 6; n++) col.push(cc.r, cc.g, cc.b);
+  };
+  const side = (i, j, ni, nj, xa, za, xb, zb) => {      // edge from (xa,za) to (xb,zb), shared with tile (ni,nj)
+    if (ni < 0 || nj < 0 || ni >= NX || nj >= NZ) return;
+    const a0 = hOf(i, j, xa, za), a1 = hOf(i, j, xb, zb), b0 = hOf(ni, nj, xa, za), b1 = hOf(ni, nj, xb, zb);
+    if (a0 > b0 + 1e-4 || a1 > b1 + 1e-4) {
+      cliff.copy(cliffA).lerp(cliffB, clamp(vnoise(xa / 5 + za / 5, a0 * 0.9) * 1.2 - 0.1, 0, 1));   // banded rock
+      quad(xa, a0, za, xb, a1, zb, xb, Math.min(a1, b1), zb, xa, Math.min(a0, b0), za, cliff);
+    }
+  };
+  for (let j = 0; j < NZ; j++) for (let i = 0; i < NX; i++) {
+    const x0 = BOUNDS.x1 + i, z0 = BOUNDS.z1 + j, x1 = x0 + 1, z1 = z0 + 1;
+    c.setHex(tC[j * NX + i]).multiplyScalar(0.9 + 0.2 * vnoise(x0 / 7, z0 / 7) + ((i + j) & 1 ? 0.012 : -0.012));
+    quad(x0, hOf(i, j, x0, z0), z0, x0, hOf(i, j, x0, z1), z1, x1, hOf(i, j, x1, z1), z1, x1, hOf(i, j, x1, z0), z0, c);
+    side(i, j, i + 1, j, x1, z0, x1, z1); side(i, j, i - 1, j, x0, z0, x0, z1);
+    side(i, j, i, j + 1, x0, z1, x1, z1); side(i, j, i, j - 1, x0, z0, x1, z0);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  geo.computeVertexNormals();
+  const terrain = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }));
+  terrain.receiveShadow = true;
+  scene.add(terrain);
+
+  // the sea: a see-through sheet at sea level, with the open ocean floor beyond the map well below it
+  const sea = new THREE.Mesh(new THREE.PlaneGeometry(5000, 5000), new THREE.MeshLambertMaterial({ color: 0x3f9be0, transparent: true, opacity: 0.72, depthWrite: false }));
+  sea.rotation.x = -Math.PI / 2; sea.position.y = SEA_LEVEL; sea.renderOrder = 2; scene.add(sea);
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(5000, 5000), new THREE.MeshLambertMaterial({ color: 0x2f6fb0 }));
+  floor.rotation.x = -Math.PI / 2; floor.position.y = -3; scene.add(floor);
+
+  // tall-grass blades and short tufts, as two instanced meshes
+  const d = new THREE.Object3D();
+  const spots = [];
+  for (const [x1, z1, x2, z2] of T.grassRects) {
+    const n = Math.min(700, Math.round((x2 - x1) * (z2 - z1) * 0.9));
+    for (let i = 0; i < n; i++) spots.push([x1 + rand() * (x2 - x1), z1 + rand() * (z2 - z1)]);
+  }
+  const blades = new THREE.InstancedMesh(G.cone, mat(0x4c9e4a), spots.length);
+  spots.forEach(([x, z], i) => { const h = 0.4 + rand() * 0.3; d.position.set(x, groundAt(x, z) + h / 2, z); d.scale.set(0.13, h, 0.13); d.updateMatrix(); blades.setMatrixAt(i, d.matrix); });
+  scene.add(blades);
+  const tuftSpots = [];
+  for (let n = 0; n < 14000; n++) {
+    const x = BOUNDS.x1 + 5 + rand() * (NX - 10), z = BOUNDS.z1 + 5 + rand() * (NZ - 10);
+    const k = T.index(x, z), cc = tC[k], cr = cc >> 16 & 255, cg = cc >> 8 & 255, cb = cc & 255;
+    if (!tR[k] && !tW[k] && cg > cr && cg > cb) tuftSpots.push([x, z]);
+  }
+  const tufts = new THREE.InstancedMesh(G.cone, mat(0x58a850), tuftSpots.length);
+  tuftSpots.forEach(([x, z], i) => { const h = 0.12 + rand() * 0.2; d.position.set(x, groundAt(x, z) + h / 2, z); d.scale.set(0.07, h, 0.07); d.updateMatrix(); tufts.setMatrixAt(i, d.matrix); });
+  scene.add(tufts);
+})();
+
+const worldGroup = new THREE.Group();
+scene.add(worldGroup);
+
+// The ball: an original striped orb.
+const ball = new THREE.Group();
+const core = new THREE.Group();
+P(core, 'sph', TEAMS[0].hex, [1, 1, 1], [0, 0, 0]);
+for (const rot of [[0, 0, 0], [Math.PI / 2, 0, 0], [0, 0, Math.PI / 2]]) {
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(1, 0.07, 6, 24), mat(0xffd23f));
+  ring.rotation.set(rot[0], rot[1], rot[2]); ring.castShadow = true; core.add(ring);
+}
+ball.add(core);
+scene.add(ball);
+
+// The trainers: original figures, 1 unit tall, each in their team's colours. Legs and arms swing as they push.
+function buildTrainer(hex) {
+  const g = new THREE.Group(), dark = new THREE.Color(hex).multiplyScalar(0.55).getHex(), SKIN = 0xf2c9a0, HAIR = 0x4a3426, NAVY = 0x2f3a5a;
+  const limb = (color, s, p) => { const piv = new THREE.Group(); piv.position.set(p[0], p[1], p[2]); P(piv, 'box', color, s, [0, -s[1] / 2, 0]); g.add(piv); return piv; };
+  const legL = limb(NAVY, [.11, .3, .13], [.08, .36, 0]), legR = limb(NAVY, [.11, .3, .13], [-.08, .36, 0]);
+  for (const leg of [legL, legR]) { P(leg, 'box', CREAM, [.125, .07, .2], [0, -.325, .035]); P(leg, 'box', dark, [.127, .025, .205], [0, -.35, .035]); }   // shoes and soles
+  P(g, 'box', NAVY, [.27, .1, .17], [0, .39, 0]);                     // shorts
+  P(g, 'box', hex, [.3, .25, .19], [0, .545, 0]);                     // jacket
+  P(g, 'box', CREAM, [.305, .045, .195], [0, .44, 0]);                // hem
+  P(g, 'box', CREAM, [.05, .25, .196], [0, .545, 0]);                 // zip stripe
+  P(g, 'box', 0x7a5a3a, [.24, .23, .1], [0, .55, -.14]);              // backpack
+  P(g, 'cyl', 0x5a4028, [.055, .26, .055], [0, .69, -.14], [0, 0, Math.PI / 2]);   // bedroll on top
+  P(g, 'box', 0x5a4028, [.04, .24, .2], [.1, .55, -.05]); P(g, 'box', 0x5a4028, [.04, .24, .2], [-.1, .55, -.05]);   // straps
+  P(g, 'cyl', CREAM, [.085, .05, .085], [0, .685, 0]);                // scarf
+  P(g, 'sph', SKIN, [.135, .14, .135], [0, .8, 0]);                   // head
+  P(g, 'sph', HAIR, [.142, .11, .142], [0, .815, -.035]);             // hair
+  P(g, 'sph', SKIN, [.03, .04, .02], [.135, .8, 0]); P(g, 'sph', SKIN, [.03, .04, .02], [-.135, .8, 0]);   // ears
+  P(g, 'sph', hex, [.148, .085, .148], [0, .885, 0]);                 // cap
+  P(g, 'box', dark, [.2, .022, .13], [0, .868, .13]);                 // brim
+  P(g, 'sph', CREAM, [.035, .035, .035], [0, .97, 0]);                // cap button
+  P(g, 'sph', 0x1b1b26, [.022, .028, .022], [.05, .805, .125]); P(g, 'sph', 0x1b1b26, [.022, .028, .022], [-.05, .805, .125]);   // eyes
+  const armL = limb(hex, [.085, .23, .095], [.195, .65, .01]), armR = limb(hex, [.085, .23, .095], [-.195, .65, .01]);
+  for (const arm of [armL, armR]) { P(arm, 'box', CREAM, [.09, .04, .1], [0, -.215, 0]); P(arm, 'sph', SKIN, [.05, .05, .05], [0, -.27, 0]); }   // cuffs and hands
+  g.userData = { legL, legR, armL, armR };
+  poseTrainer(g, 0, false);
+  return g;
+}
+function poseTrainer(g, t, moving) {
+  const s = moving ? Math.sin(t * 11) * 0.6 : 0, u = g.userData;
+  u.legL.rotation.x = s; u.legR.rotation.x = -s;
+  u.armL.rotation.x = -1.3 + s * 0.12; u.armR.rotation.x = -1.3 - s * 0.12;     // arms out in front, pushing
+}
+const trainer = buildTrainer(TEAMS[0].hex);
+trainer.scale.setScalar(trainerHeight(START_D));
+scene.add(trainer);
+
+// ---------- save data ----------
+const SAVE_KEY = 'critter-roller-save-v2';
+let save = { dex: {}, best: {}, muted: false };
+try { save = Object.assign(save, JSON.parse(localStorage.getItem(SAVE_KEY) || '{}')); } catch (e) { /* storage unavailable */ }
+function persist() { try { localStorage.setItem(SAVE_KEY, JSON.stringify(save)); } catch (e) { /* storage unavailable */ } }
+
+// ---------- audio (all synthesised) ----------
+let ac = null, master = null;
+if (new URLSearchParams(location.search).has('mute')) save.muted = true;     // add ?mute to the address to start silent
+function setMuted(m) {
+  save.muted = m; persist();
+  if (master) master.gain.value = m ? 0 : 1;
+  for (const id of ['btnMute', 'btnMute2', 'hudMute']) { const el = $(id); if (el) el.textContent = m ? 'Sound: off (M)' : 'Sound: on (M)'; }
+}
+function audio() {
+  if (!ac) {
+    const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return null;
+    ac = new AC(); master = ac.createGain(); master.gain.value = save.muted ? 0 : 1; master.connect(ac.destination);
+  }
+  if (ac.state === 'suspended') ac.resume();
+  return ac;
+}
+function tone(f1, f2, dur, type, vol, when = 0) {
+  if (save.muted) return;
+  const a = audio(); if (!a) return;
+  const o = a.createOscillator(), g = a.createGain(), t = a.currentTime + when;
+  o.type = type;
+  o.frequency.setValueAtTime(f1, t);
+  o.frequency.exponentialRampToValueAtTime(Math.max(30, f2), t + dur);
+  g.gain.setValueAtTime(vol, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.connect(g); g.connect(master);
+  o.start(t); o.stop(t + dur + 0.02);
+}
+function hash(s) { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
+function sfxPickup(ratio) { tone(500 + 900 * ratio, 900 + 1500 * ratio, 0.09, 'triangle', 0.14); }
+function sfxBump() { tone(150, 45, 0.28, 'sawtooth', 0.22); }
+function sfxWin() { [523, 659, 784, 1047].forEach((f, i) => tone(f, f, 0.18, 'triangle', 0.15, i * 0.12)); }
+function cry(spec, vol = 0.07) {
+  const h = hash(spec.id), base = 900 / Math.pow(spec.height + 0.3, 0.6);
+  const n = 2 + (h % 2), type = (h >> 3) % 2 ? 'square' : 'sawtooth';
+  let when = 0;
+  for (let i = 0; i < n; i++) {
+    const f = base * (0.7 + ((h >> (4 + i * 3)) & 7) / 8);
+    const f2 = f * (0.6 + ((h >> (7 + i * 3)) & 7) / 6);
+    const dur = 0.1 + ((h >> (10 + i * 2)) & 3) * 0.04 + Math.min(0.25, spec.height * 0.03);
+    tone(f, f2, dur, type, vol, when);
+    when += dur * 0.9;
+  }
+}
+
+// ---------- game state ----------
+const S = {
+  state: 'menu', mode: 'timed', tank: false,
+  d: START_D, vol3: START_D ** 3, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, heading: Math.PI, sup: START_D / 2, camY: 0,
+  time: 0, timeLeft: 0, reachedAt: null, hitCool: 0, shake: 0,
+  objects: [], attached: [], caught: 0, critters: 0, attachedCritters: 0,
+  counts: { type: {}, species: {} },
+  runSeen: new Map(), runNew: new Set(), zone: '', army: [],
+  debugInput: null, mdx: 0, pitch: 0, zoom: 1, locked: false, mouseX: 0, mouseY: 0, mouseIn: false,
+};
+window.__game = S;
+
+// ---------- world generation ----------
+const SPECS = {};
+for (const s of ITEMS) SPECS[s.id] = { kind: 'item', spec: s, size: s.size };
+for (const s of CREATURES) SPECS[s.id] = { kind: 'creature', spec: s, size: s.height };
+for (const s of TITANS) SPECS[s.id] = { kind: 'creature', spec: s, size: s.height };
+// A random spot in one of the map's square ring areas. sp = the critter it is for (swimmers go in the area's ponds).
+function sampleArea(ai, sp) {
+  const A = AREAS[ai];
+  if (sp && sp.move === 'swim') {
+    for (let t = 0; t < 30; t++) {
+      const [px, pz, pr] = A.ponds[Math.floor(rand() * A.ponds.length)], a = rand() * Math.PI * 2, r = Math.sqrt(rand()) * pr * 0.9;
+      if (T.waterAt(px + Math.cos(a) * r, pz + Math.sin(a) * r) === 1) return [px + Math.cos(a) * r, pz + Math.sin(a) * r];
+    }
+    return null;
+  }
+  for (let t = 0; t < 60; t++) {
+    const x = (rand() * 2 - 1) * (A.outer - 1.2), z = (rand() * 2 - 1) * (A.outer - 1.2);
+    if (Math.max(Math.abs(x), Math.abs(z)) < A.inner + 1.2) continue;
+    const k = T.index(x, z);
+    if (tR[k] || tW[k]) continue;
+    if (Math.hypot(x, z) < 4 && ai === 0) continue;                 // keep the fountain clear
+    return [x, z];
+  }
+  return null;
+}
+const areaIndexAt = (x, z) => { const m = Math.max(Math.abs(x), Math.abs(z)); for (let i = 0; i < AREAS.length; i++) if (m <= AREAS[i].outer + 1.5) return i; return AREAS.length - 1; };
+const areaOfSpec = (sp) => (sp.titan ? AREAS[AREAS.length - 1] : AREAS[Math.max(0, AREAS.findIndex((a) => sp.height > a.band[0] && sp.height <= a.band[1]))]).name;
+// The nearest gate out of the area at (x,z) that a ball of diameter d can open, or null.
+function openGate(x, z, d) {
+  const a = areaIndexAt(x, z);
+  let best = null, bd = 1e9;
+  for (const gt of GATES) {
+    if (gt.from !== a || d < gt.minD) continue;
+    const dd = Math.hypot((gt.x1 + gt.x2) / 2 - x, (gt.z1 + gt.z2) / 2 - z);
+    if (dd < bd) { bd = dd; best = gt; }
+  }
+  return best;
+}
+// Steers something through a gate: first to its middle, then to the point beyond. Returns [x,z] to head for, or null when done.
+function gateStep(st, x, z, r) {
+  const gt = st.gate;
+  if (!gt) return null;
+  if (st.stage === 0) { const cx = (gt.x1 + gt.x2) / 2, cz = (gt.z1 + gt.z2) / 2; if (Math.hypot(cx - x, cz - z) < 1.5 + r) st.stage = 1; else return [cx, cz]; }
+  if (Math.hypot(gt.out[0] - x, gt.out[1] - z) < 2 + r || areaIndexAt(x, z) > gt.from) { st.gate = null; return null; }
+  return gt.out;
+}
+function populate() {
+  worldGroup.clear();
+  while (ball.children.length > 1) ball.remove(ball.children[1]);
+  S.objects = []; S.attached = [];
+  const solids = [];
+  const free = (x, z, rad) => !solids.some((s) => Math.hypot(x - s.x, z - s.z) < rad + s.rad);
+  function put(id, x, z, opt = {}) {
+    const e = SPECS[id];
+    if (!e) { console.warn('map.js uses an id that is not in roster.js:', id); return null; }
+    const rad = opt.rad ?? e.size * (e.spec.rad ?? (e.kind === 'creature' ? 0.3 : 0.35));
+    const group = e.kind === 'creature' ? buildCreature(e.spec) : buildItem(e.spec);
+    group.scale.setScalar(e.size);
+    group.position.set(x, groundAt(x, z), z);
+    group.rotation.y = opt.rot ?? rand() * Math.PI * 2;
+    worldGroup.add(group);
+    const o = { kind: e.kind, spec: e.spec, size: e.size, rad, group, on: false, fly: null, cool: 0, contrib: 0, ldist: 0, vis: e.size, lump: new V3(), gate: !!opt.gate, spawnT: 0 };
+    if (e.kind === 'creature') Object.assign(o, { ai: 'idle', timer: rand() * 3, home: [x, z], tx: x, tz: z, phase: rand() * 6.28, leader: null });
+    else if (e.size >= 0.5 && !e.spec.flat) solids.push({ x, z, rad });
+    S.objects.push(o);
+    return o;
+  }
+  const radOf = (id) => (SPECS[id] ? SPECS[id].size * (SPECS[id].spec.rad ?? 0.35) : 0);
+  layout({
+    put,
+    row(id, x1, z1, x2, z2, n, opt) { for (let i = 0; i < n; i++) { const t = n > 1 ? i / (n - 1) : 0.5; put(id, x1 + (x2 - x1) * t, z1 + (z2 - z1) * t, opt); } },
+    grid(id, x, z, cols, rows, dx, dz, opt) { for (let i = 0; i < cols; i++) for (let j = 0; j < rows; j++) put(id, x + i * dx, z + j * dz, opt); },
+    ring(id, x, z, r, n, opt) { for (let i = 0; i < n; i++) { const a = i / n * Math.PI * 2; put(id, x + Math.cos(a) * r, z + Math.sin(a) * r, Object.assign({ rot: -a + Math.PI / 2 }, opt)); } },
+    blob(id, x, z, r, n, opt) {
+      for (let i = 0; i < n; i++) for (let t = 0; t < 25; t++) {
+        const a = rand() * Math.PI * 2, rr = r * Math.sqrt(rand()), px = x + Math.cos(a) * rr, pz = z + Math.sin(a) * rr;
+        if (free(px, pz, radOf(id)) && T.waterAt(px, pz) !== 2) { put(id, px, pz, opt); break; }
+      }
+    },
+    scatter(id, x1, z1, x2, z2, n, opt) {
+      for (let i = 0; i < n; i++) for (let t = 0; t < 40; t++) {
+        const px = x1 + rand() * (x2 - x1), pz = z1 + rand() * (z2 - z1);
+        if (free(px, pz, radOf(id) + 0.3)) { put(id, px, pz, opt); break; }
+      }
+    },
+    area(id, ai, n, opt) {                          // scatter over one of the map's areas
+      for (let i = 0; i < n; i++) for (let t = 0; t < 20; t++) {
+        const p = sampleArea(ai, null);
+        if (p && free(p[0], p[1], radOf(id) + 0.25)) { put(id, p[0], p[1], opt); break; }
+      }
+    },
+    zoneScatter(id, zone, n, opt) {
+      for (let i = 0; i < n; i++) for (let t = 0; t < 20; t++) {
+        const p = T.sample(zone, 'land');
+        if (p && free(p[0], p[1], radOf(id) + 0.3)) { put(id, p[0], p[1], opt); break; }
+      }
+    },
+  });
+
+  // Critters: each area holds the species whose size falls in its band, so every area is full of things
+  // the balls playing there can just about roll up. Rarity sets how many groups of each; the area's boost scales it.
+  const okSpot = (sp, x, z) => { const w = T.waterAt(x, z); return sp.move === 'swim' ? w === 1 : (sp.move === 'fly' || sp.move === 'float') ? w !== 2 : w === 0; };
+  function herd(sp, at, n) {
+    if (!at) return;
+    const leader = put(sp.id, at[0], at[1]);
+    for (let i = 1; i < n; i++) for (let t = 0; t < 12; t++) {
+      const a = rand() * Math.PI * 2, r = (0.8 + rand() * 1.6) * sp.height + 0.3, x = at[0] + Math.cos(a) * r, z = at[1] + Math.sin(a) * r;
+      if (okSpot(sp, x, z) && Math.abs(groundAt(x, z) - groundAt(at[0], at[1])) < Math.max(0.3, sp.height * 0.5)) { put(sp.id, x, z).leader = leader; break; }
+    }
+  }
+  for (const sp of CREATURES) {
+    const ai = Math.max(0, AREAS.findIndex((a) => sp.height > a.band[0] && sp.height <= a.band[1]));
+    const [groups, per] = RARITY[sp.rarity] || [1, 1];
+    const A = AREAS[ai], span = Math.min(A.band[1], 3) - A.band[0];
+    // the smallest species of an area are what a ball can roll up when it first arrives, so there are twice as many;
+    // the biggest also spill into the next area, so that area has something to start on too
+    const low = sp.height <= A.band[0] + span * 0.3, high = sp.height >= A.band[0] + span * 0.75 && ai < AREAS.length - 1;
+    const n = Math.max(1, Math.round(groups * A.boost * (low ? 2 : 1)));
+    for (let k = 0; k < n; k++) herd(sp, sampleArea(ai, sp), Math.max(per, ai === 3 ? 1 : 2));
+    if (high) for (let k = 0; k < Math.max(2, groups); k++) herd(sp, sampleArea(ai + 1, sp), Math.max(per, 2));
+  }
+  // Titans: one of every species, spread over the outermost area with room between them
+  const ti = AREAS.findIndex((a) => a.titans), placed = [];
+  if (ti >= 0) for (const sp of [...TITANS].sort((p1, p2) => p2.height - p1.height)) {     // biggest first, while there is room
+    for (let t = 0; t < 120; t++) {
+      const p = sampleArea(ti, sp);
+      if (!p || placed.some((q) => Math.hypot(q[0] - p[0], q[1] - p[1]) < (q[2] + sp.height) * 0.45 + 2)) continue;
+      if (Math.abs(p[1]) < 12 + sp.height * 0.4 && Math.abs(p[0]) < 160) continue;       // keep the road out of the gate clear
+      put(sp.id, p[0], p[1]); placed.push([p[0], p[1], sp.height]); break;
+    }
+  }
+  S.critters = S.objects.filter((o) => o.kind === 'creature').length;
+  // remember where everything started, so the final push can put back whatever has been rolled up
+  S.initial = S.objects.filter((o) => !o.gate).map((o) => ({ o, id: o.spec.id, x: o.group.position.x, z: o.group.position.z, rot: o.group.rotation.y }));
+  S.spawn = { put, herd };
+  buildUnlocks();
+}
+
+// ---------- input ----------
+const keys = {};
+addEventListener('keydown', (e) => {
+  keys[e.code] = true;
+  if (e.repeat) return;
+  if (e.code === 'KeyT') { S.tank = !S.tank; $('steer').textContent = S.tank ? 'tank' : 'simple'; toast('Steering: ' + (S.tank ? 'tank' : 'simple')); }
+  if (e.code === 'Escape' || e.code === 'KeyP') togglePause();
+  if (e.code === 'KeyM') setMuted(!save.muted);
+  if ((e.code === 'Space' || e.code === 'Enter') && S.state === 'battle') skipBattle();
+  if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
+});
+addEventListener('keyup', (e) => { keys[e.code] = false; });
+addEventListener('blur', () => { for (const k in keys) keys[k] = false; S.mouseIn = false; });
+// Mouse = camera. Moving it swings the camera round the ball (and the ball rolls where the camera faces); up and down
+// tilts it; the wheel zooms. No click needed. Clicking captures the pointer so it never runs out of screen; until then,
+// resting the pointer at the left or right edge keeps the camera turning.
+const MOUSE_YAW = 0.0075, MOUSE_PITCH = 0.006;       // radians per pixel of mouse movement
+function lockMouse() { try { const p = canvas.requestPointerLock && canvas.requestPointerLock(); if (p && p.catch) p.catch(() => {}); } catch (e) { /* not allowed */ } }
+canvas.addEventListener('click', () => { if (S.state === 'play' && document.pointerLockElement !== canvas) lockMouse(); });
+document.addEventListener('mousemove', (e) => {
+  S.mouseIn = true;
+  S.mouseX = (e.clientX / innerWidth - 0.5) * 2; S.mouseY = (e.clientY / innerHeight - 0.5) * 2;
+  if (S.state !== 'play') return;
+  S.mdx += e.movementX;
+  S.pitch = clamp(S.pitch + e.movementY * MOUSE_PITCH, -0.4, 1.0);
+});
+document.addEventListener('mouseleave', () => { S.mouseIn = false; });
+canvas.addEventListener('wheel', (e) => { S.zoom = clamp(S.zoom * (e.deltaY > 0 ? 1.1 : 0.9), 0.6, 2.4); e.preventDefault(); }, { passive: false });
+document.addEventListener('pointerlockchange', () => {
+  const now = document.pointerLockElement === canvas;
+  if (!now && S.locked && S.state === 'play') togglePause();     // Esc while captured: pause
+  S.locked = now;
+});
+const k = (...codes) => (codes.some((c) => keys[c]) ? 1 : 0);
+const dz = (v) => (Math.abs(v) < 0.18 ? 0 : v);
+let padPrev = [];
+function readPad() {
+  const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+  for (const p of pads) if (p && p.connected) return p;
+  return null;
+}
+function readInput() {
+  if (S.debugInput) return S.debugInput;
+  const pad = readPad();
+  const ax = (i) => (pad && pad.axes[i] !== undefined ? dz(pad.axes[i]) : 0);
+  let f, t;
+  if (S.tank) {
+    const L = clamp(k('KeyW') - k('KeyS') - ax(1), -1, 1);
+    const R = clamp(k('KeyI', 'ArrowUp') - k('KeyK', 'ArrowDown') - ax(3), -1, 1);
+    f = (L + R) / 2; t = (L - R) / 2;
+  } else {
+    f = clamp(k('KeyW', 'ArrowUp') - k('KeyS', 'ArrowDown') - ax(1), -1, 1);
+    t = clamp(k('KeyD', 'ArrowRight') - k('KeyA', 'ArrowLeft') + ax(0) + ax(2), -1, 1);
+  }
+  let mouseTurn = 0;                                              // pointer parked at a screen edge: keep turning
+  if (!S.locked && S.mouseIn && Math.abs(S.mouseX) > 0.94) mouseTurn = Math.sign(S.mouseX) * 0.8;
+  const run = !!(k('ShiftLeft', 'ShiftRight') || (pad && ((pad.buttons[0] && pad.buttons[0].pressed) || (pad.buttons[7] && pad.buttons[7].pressed))));
+  return { f, t: clamp(t + mouseTurn, -1, 1), run };
+}
+function pollPadButtons() {
+  const pad = readPad();
+  const now = pad ? pad.buttons.map((b) => b.pressed) : [];
+  const hit = (i) => now[i] && !padPrev[i];
+  if (hit(9)) togglePause();
+  if (S.state === 'menu') { if (hit(0)) start('timed'); else if (hit(2)) start('free'); }
+  else if (S.state === 'results' && hit(0)) start(S.mode);
+  padPrev = now;
+}
+
+// ---------- HUD ----------
+const fmtSize = (d) => (d < 1 ? (d * 100).toFixed(1) + ' cm' : d.toFixed(2) + ' m');
+const fmtTime = (s) => Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0');
+const typeChip = (t) => `<span class="type" style="background:${TYPE_COLORS[t] || '#888'}">${t}</span>`;
+const typeChips = (sp) => sp.types.map(typeChip).join('');
+let toastTimer = 0;
+function toast(msg) { const el = $('toast'); el.textContent = msg; el.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove('show'), 2200); }
+function showPick(html) { const el = $('pick'); el.innerHTML = html; el.classList.remove('show'); void el.offsetWidth; el.classList.add('show'); }
+function challengeProgress(c) { return (c.kind === 'type' ? S.counts.type[c.value] : S.counts.species[c.value]) || 0; }
+function armyPower(army) { let s = 0; for (const sp of army) s += sp._pw || (sp._pw = power(sp)); return s; }
+function updateHud() {
+  $('size').firstChild.nodeValue = fmtSize(S.d);
+  const target = S.mode === 'timed' && LEVEL.targetDiameter > 0;
+  $('bar').style.display = target ? 'block' : 'none';
+  if (target) $('barfill').style.width = Math.min(100, S.d / LEVEL.targetDiameter * 100).toFixed(1) + '%';
+  $('timer').textContent = S.mode === 'timed' ? fmtTime(Math.max(0, S.timeLeft)) : 'Free roam';
+  let html = '';
+  if (S.mode === 'timed') {
+    const rows = [{ tm: TEAMS[0], name: 'You', d: S.d, army: S.army }, ...rivals.map((R) => ({ tm: TEAMS[R.team], name: TEAMS[R.team].name, d: R.d, army: R.army }))];
+    for (const r of rows) html += `<div class="sb"><span class="dot" style="background:${r.tm.css}"></span><b>${r.name}</b> ${fmtSize(r.d)} · ${r.army.length} critters · power ${Math.round(armyPower(r.army))}</div>`;
+    html += '<div class="sbnote">When time is up, everyone\'s critters fight.</div>';
+  } else html += `<div>Critters rolled up: ${S.attachedCritters}</div>`;
+  if ($('goals').innerHTML !== html) $('goals').innerHTML = html;
+}
+
+const HABITAT_NAMES = { town: 'Saltmere Harbour', beach: 'the beach', tidepool: 'Tide Pools', sea: 'open sea', farm: 'Farm Terraces', marsh: 'the Marsh', forest: 'Forest Plateau',
+  gorge: 'the Gorge', plain: 'High Plain', canyon: 'Slot Canyons', mountain: 'the Mountain', summit: 'the Summit', volcano: 'the Volcano', ruins: 'Old Ruins', islet: 'the islets' };
+function zoneAt(x, z) { return AREAS[areaIndexAt(x, z)].name; }
+function showArea(name) { const el = $('area'); el.textContent = name; el.classList.remove('show'); void el.offsetWidth; el.classList.add('show'); }
+
+// ---------- dex pop-up: a spinning model and the entry, top right, for the first of each species in a run ----------
+const popR = new THREE.WebGLRenderer({ canvas: $('dexcv'), antialias: true, alpha: true });
+popR.setPixelRatio(1);
+const popScene = new THREE.Scene(), popSpin = new THREE.Group(), popCam = new THREE.PerspectiveCamera(30, 1, 0.1, 30);
+popScene.add(new THREE.HemisphereLight(0xffffff, 0x8899aa, 2.2), popSpin);
+{ const dl = new THREE.DirectionalLight(0xffffff, 1.6); dl.position.set(2, 3, 4); popScene.add(dl); }
+let popT = 0;
+function showDexPop(sp, isNew, count) {
+  popSpin.clear();
+  const m = buildCreature(sp);
+  const b = m.geometry.boundingBox, c = b.getCenter(new V3()), s = b.getSize(new V3()).length();
+  m.position.set(-c.x, -c.y, -c.z);
+  popSpin.add(m);
+  popSpin.rotation.y = 0.5;
+  popCam.position.set(0, s * 0.45, s * 1.9); popCam.lookAt(0, 0, 0);
+  $('dexinfo').innerHTML = `${isNew ? '<div class="new">NEW!</div>' : ''}<div class="nm">#${String(sp.dex).padStart(3, '0')} ${sp.name}</div><div class="meta">${sp.species} critter</div>${typeChips(sp)}<div class="meta">${sp.height} m · ${sp.rarity} · ${sp.temper}</div><div class="meta">lives: ${areaOfSpec(sp)} · caught ${count}</div>`;
+  $('dexpop').classList.add('show');
+  popT = isNew ? 5 : 3;
+  popR.render(popScene, popCam);
+}
+function tickDexPop(dt) {
+  if (popT <= 0) return;
+  popT -= dt;
+  popSpin.rotation.y += dt * 1.6;
+  popR.render(popScene, popCam);
+  if (popT <= 0) $('dexpop').classList.remove('show');
+}
+
+// ---------- "now rollable" announcements, and the arrow to what a challenge still needs ----------
+let unlocks = [], unlockAt = 0;
+function buildUnlocks() {                     // every kind of thing on the map, smallest first
+  const best = new Map();
+  for (const o of S.objects) if (!best.has(o.spec.name) || o.size < best.get(o.spec.name)) best.set(o.spec.name, o.size);
+  unlocks = [...best].map(([name, size]) => ({ name, size })).sort((a, b) => a.size - b.size);
+  unlockAt = unlocks.findIndex((u) => u.size > S.d * PICK_RATIO);
+  if (unlockAt < 0) unlockAt = unlocks.length;
+}
+function announceUnlocks() {
+  const names = [];
+  while (unlockAt < unlocks.length && unlocks[unlockAt].size <= S.d * PICK_RATIO) names.push(unlocks[unlockAt++].name);
+  if (names.length) toast('Now rollable: ' + names.slice(0, 3).join(', ') + (names.length > 3 ? ` +${names.length - 3} more` : ''));
+}
+let seekT = 0;
+function updateSeek(dt, hx, hz) {          // area banner, and the pointer to the next gate
+  seekT -= dt;
+  if (seekT > 0) return;
+  seekT = 0.3;
+  const zn = zoneAt(S.x, S.z);
+  if (zn && zn !== S.zone) { S.zone = zn; showArea(zn); }
+  const el = $('seek'), a = areaIndexAt(S.x, S.z);
+  if (S.mode !== 'timed' && S.mode !== 'free') { el.style.display = 'none'; return; }
+  const gt = openGate(S.x, S.z, S.d), next = GATES.filter((q) => q.from === a);
+  if (!next.length) { el.style.display = 'none'; return; }
+  el.style.display = 'block';
+  if (!gt) { el.innerHTML = `Next gate opens at <b>${fmtSize(next[0].minD)}</b>`; return; }
+  const dx = (gt.x1 + gt.x2) / 2 - S.x, dz = (gt.z1 + gt.z2) / 2 - S.z;
+  const rel = Math.atan2(dx * -hz + dz * hx, dx * hx + dz * hz);  // 0 = straight ahead, positive = to the right
+  el.innerHTML = `<span class="arr" style="transform:rotate(${rel.toFixed(2)}rad)">↑</span> Gate to <b>${AREAS[a + 1].name}</b>, ${Math.round(Math.hypot(dx, dz))} m`;
+}
+
+// ---------- pickups and knocks ----------
+const tmpV = new V3(), tmpQ = new THREE.Quaternion(), tmpQ2 = new THREE.Quaternion(), UP = new V3(0, 1, 0), downLocal = new V3(), axis = new V3();
+function bump(map, key, n) { map[key] = (map[key] || 0) + n; }
+// Things stay on the ball's surface at their true size. Each time the ball grows they are pushed back out to the
+// new surface, so nothing sinks in or disappears (beyond the MAX_ON_BALL drawing cap).
+function seatOn(list, r) {
+  for (const a of list) {
+    a.ldist = Math.max(r * 0.55, r - a.size * 0.2);
+    a.group.scale.setScalar(a.size);
+    a.group.position.setLength(a.ldist);
+    a.lump.copy(a.group.position).setLength(Math.min(r * LUMP_MAX, a.ldist + a.size * (a.spec.flat ? 0.05 : 0.45)));
+  }
+}
+function seatAll() { seatOn(S.attached, S.d / 2); }
+// Fix a free thing onto a ball centred at (cx,cy,cz): feet-first where it touched, knocked a little askew.
+function stick(ballGroup, o, cx, cy, cz, r) {
+  const p = o.group.position;
+  tmpV.set(p.x - cx, p.y + Math.min(o.size * 0.5, r * 1.5) - cy, p.z - cz);
+  if (tmpV.lengthSq() < 1e-10) tmpV.set(0, 1, 0);
+  tmpV.normalize();
+  o.group.visible = true;
+  o.group.quaternion.setFromUnitVectors(UP, tmpV);
+  axis.set(rand() - 0.5, rand() - 0.5, rand() - 0.5).normalize();
+  o.group.quaternion.multiply(tmpQ2.setFromAxisAngle(axis, (rand() - 0.5) * 1.2));
+  o.group.position.set(cx + tmpV.x * r, cy + tmpV.y * r, cz + tmpV.z * r);
+  ballGroup.position.set(cx, cy, cz);
+  ballGroup.updateMatrixWorld(true);
+  ballGroup.attach(o.group);
+  o.on = true;
+}
+function attach(o) {
+  stick(ball, o, S.x, S.y, S.z, S.d / 2);
+  o.contrib = GROW * o.size ** 3 * (o.spec.mass ?? 1);
+  S.vol3 += o.contrib; S.d = Math.cbrt(S.vol3);
+  S.objects.splice(S.objects.indexOf(o), 1);
+  S.attached.push(o); S.caught++;
+  sfxPickup(Math.min(1, o.size / (S.d * PICK_RATIO)));
+  if (o.kind === 'creature') {
+    const sp = o.spec;
+    S.attachedCritters++;
+    S.army.push(sp); setTeamLook(o, 0);
+    for (const t of sp.types) bump(S.counts.type, t, 1);
+    bump(S.counts.species, sp.id, 1);
+    const key = baseOf(sp).id;
+    const e = save.dex[key] || (save.dex[key] = { count: 0, first: S.d });
+    const isNew = e.count === 0;
+    e.count++; persist();
+    cry(sp);
+    const runN = (S.runSeen.get(key) || 0) + 1;
+    S.runSeen.set(key, runN);
+    if (isNew) S.runNew.add(key);
+    // the full card is for news: the first of a species this run. Repeats get a small tally at the bottom.
+    if (runN === 1 || sp.titan) showDexPop(sp, isNew, e.count);          // a titan always earns the full card else showPick(`${sp.name} <span style="opacity:.6">×${runN}</span>`);
+  } else {
+    showPick(`${o.spec.name} <span style="opacity:.6">${fmtSize(o.size)}</span>`);
+  }
+  while (S.attached.length > MAX_ON_BALL) ball.remove(S.attached.shift().group);   // the oldest are absorbed for good: still counted, no longer drawn
+  seatAll();
+  announceUnlocks();
+  if (S.mode === 'timed' && LEVEL.targetDiameter > 0 && S.reachedAt === null && S.d >= LEVEL.targetDiameter) {
+    S.reachedAt = S.time; sfxWin(); toast('Target size reached — keep rolling!');
+    if (!save.best.timedTime || S.time < save.best.timedTime) { save.best.timedTime = S.time; persist(); }
+  }
+}
+function hardHit(nx, nz, vmax, lose = 2) {
+  if (S.hitCool > 0) return;
+  S.hitCool = 3; S.shake = 0.3; sfxBump();          // three seconds' grace after a knock, so nothing can strip the ball bare
+  for (let i = 0; i < lose && S.attached.length; i++) {
+    const o = S.attached.pop();
+    worldGroup.attach(o.group);
+    o.group.scale.setScalar(o.size);
+    o.on = false; o.cool = 1.2;
+    o.fly = { vx: (-nx + rand() - 0.5) * vmax * 0.8, vy: Math.sqrt(20 * S.d) + 0.5, vz: (-nz + rand() - 0.5) * vmax * 0.8 };
+    S.vol3 -= o.contrib; S.caught--;
+    if (o.kind === 'creature') {
+      S.attachedCritters--;
+      { const k = S.army.lastIndexOf(o.spec); if (k >= 0) S.army.splice(k, 1); }
+      setTeamLook(o, null);
+      for (const t of o.spec.types) bump(S.counts.type, t, -1);
+      bump(S.counts.species, o.spec.id, -1); o.ai = 'idle'; o.timer = 1.5;
+    }
+    S.objects.push(o);
+  }
+  S.vol3 = Math.max(START_D ** 3, S.vol3);
+  S.d = Math.cbrt(S.vol3);
+  seatAll();                                          // the ball shrank: re-seat what is left
+}
+// How far the ball's centre sits above the ground: its radius, or the tip of whichever
+// stuck-on object is currently underneath, if that pokes out further. This is the lumpiness.
+function lumpSupport(r) {
+  downLocal.set(0, -1, 0).applyQuaternion(tmpQ.copy(ball.quaternion).invert());
+  let s = r;
+  for (const o of S.attached) { const t = o.lump.dot(downLocal); if (t > s) s = t; }
+  return Math.min(s, r * LUMP_MAX);
+}
+// Which way are the tiles the ball cannot enter (too tall a step, or sea while the ball is small)?
+const COS8 = [], SIN8 = [], tc = { x: 0, z: 0 };
+for (let a = 0; a < 8; a++) { COS8.push(Math.cos(a * Math.PI / 4)); SIN8.push(Math.sin(a * Math.PI / 4)); }
+// dx,dz (optional) = the direction of travel: then only tiles ahead count, so walls on both sides cannot cancel out.
+function terrainContact(x, z, feet, r, dx = 0, dz = 0) {
+  const inSea = T.waterAt(S.x, S.z) === 2;                     // already in the sea: never trapped there
+  const lim = feet + Math.max(r * CLIMB, inSea ? 0.75 : 0), noSea = S.d < SEA_MIN_D && !inSea;
+  let n = 0; tc.x = 0; tc.z = 0;
+  for (let a = 0; a < 8; a++) {
+    if ((dx || dz) && COS8[a] * dx + SIN8[a] * dz < 0.3) continue;
+    const px = x + COS8[a] * r * 0.85, pz = z + SIN8[a] * r * 0.85;
+    if (groundAt(px, pz) > lim || (noSea && T.waterAt(px, pz) === 2)) { tc.x += COS8[a]; tc.z += SIN8[a]; n++; }
+  }
+  return n;
+}
+
+// ---------- critter behaviour ----------
+// temper: timid = bolts early; calm = only moves off when you are close; curious = comes over to look while it is
+// too big to roll up; bold = charges and bumps you while it is too big to roll up.
+// move: walk, hop, slither on land; swim stays in water; fly and float ignore the terrain; still never moves.
+// B is whichever ball is nearest: the player (S) or a CPU. Critters react to all of them alike.
+function updateCreature(o, dt, B) {
+  const vmax = topSpeed(B.d) * (B === S ? 1 : CPU_SPEED);
+  const sp = o.spec, h = o.size, p = o.group.position;
+  const bx = B.x - p.x, bz = B.z - p.z, dist = Math.hypot(bx, bz) || 1e-6;
+  const pickable = h <= B.d * PICK_RATIO, air = sp.move === 'fly' || sp.move === 'float', still = sp.move === 'still';
+  let speed = (sp.move === 'fly' ? 1.4 : sp.move === 'slither' ? 0.75 : 0.95) * Math.sqrt(h), ux = 0, uz = 0;
+  o.timer -= dt;
+  const scare = sp.temper === 'timid' ? 6 * B.d + 4 * h : sp.temper === 'calm' ? 2.2 * B.d + 1.5 * h : 3.5 * B.d + 2.5 * h;
+  if (pickable && dist < scare) o.ai = 'flee';
+  else if (o.ai === 'flee') { o.ai = 'idle'; o.timer = 1; }
+  const notice = !pickable && (o.ai === 'idle' || o.ai === 'walk') && B.d > h * 0.15 && dist < 5 * h + B.d;
+  if (notice && sp.temper === 'bold' && B.d < h * 2.5) { o.ai = 'charge'; o.timer = 3; cry(sp, 0.04); }
+  else if (notice && sp.temper === 'curious') { o.ai = 'follow'; o.timer = 6; }
+  switch (o.ai) {
+    case 'flee': ux = -bx / dist; uz = -bz / dist; speed = Math.min(speed * 2.2, vmax * 0.65); break;
+    case 'charge':
+      ux = bx / dist; uz = bz / dist; speed *= 2.4;
+      if (o.timer <= 0 || dist > 8 * h + B.d) { o.ai = 'rest'; o.timer = 3; }
+      break;
+    case 'follow':                                  // trots after the ball, keeping a little distance
+      if (dist > 1.6 * (h + B.d)) { ux = bx / dist; uz = bz / dist; speed *= 1.5; }
+      if (o.timer <= 0 || dist > 9 * h + 2 * B.d) { o.ai = 'rest'; o.timer = 2; }
+      break;
+    case 'rest': if (o.timer <= 0) o.ai = 'idle'; break;
+    case 'walk': {
+      const tx = o.tx - p.x, tz = o.tz - p.z, td = Math.hypot(tx, tz);
+      if (td < h * 0.3 || o.timer <= 0) { o.ai = 'idle'; o.timer = 1 + rand() * 3; } else { ux = tx / td; uz = tz / td; }
+      break;
+    }
+    default:
+      if (o.timer <= 0) {
+        const lead = o.leader && !o.leader.on ? o.leader.group.position : null;
+        const ax = lead ? lead.x : o.home[0], az = lead ? lead.z : o.home[1];
+        const R = (lead ? 1.5 : 3) * h + 1, a = rand() * Math.PI * 2;
+        o.tx = ax + Math.cos(a) * R * rand(); o.tz = az + Math.sin(a) * R * rand();
+        o.ai = 'walk'; o.timer = 6;
+      }
+  }
+  const moving = !still && (ux !== 0 || uz !== 0);
+  if (moving) {
+    const nx = clamp(p.x + ux * speed * dt, BOUNDS.x1 + 5, BOUNDS.x2 - 5);
+    const nz = clamp(p.z + uz * speed * dt, BOUNDS.z1 + 5, BOUNDS.z2 - 5);
+    const rise = groundAt(nx, nz) - groundAt(p.x, p.z), w = T.waterAt(nx, nz);
+    // fliers go anywhere; swimmers keep to water; the rest manage small steps, hop down ledges, and stay out of the sea
+    const can = air ? true : sp.move === 'swim' ? w !== 0 : (w !== 2 && rise <= Math.max(0.05, h * 0.25) && -rise <= h * 1.5);
+    if (can) { p.x = nx; p.z = nz; }
+    else if (o.ai === 'walk') { o.ai = 'idle'; o.timer = 0.5; }
+  }
+  const wob = S.time * (sp.move === 'hop' ? 9 : 7) + o.phase;
+  let lift = 0;
+  if (sp.move === 'fly') lift = h * (0.5 + 0.1 * Math.sin(S.time * 3 + o.phase));
+  else if (sp.move === 'float') lift = h * (0.18 + 0.07 * Math.sin(S.time * 2 + o.phase));
+  else if (sp.move === 'swim') lift = T.waterAt(p.x, p.z) === 2 ? Math.max(0, SEA_LEVEL - h * 0.55 - groundAt(p.x, p.z)) : 0;
+  else if (moving) lift = Math.abs(Math.sin(wob)) * h * (sp.move === 'hop' ? 0.22 : sp.move === 'slither' ? 0 : 0.06);
+  p.y = groundAt(p.x, p.z) + lift;
+  if (moving) o.yaw = Math.atan2(ux, uz);
+  if (o.yaw !== undefined) o.group.rotation.set(0, o.yaw + (moving && sp.move === 'slither' ? Math.sin(wob) * 0.35 : 0), moving && !air ? Math.sin(wob) * 0.09 : 0);
+}
+
+// ---------- rivals: three CPU players rolling their own balls on the same map ----------
+const rivals = [];
+function makeRivals() {
+  for (const R of rivals) { scene.remove(R.ball); scene.remove(R.trainer); }
+  for (let i = 1; i < TEAMS.length; i++) $('tag' + i).style.display = 'none';
+  rivals.length = 0;
+  if (S.mode !== 'timed') return;
+  const starts = STARTS.slice(1);
+  for (let i = 1; i < TEAMS.length; i++) {
+    const [x, z] = starts[i - 1], ballG = new THREE.Group(), coreG = new THREE.Group();
+    P(coreG, 'sph', TEAMS[i].hex, [1, 1, 1], [0, 0, 0]);
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(1, 0.07, 6, 24), mat(0xffffff)); ring.rotation.x = Math.PI / 2; coreG.add(ring);
+    ballG.add(coreG); scene.add(ballG);
+    const figure = buildTrainer(TEAMS[i].hex); scene.add(figure);
+    rivals.push({ team: i, x, z, y: groundAt(x, z) + START_D / 2, d: START_D, vol3: START_D ** 3, heading: Math.PI, v: 0, ball: ballG, core: coreG, trainer: figure,
+      attached: [], army: [], hitCool: 0, retarget: rand(), target: null, chasing: null, avoid: new Set(), wander: 0, wh: 0, lastX: x, lastZ: z, stuckT: 3 });
+  }
+}
+function rivalAttach(R, o) {
+  stick(R.ball, o, R.x, R.y, R.z, R.d / 2);
+  o.contrib = GROW * o.size ** 3 * (o.spec.mass ?? 1);
+  R.vol3 += o.contrib; R.d = Math.cbrt(R.vol3);
+  S.objects.splice(S.objects.indexOf(o), 1);
+  R.attached.push(o);
+  if (o.kind === 'creature') { R.army.push(o.spec); setTeamLook(o, R.team); }
+  while (R.attached.length > MAX_ON_BALL) R.ball.remove(R.attached.shift().group);
+  seatOn(R.attached, R.d / 2);
+}
+function rivalKnock(R, nx, nz, lose) {            // things fly off in direction (-nx,-nz)
+  if (R.hitCool > 0) return;
+  R.hitCool = 3;
+  const sp = topSpeed(R.d);
+  for (let i = 0; i < lose && R.attached.length; i++) {
+    const o = R.attached.pop();
+    worldGroup.attach(o.group);
+    o.group.scale.setScalar(o.size);
+    o.on = false; o.cool = 1.2;
+    o.fly = { vx: (-nx + rand() - 0.5) * sp * 0.8, vy: Math.sqrt(20 * R.d) + 0.5, vz: (-nz + rand() - 0.5) * sp * 0.8 };
+    R.vol3 -= o.contrib;
+    if (o.kind === 'creature') { const k = R.army.lastIndexOf(o.spec); if (k >= 0) R.army.splice(k, 1); setTeamLook(o, null); o.ai = 'idle'; o.timer = 1.5; }
+    S.objects.push(o);
+  }
+  R.vol3 = Math.max(START_D ** 3, R.vol3); R.d = Math.cbrt(R.vol3);
+  seatOn(R.attached, R.d / 2);
+}
+function updateRivals(dt) {
+  for (const R of rivals) {
+    R.hitCool = Math.max(0, R.hitCool - dt);
+    const r = R.d / 2, vmax = topSpeed(R.d) * CPU_SPEED, g0 = groundAt(R.x, R.z);
+    // choose what to chase: the nearest thing it can roll up on its own level, preferring critters
+    R.retarget -= dt;
+    if (R.wander > 0) { R.wander -= dt; R.target = null; }
+    else if (R.retarget <= 0) {
+      R.retarget = 0.45 + rand() * 0.3;                 // CPUs dither: they only look for a new target every second or two
+      let best = null, bd = 1e9;
+      for (const o of S.objects) {
+        if (o.fly || o.cool > 0 || o.size > R.d * PICK_RATIO || o.size < R.d * 0.08 || R.avoid.has(o)) continue;
+        const p = o.group.position, worth = 0.35 + o.size / (R.d * PICK_RATIO);       // bigger pickups are worth a longer trip
+        const d = Math.hypot(p.x - R.x, p.z - R.z) * (o.kind === 'creature' ? 0.6 : 1) / worth;
+        if (d < bd && d < (60 + R.d * 6) / worth && groundAt(p.x, p.z) - g0 < R.d * 0.4 && (R.d >= SEA_MIN_D || T.waterAt(p.x, p.z) !== 2)) { bd = d; best = o; }
+      }
+      R.target = best; if (best) R.chasing = best;
+      if (!best) { R.wander = 3; R.wh = rand() * 6.28; }
+    }
+    const tp = R.target && !R.target.on ? R.target.group.position : null;
+    // once it is comfortably big enough for the next gate, it heads there (still rolling up whatever is in the way)
+    if (!R.gate) { const gt = openGate(R.x, R.z, R.d / 1.15); if (gt) { R.gate = gt; R.stage = 0; } }
+    const goal = R.wander > 0 ? null : gateStep(R, R.x, R.z, r);
+    let diff = (goal ? Math.atan2(goal[0] - R.x, goal[1] - R.z) : tp ? Math.atan2(tp.x - R.x, tp.z - R.z) : R.wh) - R.heading;
+    while (diff > Math.PI) diff -= 2 * Math.PI; while (diff < -Math.PI) diff += 2 * Math.PI;
+    R.heading += clamp(diff, -2.6 * dt, 2.6 * dt);
+    const clear = Math.abs(diff) < 0.2 && (goal || (tp && Math.hypot(tp.x - R.x, tp.z - R.z) > R.d * 5));     // lined up with a long run ahead: sprint
+    R.v += ((Math.abs(diff) < 1 ? vmax * (clear ? 1.6 : 1) : vmax * 0.35) - R.v) * (1 - Math.exp(-DRIVE * dt));
+    const hx = Math.sin(R.heading), hz = Math.cos(R.heading);
+    const nx = clamp(R.x + hx * R.v * dt, BOUNDS.x1 + 5, BOUNDS.x2 - 5), nz = clamp(R.z + hz * R.v * dt, BOUNDS.z1 + 5, BOUNDS.z2 - 5);
+    const px = nx + hx * r * 0.8, pz = nz + hz * r * 0.8;
+    if (groundAt(px, pz) - g0 > r * CLIMB || (R.d < SEA_MIN_D && T.waterAt(px, pz) === 2 && T.waterAt(R.x, R.z) !== 2)) {
+      R.v *= -0.3; R.wander = 1.5; R.wh = R.heading + (rand() < 0.5 ? 1 : -1) * (1.2 + rand());      // blocked: turn away
+    } else { R.x = nx; R.z = nz; }
+    R.stuckT -= dt;
+    if (R.stuckT <= 0) { R.stuckT = 3; if (Math.hypot(R.x - R.lastX, R.z - R.lastZ) < R.d * 0.5 + 0.3) { if (R.chasing) R.avoid.add(R.chasing); R.wander = 3; R.wh = rand() * 6.28; } R.lastX = R.x; R.lastZ = R.z; }   // stuck: give up on that thing for good
+    R.y += (groundAt(R.x, R.z) + r - R.y) * Math.min(1, 10 * dt);
+    // roll up, or be stopped by, whatever it touches
+    for (let i = S.objects.length - 1; i >= 0; i--) {
+      const o = S.objects[i];
+      if (o.fly) continue;
+      const p = o.group.position, ox = p.x - R.x, oz = p.z - R.z, dist = Math.hypot(ox, oz), reach = R.d / 2 + o.rad;
+      if (dist >= reach || R.y - r > p.y + o.size || R.y + r < p.y) continue;
+      if (o.size <= R.d * PICK_RATIO) { if (o.cool <= 0) rivalAttach(R, o); continue; }
+      if (o.spec.flat) continue;
+      R.x -= ox / (dist || 1) * (reach - dist); R.z -= oz / (dist || 1) * (reach - dist);
+      if (o.kind === 'creature' && o.ai === 'charge') {       // charged, just as the player would be
+        R.v = -Math.abs(R.v) * 0.6; R.wander = 1; R.wh = Math.atan2(-ox, -oz);
+        if (o.size > R.d) rivalKnock(R, ox / (dist || 1), oz / (dist || 1), 1);
+        o.ai = 'rest'; o.timer = 8;
+      }
+    }
+    if (Math.abs(R.v) > 1e-4) {
+      rollAxis.set(hz * Math.sign(R.v), 0, -hx * Math.sign(R.v));
+      tmpQ.setFromAxisAngle(rollAxis, Math.abs(R.v) * dt / (R.d / 2));
+      R.ball.quaternion.premultiply(tmpQ);
+    }
+    R.ball.position.set(R.x, R.y, R.z);
+    const th = trainerHeight(R.d), fx = R.x - hx * (r + th * 0.32), fz = R.z - hz * (r + th * 0.32);
+    let fy = groundAt(fx, fz); if (Math.abs(fy - (R.y - r)) > Math.max(r, th * 0.4)) fy = R.y - r;
+    R.trainer.scale.setScalar(th); R.trainer.position.set(fx, fy, fz); R.trainer.rotation.y = R.heading;
+    poseTrainer(R.trainer, S.time + R.team, Math.abs(R.v) > 0.25);
+    R.core.scale.setScalar(R.d / 2);
+  }
+  // bumps: balls bounce apart, and whichever carries less momentum drops a couple of things for anyone to grab
+  const all = [null, ...rivals];                        // null = the player
+  for (let a = 0; a < all.length; a++) for (let b = a + 1; b < all.length; b++) {
+    const A = all[a], Bv = all[b];
+    const ax = A ? A.x : S.x, az = A ? A.z : S.z, ay = A ? A.y : S.y, ad = A ? A.d : S.d;
+    const dx = Bv.x - ax, dz = Bv.z - az, dist = Math.hypot(dx, dz) || 0.001, reach = (ad + Bv.d) / 2;
+    if (dist >= reach || Math.abs(Bv.y - ay) > reach) continue;
+    const nx = dx / dist, nz = dz / dist, push = (reach - dist) / 2;
+    const avx = A ? Math.sin(A.heading) * A.v : S.vx, avz = A ? Math.cos(A.heading) * A.v : S.vz;
+    const bvx = Math.sin(Bv.heading) * Bv.v, bvz = Math.cos(Bv.heading) * Bv.v;
+    const closing = (avx - bvx) * nx + (avz - bvz) * nz;
+    // shove them apart, but never through a wall or up a step either could not climb on its own
+    const shove = (x, z, d, sx, sz) => { const k = Math.min(push, d * 0.15); return groundAt(x + sx * k, z + sz * k) - groundAt(x, z) <= d * 0.2 ? [x + sx * k, z + sz * k] : [x, z]; };
+    if (A) { [A.x, A.z] = shove(A.x, A.z, A.d, -nx, -nz); } else { [S.x, S.z] = shove(S.x, S.z, S.d, -nx, -nz); }
+    [Bv.x, Bv.z] = shove(Bv.x, Bv.z, Bv.d, nx, nz);
+    if (closing < 0.5) continue;
+    const ma = ad ** 3 * (Math.hypot(avx, avz) + 0.5), mb = Bv.d ** 3 * (Math.abs(Bv.v) + 0.5);
+    if (ma >= mb) rivalKnock(Bv, -nx, -nz, 2);
+    else if (A) rivalKnock(A, nx, nz, 2);
+    else hardHit(nx, nz, topSpeed(S.d), 2);
+    if (A) { A.v *= -0.4; A.wander = 1; A.wh = Math.atan2(-nx, -nz); } else { S.vx -= nx * closing * 1.2; S.vz -= nz * closing * 1.2; }
+    Bv.v *= -0.4; Bv.wander = 1; Bv.wh = Math.atan2(nx, nz);
+  }
+}
+
+// Name tags: each CPU has its name over its ball while it is on screen, and an arrow at the screen edge when it is not.
+const tagV = new V3();
+function updateTags() {
+  for (const R of rivals) {
+    const el = $('tag' + R.team), tm = TEAMS[R.team];
+    tagV.set(R.x, R.y + R.d / 2 + Math.max(0.35, R.d * 0.3), R.z).project(camera);
+    const behind = tagV.z > 1, dist = Math.hypot(R.x - S.x, R.z - S.z);
+    let sx = (tagV.x * 0.5 + 0.5) * innerWidth, sy = (-tagV.y * 0.5 + 0.5) * innerHeight;
+    if (!behind && sx > 40 && sx < innerWidth - 40 && sy > 40 && sy < innerHeight - 40) {
+      el.className = 'tag'; el.innerHTML = `${tm.name} · ${fmtSize(R.d)}<i>▼</i>`;
+    } else {
+      let dx = tagV.x, dy = -tagV.y; if (behind) { dx = -dx; dy = -dy; }
+      const a = Math.atan2(dy, dx), m = 56, hw = innerWidth / 2 - m, hh = innerHeight / 2 - m;
+      const kx = Math.min(hw / Math.abs(Math.cos(a) || 1e-6), hh / Math.abs(Math.sin(a) || 1e-6));
+      sx = innerWidth / 2 + Math.cos(a) * kx; sy = innerHeight / 2 + Math.sin(a) * kx;
+      el.className = 'tag edge'; el.innerHTML = `<b style="display:inline-block;transform:rotate(${(a + Math.PI / 2).toFixed(2)}rad)">▲</b> ${tm.name} ${Math.round(dist)} m`;
+    }
+    el.style.display = 'block'; el.style.left = sx.toFixed(0) + 'px'; el.style.top = sy.toFixed(0) + 'px'; el.style.background = tm.css;
+  }
+}
+
+// ---------- the battle after a round (simulation in battle.js) ----------
+let battle = null, battleHold = 0;
+const winnerText = (w) => (w < 0 ? 'Nobody is left standing' : w === 0 ? 'You win!' : `${TEAMS[w].name} team wins!`);
+function startBattle() {
+  const teams = TEAMS.map((tm, i) => Object.assign({}, tm, { army: i === 0 ? S.army.slice() : (rivals[i - 1] ? rivals[i - 1].army.slice() : []) }));
+  S.battleTeams = teams; S.battleResult = null; S.battleStatus = null;
+  S.state = 'battle';
+  if (!teams.some((t) => t.army.length)) { S.battleResult = { winner: -1, mvp: null }; S.battleStatus = teams.map(() => ({ alive: 0, all: 0, hp: 0 })); finish(); return; }
+  battle = createBattle({ teams, buildMesh: (spec, k) => { const m = buildCreature(spec); m.material = teamMats[k]; return m; } });
+  battle.camera.aspect = innerWidth / innerHeight; battle.camera.updateProjectionMatrix();
+  battleHold = 0;
+  show('battle');
+  $('battleui').style.display = 'block';
+}
+function tickBattle(dt) {
+  battle.step(dt);
+  const st = battle.status();
+  $('battlebars').innerHTML = S.battleTeams.map((tm, k) => `<div class="bb"><span class="dot" style="background:${tm.css}"></span><b>${k === 0 ? 'You' : tm.name}</b><div class="hpbar"><i style="width:${(st[k].hp * 100).toFixed(0)}%;background:${tm.css}"></i></div><span>${st[k].alive}/${st[k].all}</span></div>`).join('');
+  $('battlebanner').textContent = battle.intro > 0 ? `Time up! Battle in ${Math.ceil(battle.intro)}…` : battle.finished ? winnerText(battle.result().winner) : '';
+  if (battle.finished) { battleHold += dt; if (battleHold > 3.5) endBattle(); }
+}
+function endBattle() {
+  if (!battle) return;
+  S.battleResult = battle.result(); S.battleStatus = battle.status();
+  battle = null;
+  $('battleui').style.display = 'none';
+  finish();
+}
+function skipBattle() { if (battle) { battle.skip(); endBattle(); } return S.battleResult; }
+S.skipBattle = skipBattle;
+function battleRows() {
+  const res = S.battleResult, st = S.battleStatus;
+  if (!res || !st) return '';
+  let h = S.battleTeams.map((tm, k) => `<tr><td><span class="dot" style="background:${tm.css}"></span> ${k === 0 ? 'You' : tm.name + ' (CPU)'}${res.winner === k ? ' ★' : ''}</td><td>${st[k].all} fought, ${st[k].alive} left standing</td></tr>`).join('');
+  if (res.mvp) h += `<tr><td>Top fighter</td><td>${res.mvp.name} (${res.mvp.team === 0 ? 'yours' : TEAMS[res.mvp.team].name}), ${res.mvp.kills} knock-outs</td></tr>`;
+  if (res.timedOut) h += '<tr><td colspan="2">Decided on remaining health after the time limit.</td></tr>';
+  return h;
+}
+
+// ---------- waves: new critters each minute, and everything back for the last half minute ----------
+function materialize(from) {                 // things added since index `from` grow in from nothing
+  for (let i = from; i < S.objects.length; i++) { const o = S.objects[i]; o.spawnT = 0.9 + rand() * 0.6; o.group.scale.setScalar(0.001); }
+}
+function spawnWave() {
+  const from = S.objects.length;
+  for (const sp of CREATURES) {
+    const ai = Math.max(0, AREAS.findIndex((a) => sp.height > a.band[0] && sp.height <= a.band[1]));
+    const [groups, per] = RARITY[sp.rarity] || [1, 1];
+    const want = groups * AREAS[ai].boost * WAVE_SHARE, n = Math.floor(want) + (rand() < want % 1 ? 1 : 0);
+    for (let k = 0; k < n; k++) S.spawn.herd(sp, sampleArea(ai, sp), Math.max(per, ai === 3 ? 1 : 2));
+  }
+  const added = S.objects.length - from;
+  materialize(from);
+  S.critters += added;
+  toast(`${added} new critters are appearing!`);
+  [392, 523, 659].forEach((f, i) => tone(f, f * 1.5, 0.2, 'sine', 0.12, i * 0.09));
+}
+function refillMap() {
+  const here = new Set(S.objects), from = S.objects.length, balls = [S, ...rivals];
+  for (const e of S.initial) {
+    if (here.has(e.o)) continue;                                   // still out there
+    if (balls.some((b) => Math.hypot(b.x - e.x, b.z - e.z) < b.d)) continue;   // not underneath a ball
+    const o = S.spawn.put(e.id, e.x, e.z, { rot: e.rot });
+    if (o) e.o = o;
+  }
+  const added = S.objects.length - from;
+  materialize(from);
+  toast(`Final push! ${added} things are back on the map`);
+  [523, 659, 784, 1047, 1319].forEach((f, i) => tone(f, f, 0.16, 'triangle', 0.14, i * 0.08));
+}
+function tickWaves() {
+  const elapsed = LEVEL.seconds - S.timeLeft, minute = Math.floor(elapsed / 60);
+  if (minute > S.wave && S.timeLeft > REFILL_AT + 5) { S.wave = minute; spawnWave(); }
+  else if (minute > S.wave) S.wave = minute;
+  if (!S.refilled && S.timeLeft <= REFILL_AT) { S.refilled = true; refillMap(); }
+}
+
+// ---------- main update ----------
+const rollAxis = new V3();
+function update(dt) {
+  S.time += dt;
+  S.hitCool = Math.max(0, S.hitCool - dt);
+  const vmax = topSpeed(S.d);
+  const inp = readInput(), f = inp.f, t = inp.t, run = !!inp.run;
+  const top = vmax * (run ? RUN : 1);                 // running: faster, but it steers like a truck
+  S.heading -= t * 2.4 * dt * (run ? RUN_STEER : 1) + S.mdx * MOUSE_YAW;     // running dulls the keys, never the camera
+  S.mdx = 0;
+  const hx = Math.sin(S.heading), hz = Math.cos(S.heading);
+  // Momentum: the ball takes time to get up to speed and to stop, and the faster it is going the less it grips,
+  // so at a sprint it keeps sliding the way it was headed long after the camera has turned.
+  const fast = Math.hypot(S.vx, S.vz) / vmax;                 // speed as a share of ordinary top speed
+  S.vx += hx * f * top * DRIVE * dt; S.vz += hz * f * top * DRIVE * dt;
+  let vf = S.vx * hx + S.vz * hz, vl = -S.vx * hz + S.vz * hx;
+  vf *= Math.exp(-DRIVE * (f * vf < 0 ? 2.2 : 1) * dt);        // pulling back brakes harder than coasting
+  vl *= Math.exp(-(GRIP / (1 + 2.6 * fast * fast)) * dt);
+  S.vx = hx * vf - hz * vl; S.vz = hz * vf + hx * vl;
+
+  // sideways movement, one axis at a time, stopped by any step too tall to climb
+  let r = S.d / 2;
+  let feet = S.y - S.sup;                          // the lowest point of the (lumpy) ball
+  if (terrainContact(S.x, S.z, feet, r)) {         // grew into a cliff: ease away from it
+    const l = Math.hypot(tc.x, tc.z);
+    if (l > 0.01) { S.x -= tc.x / l * r * 0.06; S.z -= tc.z / l * r * 0.06; }
+  }
+  const tryX = clamp(S.x + S.vx * dt, BOUNDS.x1 + 5, BOUNDS.x2 - 5);
+  if (S.vx !== 0 && terrainContact(tryX, S.z, feet, r, Math.sign(S.vx), 0)) { const n = crashLoss(Math.abs(S.vx), vmax); if (n) hardHit(Math.sign(S.vx), 0, vmax, n); S.vx *= -0.35; }
+  else S.x = tryX;
+  const tryZ = clamp(S.z + S.vz * dt, BOUNDS.z1 + 5, BOUNDS.z2 - 5);
+  if (S.vz !== 0 && terrainContact(S.x, tryZ, feet, r, 0, Math.sign(S.vz))) { const n = crashLoss(Math.abs(S.vz), vmax); if (n) hardHit(0, Math.sign(S.vz), vmax, n); S.vz *= -0.35; }
+  else S.z = tryZ;
+
+  // roll
+  const speed = Math.hypot(S.vx, S.vz);
+  if (speed > 1e-5) {
+    rollAxis.set(S.vz / speed, 0, -S.vx / speed);
+    tmpQ.setFromAxisAngle(rollAxis, speed * dt / r);
+    ball.quaternion.premultiply(tmpQ);
+  }
+
+  // height: ride up over steps, ramps and the ball's own lumps; fall when there is nothing underneath
+  const sup = lumpSupport(r), target = groundAt(S.x, S.z) + sup;
+  if (S.y < target) {
+    const rise = Math.min(target - S.y, (target - S.y) * Math.min(1, 20 * dt) + r * 0.02);
+    const slow = Math.max(0.5, 1 - 0.6 * rise / r);         // heaving the ball upward costs speed
+    S.vx *= slow; S.vz *= slow;
+    S.y += rise; S.vy = 0;
+  } else if (S.y > target) {
+    S.vy -= 9.8 * (1 + S.d) * dt;
+    S.y += S.vy * dt;
+    if (S.y <= target) { if (S.vy < -3 - S.d) { S.shake = 0.18; tone(90, 50, 0.18, 'sine', 0.2); } S.y = target; S.vy = 0; }
+  }
+  S.sup = sup;
+  feet = S.y - sup;
+
+  for (let i = S.objects.length - 1; i >= 0; i--) {
+    const o = S.objects[i], p = o.group.position;
+    if (o.fly) {                                 // knocked loose, in the air
+      o.fly.vy -= 9.8 * dt;
+      p.x = clamp(p.x + o.fly.vx * dt, BOUNDS.x1 + 5, BOUNDS.x2 - 5); p.y += o.fly.vy * dt; p.z = clamp(p.z + o.fly.vz * dt, BOUNDS.z1 + 5, BOUNDS.z2 - 5);
+      o.group.rotation.x += dt * 7;
+      const gy = groundAt(p.x, p.z);
+      if (p.y <= gy) {
+        o.group.rotation.set(0, rand() * 6.28, 0); o.fly = null;
+        if (o.kind === 'creature') {
+          const w = T.waterAt(p.x, p.z), sw = o.spec.move === 'swim', air = o.spec.move === 'fly' || o.spec.move === 'float';
+          if (air || (sw ? w !== 0 : w !== 2)) o.home = [p.x, p.z]; else { p.x = o.home[0]; p.z = o.home[1]; }
+        }
+        p.y = groundAt(p.x, p.z);
+      }
+      continue;
+    }
+    if (o.cool > 0) o.cool -= dt;
+    if (o.spawnT > 0) {                          // materialising: grows in with a wobble, and cannot be rolled up for a moment
+      o.spawnT -= dt;
+      const k = clamp(1 - o.spawnT / 0.9, 0.001, 1);
+      o.group.scale.setScalar(o.size * (k < 1 ? k * (1 + 0.35 * Math.sin(k * 9)) : 1));
+      if (o.spawnT > 0.3) continue;
+    }
+    const ox = p.x - S.x, oz = p.z - S.z, dist = Math.hypot(ox, oz);
+    o.group.visible = dist < o.size * 300 + S.d * 10 + 25;
+    if (o.kind === 'creature') {                 // it minds the nearest ball, whoever is pushing it
+      let B = S, gap = dist - S.d;
+      for (const R of rivals) { const g2 = Math.hypot(p.x - R.x, p.z - R.z) - R.d; if (g2 < gap) { B = R; gap = g2; } }
+      if (gap < 60 + B.d * 11) updateCreature(o, dt, B);
+    }
+    r = S.d / 2;
+    const reach = r + o.rad;
+    if (dist >= reach) continue;
+    if (feet > p.y + o.size || S.y + r < p.y) continue;      // on a different level: passes over or under
+    if (o.size <= S.d * PICK_RATIO) { if (o.cool <= 0) attach(o); continue; }
+    if (o.spec.flat) continue;
+    const nx = dist > 1e-6 ? ox / dist : 1, nz = dist > 1e-6 ? oz / dist : 0;
+    S.x -= nx * (reach - dist); S.z -= nz * (reach - dist);
+    const vn = S.vx * nx + S.vz * nz;
+    if (vn > 0) { S.vx -= 1.6 * vn * nx; S.vz -= 1.6 * vn * nz; if (o.size > S.d * 0.8) { const n = crashLoss(vn, vmax); if (n) hardHit(nx, nz, vmax, n); } }      // only a sprint into something big knocks things loose
+    if (o.kind === 'creature' && o.ai === 'charge') {
+      S.vx = -nx * vmax * 1.3; S.vz = -nz * vmax * 1.3;
+      if (o.size > S.d) hardHit(nx, nz, vmax, 1);           // only a critter taller than the ball knocks anything off; smaller ones just shove
+      else { S.shake = 0.12; sfxBump(); }
+      o.ai = 'rest'; o.timer = 8;
+    }
+  }
+
+  updateRivals(dt);
+
+  // ball, trainer, camera
+  r = S.d / 2;
+  ball.position.set(S.x, S.y, S.z);
+  core.scale.setScalar(r);
+  const th = trainerHeight(S.d);
+  trainer.scale.setScalar(th);
+  const tx = S.x - hx * (r + th * 0.32), tz = S.z - hz * (r + th * 0.32);
+  let ty = groundAt(tx, tz);
+  if (Math.abs(ty - feet) > Math.max(r, th * 0.4)) ty = feet;
+  trainer.position.set(tx, ty + Math.abs(Math.sin(S.time * 12)) * th * 0.04 * Math.min(1, speed / (vmax * 0.3)), tz);
+  trainer.rotation.y = S.heading;
+  poseTrainer(trainer, S.time, speed > 0.25);
+
+  S.camY += (feet - S.camY) * (1 - Math.exp(-5 * dt));      // follows the ground level, not every wobble
+  const cd = S.d * 2.7 + th * 1.6, ch = S.d * 1.15 + th;    // close and low; framed on the trainer while the ball is small
+  const camL = Math.hypot(cd, ch) * S.zoom, camE = clamp(Math.atan2(ch, cd) + S.pitch, 0.06, 1.35);
+  tmpV.set(S.x - hx * camL * Math.cos(camE), S.camY + camL * Math.sin(camE), S.z - hz * camL * Math.cos(camE));
+  camera.position.lerp(tmpV, 1 - Math.exp(-10 * dt));
+  camera.fov += ((run && f > 0 ? 64 : 55) - camera.fov) * (1 - Math.exp(-5 * dt));
+  aimSun(S.x, feet, S.z, S.d);
+  const floor = groundAt(camera.position.x, camera.position.z) + S.d * 0.35 + th * 0.2;
+  if (camera.position.y < floor) camera.position.y = floor;  // never inside a cliff
+  if (S.shake > 0) { S.shake -= dt; camera.position.x += (rand() - 0.5) * S.d * 0.25; camera.position.y += (rand() - 0.5) * S.d * 0.25; }
+  camera.lookAt(S.x + hx * S.d, S.camY + Math.max(S.d * 0.7, th * 0.6), S.z + hz * S.d);
+  camera.near = Math.max(0.05, S.d * 0.05);
+  camera.updateProjectionMatrix();
+  scene.fog.near = 60 + S.d * 30; scene.fog.far = 260 + S.d * 120;
+
+  updateSeek(dt, hx, hz);
+  updateTags();
+  if (S.mode === 'timed') { S.timeLeft -= dt; tickWaves(); if (S.timeLeft <= 0) finish(); }
+  updateHud();
+}
+
+S.step = update; S.groundAt = groundAt; S.T = T;   // debug hooks
+S.render = () => { tickDexPop(0.016); if (S.state === 'battle' && battle) { battle.step(0.016); renderer.render(battle.scene, battle.camera); } else renderer.render(scene, camera); };   // draw one frame now (for background tabs)
+// Playtest helper: S.autoplay(seconds) rolls a simple bot through the level in fast-forward and returns a log.
+// It chases the nearest thing it can roll up on its own level, and wanders when stuck. Start a level first.
+S.autoplay = (seconds, everySec = 30) => {
+  const gs = S.autoGate || (S.autoGate = { gate: null, stage: 0 });
+  const was = S.state; S.state = 'sim';
+  let lastX = S.x, lastZ = S.z, escape = 0, escT = 1, wander = 0, wh = 0, firstCritter = null, hits = 0;
+  const log = [];
+  for (let i = 0; i < seconds * 30 && S.state === 'sim'; i++) {
+    let best = null, bd = 1e9;
+    if (wander > 0) wander--;
+    else {
+      const g0 = groundAt(S.x, S.z);
+      for (const o of S.objects) {
+        if (o.fly || o.cool > 0 || o.size > S.d * PICK_RATIO || o.size < S.d * 0.08) continue;
+        const p = o.group.position, dx = p.x - S.x, dz = p.z - S.z, d = Math.hypot(dx, dz) * (o.kind === 'creature' ? 0.6 : 1);
+        if (d < bd && d < 45 + S.d * 5 && Math.abs(groundAt(p.x, p.z) - g0) < S.d * 0.25 + 0.05 && (S.d >= SEA_MIN_D || T.waterAt(p.x, p.z) !== 2)) { bd = d; best = [dx, dz]; }
+      }
+      if (!best) { wander = 150; wh = rand() * 6.28; }
+    }
+    if (i % 90 === 0) { if (Math.hypot(S.x - lastX, S.z - lastZ) < S.d * 0.5 + 0.2) { escape = 45; escT = rand() < 0.5 ? 1 : -1; wander = 120; wh = rand() * 6.28; } lastX = S.x; lastZ = S.z; }
+    if (escape > 0) { escape--; S.debugInput = { f: escape > 25 ? -1 : 1, t: escT, run: false }; }
+    else {
+      if (!gs.gate) { const gt = openGate(S.x, S.z, S.d / 1.15); if (gt) { gs.gate = gt; gs.stage = 0; } }
+      const goal = wander > 0 ? null : gateStep(gs, S.x, S.z, S.d / 2);
+      if (goal) best = [goal[0] - S.x, goal[1] - S.z];
+      let diff = (best ? Math.atan2(best[0], best[1]) : wh) - S.heading; while (diff > Math.PI) diff -= 2 * Math.PI; while (diff < -Math.PI) diff += 2 * Math.PI;
+      S.debugInput = { f: Math.abs(diff) < 1 ? 1 : 0.3, t: clamp(-diff * 3, -1, 1), run: !!best && Math.abs(diff) < 0.2 && Math.hypot(best[0], best[1]) > S.d * 5 }; }
+    const before = S.caught;
+    update(1 / 30);
+    if (S.caught < before) hits++;
+    if (firstCritter === null && S.attachedCritters > 0) firstCritter = Math.round(S.time);
+    if (i % (everySec * 30) === 0) log.push(`${fmtTime(S.time)} ball ${fmtSize(S.d)}, ${S.attachedCritters} critters, ${S.caught} things`);
+  }
+  S.debugInput = { f: 0, t: 0 };
+  return { log, ball: fmtSize(S.d), critters: S.attachedCritters, things: S.caught, knocks: hits, firstCritterAtSec: firstCritter, targetReachedAtSec: S.reachedAt && Math.round(S.reachedAt), speciesInDex: Object.keys(save.dex).length, state: S.state };
+};
+
+// ---------- flow ----------
+function show(id) { if (id !== null && document.pointerLockElement) document.exitPointerLock(); for (const o of ['menu', 'pause', 'results', 'dex']) $(o).classList.toggle('open', o === id); $('hud').style.display = id === null || id === 'pause' ? 'block' : 'none'; }
+function start(mode) {
+  audio();
+  const gy = groundAt(START.x, START.z);
+  Object.assign(S, { state: 'play', mode, d: START_D, vol3: START_D ** 3, x: START.x, y: gy + START_D / 2, z: START.z, vx: 0, vy: 0, vz: 0, sup: START_D / 2, camY: gy,
+    heading: Math.PI, time: 0, timeLeft: LEVEL.seconds, reachedAt: null, hitCool: 0, shake: 0, caught: 0, attachedCritters: 0, counts: { type: {}, species: {} }, pitch: 0, zoom: 1, mdx: 0, runSeen: new Map(), runNew: new Set(), zone: '', army: [], autoGate: null, wave: 0, refilled: false });
+  ball.quaternion.identity();
+  populate();
+  makeRivals();
+  camera.position.set(START.x, gy + 0.8, START.z + 1.6);
+  show(null);
+}
+function togglePause() {
+  if (S.state === 'play') { S.state = 'paused'; show('pause'); }
+  else if (S.state === 'paused') { S.state = 'play'; show(null); }
+}
+function finish() {
+  if (S.mode === 'timed' && S.state !== 'battle') { startBattle(); return; }     // a round ends in the arena
+  S.state = 'results';
+  const b = save.best;
+  let title, rows = `<tr><td>Final size</td><td>${fmtSize(S.d)}</td></tr><tr><td>Critters rolled up</td><td>${S.attachedCritters} of ${S.critters}</td></tr><tr><td>Everything rolled up</td><td>${S.caught}</td></tr>`;
+  if (S.mode === 'timed') {
+    const w = S.battleResult ? S.battleResult.winner : -1;
+    title = winnerText(w);
+    rows = battleRows() + rows;
+    if (w === 0) { b.wins = (b.wins || 0) + 1; sfxWin(); }
+    if (!b.timedSize || S.d > b.timedSize) b.timedSize = S.d;
+    rows += `<tr><td>Best size</td><td>${fmtSize(b.timedSize)}</td></tr>`;
+  } else {
+    title = 'Free roam over';
+    if (!b.freeSize || S.d > b.freeSize) b.freeSize = S.d;
+    rows += `<tr><td>Best size</td><td>${fmtSize(b.freeSize)}</td></tr>`;
+  }
+  persist();
+  $('resTitle').textContent = title;
+  const seen = [...S.runSeen.keys()].map((id) => SPECS[id].spec).sort((a, b2) => a.dex - b2.dex);
+  const lineup = seen.length ? `<div class="lineup">${seen.map((sp) => `<span class="${S.runNew.has(sp.id) ? 'isnew' : ''}" title="${sp.name}"><img src="${thumbs[sp.id] || ''}" alt="${sp.name}"></span>`).join('')}</div><p class="sub">${seen.length} species this run${S.runNew.size ? `, ${S.runNew.size} new to your dex (gold)` : ''}</p>` : '';
+  $('resBody').innerHTML = `<table class="res">${rows}</table>${lineup}`;
+  show('results');
+}
+function toMenu() {
+  S.state = 'menu';
+  const b = save.best, parts = [];
+  if (b.wins) parts.push(b.wins + (b.wins === 1 ? ' battle won' : ' battles won'));
+  if (b.timedSize) parts.push('Best round size ' + fmtSize(b.timedSize));
+  if (b.timedTime) parts.push('fastest target ' + fmtTime(b.timedTime));
+  if (b.freeSize) parts.push('best free-roam size ' + fmtSize(b.freeSize));
+  $('best').textContent = parts.join(' · ');
+  show('menu');
+}
+
+// ---------- dex ----------
+const thumbs = {};
+function makeThumbs() {
+  const r = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+  r.setSize(96, 96);
+  const sc = new THREE.Scene();
+  sc.add(new THREE.HemisphereLight(0xffffff, 0x8899aa, 2.2));
+  const dl = new THREE.DirectionalLight(0xffffff, 1.6); dl.position.set(2, 3, 4); sc.add(dl);
+  const cam = new THREE.PerspectiveCamera(30, 1, 0.1, 30);
+  for (const spec of CREATURES) {
+    const g = buildCreature(spec);
+    sc.add(g);
+    const b = g.geometry.boundingBox, c = b.getCenter(new V3()), s = b.getSize(new V3()).length();
+    cam.position.set(c.x + s * 0.95, c.y + s * 0.5, c.z + s * 1.65); cam.lookAt(c);
+    r.render(sc, cam);
+    thumbs[spec.id] = r.domElement.toDataURL();
+    sc.remove(g);
+  }
+  r.dispose(); r.forceContextLoss();
+}
+function openDex(all) {
+  let html = '', seen = 0;
+  for (const sp of CREATURES) {
+    const e = save.dex[sp.id], num = '#' + String(sp.dex).padStart(3, '0');
+    if (e && e.count) seen++;
+    html += (e && e.count) || all
+      ? `<div class="dex"><img src="${thumbs[sp.id] || ''}" alt=""><div>${num} ${sp.name}</div><div class="meta">${sp.species}</div>${typeChips(sp)}<div class="meta">${sp.height} m · ${sp.rarity} · ${sp.temper}</div><div class="meta">${areaOfSpec(sp)}${e && e.count ? ' · caught ' + e.count : ''}</div></div>`
+      : `<div class="dex unseen"><img src="${thumbs[sp.id] || ''}" alt=""><div>${num} ???</div><div class="meta">${sp.height} m · ${sp.rarity}</div><div class="meta">seen in: ${areaOfSpec(sp)}</div></div>`;
+  }
+  $('dexgrid').innerHTML = html;
+  $('dexcount').textContent = `${seen}/${CREATURES.length}`;
+  S.state = 'dex'; show('dex');
+}
+S.openDex = openDex;    // S.openDex(true) from the console shows every critter, caught or not
+
+// ---------- wiring ----------
+$('btnTimed').onclick = () => start('timed');
+$('btnFree').onclick = () => start('free');
+$('btnDex').onclick = () => openDex(false);
+$('btnDexBack').onclick = toMenu;
+$('btnResume').onclick = togglePause;
+$('btnEnd').onclick = finish;
+$('btnAgain').onclick = () => start(S.mode);
+$('btnMenu').onclick = toMenu;
+for (const id of ['btnMute', 'btnMute2', 'hudMute']) $(id).onclick = () => setMuted(!save.muted);
+setMuted(!!save.muted);
+$('levelname').textContent = `${LEVEL.name} — four teams, ${fmtTime(LEVEL.seconds)} to gather critters, then they fight`;
+$('btnSkip').onclick = skipBattle;
+
+function resize() {
+  renderer.setSize(innerWidth, innerHeight, false);
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  if (battle) { battle.camera.aspect = innerWidth / innerHeight; battle.camera.updateProjectionMatrix(); }
+}
+addEventListener('resize', resize);
+resize();
+makeThumbs();
+populate();
+toMenu();
+
+let last = performance.now(), menuSpin = 0;
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  pollPadButtons();
+  tickDexPop(dt);
+  if (S.state === 'play') update(dt);
+  else if (S.state === 'battle' && battle) tickBattle(dt);
+  else if (S.state === 'menu' || S.state === 'dex') {   // slow orbit over the island behind the menu
+    menuSpin += dt * 0.08;
+    const gy = groundAt(START.x, START.z);
+    ball.position.set(START.x, gy + START_D / 2, START.z); core.scale.setScalar(START_D / 2);
+    trainer.scale.setScalar(trainerHeight(START_D)); trainer.position.set(START.x, gy, START.z + 0.35); trainer.rotation.y = Math.PI;
+    camera.position.set(Math.sin(menuSpin) * 170, 110, Math.cos(menuSpin) * 170);
+    camera.lookAt(0, 0, 0);
+    scene.fog.near = 300; scene.fog.far = 1300;
+    aimSun(0, 0, 0, 12);
+  }
+  if (S.state === 'battle' && battle) renderer.render(battle.scene, battle.camera); else renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);

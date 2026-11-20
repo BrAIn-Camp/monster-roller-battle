@@ -1,0 +1,1423 @@
+[
+{
+"dex": 1,
+"official": "Bulbasaur",
+"category": "Seed",
+"types": [
+"grass",
+"poison"
+],
+"height": 0.7
+},
+{
+"dex": 2,
+"official": "Ivysaur",
+"category": "Seed",
+"types": [
+"grass",
+"poison"
+],
+"height": 1.0
+},
+{
+"dex": 3,
+"official": "Venusaur",
+"category": "Seed",
+"types": [
+"grass",
+"poison"
+],
+"height": 2.0
+},
+{
+"dex": 4,
+"official": "Charmander",
+"category": "Lizard",
+"types": [
+"fire"
+],
+"height": 0.6
+},
+{
+"dex": 5,
+"official": "Charmeleon",
+"category": "Flame",
+"types": [
+"fire"
+],
+"height": 1.1
+},
+{
+"dex": 6,
+"official": "Charizard",
+"category": "Flame",
+"types": [
+"fire",
+"flying"
+],
+"height": 1.7
+},
+{
+"dex": 7,
+"official": "Squirtle",
+"category": "Tiny Turtle",
+"types": [
+"water"
+],
+"height": 0.5
+},
+{
+"dex": 8,
+"official": "Wartortle",
+"category": "Turtle",
+"types": [
+"water"
+],
+"height": 1.0
+},
+{
+"dex": 9,
+"official": "Blastoise",
+"category": "Shellfish",
+"types": [
+"water"
+],
+"height": 1.6
+},
+{
+"dex": 10,
+"official": "Caterpie",
+"category": "Worm",
+"types": [
+"bug"
+],
+"height": 0.3
+},
+{
+"dex": 11,
+"official": "Metapod",
+"category": "Cocoon",
+"types": [
+"bug"
+],
+"height": 0.7
+},
+{
+"dex": 12,
+"official": "Butterfree",
+"category": "Butterfly",
+"types": [
+"bug",
+"flying"
+],
+"height": 1.1
+},
+{
+"dex": 13,
+"official": "Weedle",
+"category": "Hairy Bug",
+"types": [
+"bug",
+"poison"
+],
+"height": 0.3
+},
+{
+"dex": 14,
+"official": "Kakuna",
+"category": "Cocoon",
+"types": [
+"bug",
+"poison"
+],
+"height": 0.6
+},
+{
+"dex": 15,
+"official": "Beedrill",
+"category": "Poison Bee",
+"types": [
+"bug",
+"poison"
+],
+"height": 1.0
+},
+{
+"dex": 16,
+"official": "Pidgey",
+"category": "Tiny Bird",
+"types": [
+"normal",
+"flying"
+],
+"height": 0.3
+},
+{
+"dex": 17,
+"official": "Pidgeotto",
+"category": "Bird",
+"types": [
+"normal",
+"flying"
+],
+"height": 1.1
+},
+{
+"dex": 18,
+"official": "Pidgeot",
+"category": "Bird",
+"types": [
+"normal",
+"flying"
+],
+"height": 1.5
+},
+{
+"dex": 19,
+"official": "Rattata",
+"category": "Mouse",
+"types": [
+"normal"
+],
+"height": 0.3
+},
+{
+"dex": 20,
+"official": "Raticate",
+"category": "Mouse",
+"types": [
+"normal"
+],
+"height": 0.7
+},
+{
+"dex": 21,
+"official": "Spearow",
+"category": "Tiny Bird",
+"types": [
+"normal",
+"flying"
+],
+"height": 0.3
+},
+{
+"dex": 22,
+"official": "Fearow",
+"category": "Beak",
+"types": [
+"normal",
+"flying"
+],
+"height": 1.2
+},
+{
+"dex": 23,
+"official": "Ekans",
+"category": "Snake",
+"types": [
+"poison"
+],
+"height": 2.0
+},
+{
+"dex": 24,
+"official": "Arbok",
+"category": "Cobra",
+"types": [
+"poison"
+],
+"height": 3.5
+},
+{
+"dex": 25,
+"official": "Pikachu",
+"category": "Mouse",
+"types": [
+"electric"
+],
+"height": 0.4
+},
+{
+"dex": 26,
+"official": "Raichu",
+"category": "Mouse",
+"types": [
+"electric"
+],
+"height": 0.8
+},
+{
+"dex": 27,
+"official": "Sandshrew",
+"category": "Mouse",
+"types": [
+"ground"
+],
+"height": 0.6
+},
+{
+"dex": 28,
+"official": "Sandslash",
+"category": "Mouse",
+"types": [
+"ground"
+],
+"height": 1.0
+},
+{
+"dex": 29,
+"official": "Nidoran♀",
+"category": "Poison Pin",
+"types": [
+"poison"
+],
+"height": 0.4
+},
+{
+"dex": 30,
+"official": "Nidorina",
+"category": "Poison Pin",
+"types": [
+"poison"
+],
+"height": 0.8
+},
+{
+"dex": 31,
+"official": "Nidoqueen",
+"category": "Drill",
+"types": [
+"poison",
+"ground"
+],
+"height": 1.3
+},
+{
+"dex": 32,
+"official": "Nidoran♂",
+"category": "Poison Pin",
+"types": [
+"poison"
+],
+"height": 0.5
+},
+{
+"dex": 33,
+"official": "Nidorino",
+"category": "Poison Pin",
+"types": [
+"poison"
+],
+"height": 0.9
+},
+{
+"dex": 34,
+"official": "Nidoking",
+"category": "Drill",
+"types": [
+"poison",
+"ground"
+],
+"height": 1.4
+},
+{
+"dex": 35,
+"official": "Clefairy",
+"category": "Fairy",
+"types": [
+"normal"
+],
+"height": 0.6
+},
+{
+"dex": 36,
+"official": "Clefable",
+"category": "Fairy",
+"types": [
+"normal"
+],
+"height": 1.3
+},
+{
+"dex": 37,
+"official": "Vulpix",
+"category": "Fox",
+"types": [
+"fire"
+],
+"height": 0.6
+},
+{
+"dex": 38,
+"official": "Ninetales",
+"category": "Fox",
+"types": [
+"fire"
+],
+"height": 1.1
+},
+{
+"dex": 39,
+"official": "Jigglypuff",
+"category": "Balloon",
+"types": [
+"normal"
+],
+"height": 0.5
+},
+{
+"dex": 40,
+"official": "Wigglytuff",
+"category": "Balloon",
+"types": [
+"normal"
+],
+"height": 1.0
+},
+{
+"dex": 41,
+"official": "Zubat",
+"category": "Bat",
+"types": [
+"poison",
+"flying"
+],
+"height": 0.8
+},
+{
+"dex": 42,
+"official": "Golbat",
+"category": "Bat",
+"types": [
+"poison",
+"flying"
+],
+"height": 1.6
+},
+{
+"dex": 43,
+"official": "Oddish",
+"category": "Weed",
+"types": [
+"grass",
+"poison"
+],
+"height": 0.5
+},
+{
+"dex": 44,
+"official": "Gloom",
+"category": "Weed",
+"types": [
+"grass",
+"poison"
+],
+"height": 0.8
+},
+{
+"dex": 45,
+"official": "Vileplume",
+"category": "Flower",
+"types": [
+"grass",
+"poison"
+],
+"height": 1.2
+},
+{
+"dex": 46,
+"official": "Paras",
+"category": "Mushroom",
+"types": [
+"bug",
+"grass"
+],
+"height": 0.3
+},
+{
+"dex": 47,
+"official": "Parasect",
+"category": "Mushroom",
+"types": [
+"bug",
+"grass"
+],
+"height": 1.0
+},
+{
+"dex": 48,
+"official": "Venonat",
+"category": "Insect",
+"types": [
+"bug",
+"poison"
+],
+"height": 1.0
+},
+{
+"dex": 49,
+"official": "Venomoth",
+"category": "Poison Moth",
+"types": [
+"bug",
+"poison"
+],
+"height": 1.5
+},
+{
+"dex": 50,
+"official": "Diglett",
+"category": "Mole",
+"types": [
+"ground"
+],
+"height": 0.2
+},
+{
+"dex": 51,
+"official": "Dugtrio",
+"category": "Mole",
+"types": [
+"ground"
+],
+"height": 0.7
+},
+{
+"dex": 52,
+"official": "Meowth",
+"category": "Scratch Cat",
+"types": [
+"normal"
+],
+"height": 0.4
+},
+{
+"dex": 53,
+"official": "Persian",
+"category": "Classy Cat",
+"types": [
+"normal"
+],
+"height": 1.0
+},
+{
+"dex": 54,
+"official": "Psyduck",
+"category": "Duck",
+"types": [
+"water"
+],
+"height": 0.8
+},
+{
+"dex": 55,
+"official": "Golduck",
+"category": "Duck",
+"types": [
+"water"
+],
+"height": 1.7
+},
+{
+"dex": 56,
+"official": "Mankey",
+"category": "Pig Monkey",
+"types": [
+"fighting"
+],
+"height": 0.5
+},
+{
+"dex": 57,
+"official": "Primeape",
+"category": "Pig Monkey",
+"types": [
+"fighting"
+],
+"height": 1.0
+},
+{
+"dex": 58,
+"official": "Growlithe",
+"category": "Puppy",
+"types": [
+"fire"
+],
+"height": 0.7
+},
+{
+"dex": 59,
+"official": "Arcanine",
+"category": "Legendary",
+"types": [
+"fire"
+],
+"height": 1.9
+},
+{
+"dex": 60,
+"official": "Poliwag",
+"category": "Tadpole",
+"types": [
+"water"
+],
+"height": 0.6
+},
+{
+"dex": 61,
+"official": "Poliwhirl",
+"category": "Tadpole",
+"types": [
+"water"
+],
+"height": 1.0
+},
+{
+"dex": 62,
+"official": "Poliwrath",
+"category": "Tadpole",
+"types": [
+"water",
+"fighting"
+],
+"height": 1.3
+},
+{
+"dex": 63,
+"official": "Abra",
+"category": "Psi",
+"types": [
+"psychic"
+],
+"height": 0.9
+},
+{
+"dex": 64,
+"official": "Kadabra",
+"category": "Psi",
+"types": [
+"psychic"
+],
+"height": 1.3
+},
+{
+"dex": 65,
+"official": "Alakazam",
+"category": "Psi",
+"types": [
+"psychic"
+],
+"height": 1.5
+},
+{
+"dex": 66,
+"official": "Machop",
+"category": "Superpower",
+"types": [
+"fighting"
+],
+"height": 0.8
+},
+{
+"dex": 67,
+"official": "Machoke",
+"category": "Superpower",
+"types": [
+"fighting"
+],
+"height": 1.5
+},
+{
+"dex": 68,
+"official": "Machamp",
+"category": "Superpower",
+"types": [
+"fighting"
+],
+"height": 1.6
+},
+{
+"dex": 69,
+"official": "Bellsprout",
+"category": "Flower",
+"types": [
+"grass",
+"poison"
+],
+"height": 0.7
+},
+{
+"dex": 70,
+"official": "Weepinbell",
+"category": "Flycatcher",
+"types": [
+"grass",
+"poison"
+],
+"height": 1.0
+},
+{
+"dex": 71,
+"official": "Victreebel",
+"category": "Flycatcher",
+"types": [
+"grass",
+"poison"
+],
+"height": 1.7
+},
+{
+"dex": 72,
+"official": "Tentacool",
+"category": "Jellyfish",
+"types": [
+"water",
+"poison"
+],
+"height": 0.9
+},
+{
+"dex": 73,
+"official": "Tentacruel",
+"category": "Jellyfish",
+"types": [
+"water",
+"poison"
+],
+"height": 1.6
+},
+{
+"dex": 74,
+"official": "Geodude",
+"category": "Rock",
+"types": [
+"rock",
+"ground"
+],
+"height": 0.4
+},
+{
+"dex": 75,
+"official": "Graveler",
+"category": "Rock",
+"types": [
+"rock",
+"ground"
+],
+"height": 1.0
+},
+{
+"dex": 76,
+"official": "Golem",
+"category": "Megaton",
+"types": [
+"rock",
+"ground"
+],
+"height": 1.4
+},
+{
+"dex": 77,
+"official": "Ponyta",
+"category": "Fire Horse",
+"types": [
+"fire"
+],
+"height": 1.0
+},
+{
+"dex": 78,
+"official": "Rapidash",
+"category": "Fire Horse",
+"types": [
+"fire"
+],
+"height": 1.7
+},
+{
+"dex": 79,
+"official": "Slowpoke",
+"category": "Dopey",
+"types": [
+"water",
+"psychic"
+],
+"height": 1.2
+},
+{
+"dex": 80,
+"official": "Slowbro",
+"category": "Hermit Crab",
+"types": [
+"water",
+"psychic"
+],
+"height": 1.6
+},
+{
+"dex": 81,
+"official": "Magnemite",
+"category": "Magnet",
+"types": [
+"electric"
+],
+"height": 0.3
+},
+{
+"dex": 82,
+"official": "Magneton",
+"category": "Magnet",
+"types": [
+"electric"
+],
+"height": 1.0
+},
+{
+"dex": 83,
+"official": "Farfetch’d",
+"category": "Wild Duck",
+"types": [
+"normal",
+"flying"
+],
+"height": 0.8
+},
+{
+"dex": 84,
+"official": "Doduo",
+"category": "Twin Bird",
+"types": [
+"normal",
+"flying"
+],
+"height": 1.4
+},
+{
+"dex": 85,
+"official": "Dodrio",
+"category": "Triple Bird",
+"types": [
+"normal",
+"flying"
+],
+"height": 1.8
+},
+{
+"dex": 86,
+"official": "Seel",
+"category": "Sea Lion",
+"types": [
+"water"
+],
+"height": 1.1
+},
+{
+"dex": 87,
+"official": "Dewgong",
+"category": "Sea Lion",
+"types": [
+"water",
+"ice"
+],
+"height": 1.7
+},
+{
+"dex": 88,
+"official": "Grimer",
+"category": "Sludge",
+"types": [
+"poison"
+],
+"height": 0.9
+},
+{
+"dex": 89,
+"official": "Muk",
+"category": "Sludge",
+"types": [
+"poison"
+],
+"height": 1.2
+},
+{
+"dex": 90,
+"official": "Shellder",
+"category": "Bivalve",
+"types": [
+"water"
+],
+"height": 0.3
+},
+{
+"dex": 91,
+"official": "Cloyster",
+"category": "Bivalve",
+"types": [
+"water",
+"ice"
+],
+"height": 1.5
+},
+{
+"dex": 92,
+"official": "Gastly",
+"category": "Gas",
+"types": [
+"ghost",
+"poison"
+],
+"height": 1.3
+},
+{
+"dex": 93,
+"official": "Haunter",
+"category": "Gas",
+"types": [
+"ghost",
+"poison"
+],
+"height": 1.6
+},
+{
+"dex": 94,
+"official": "Gengar",
+"category": "Shadow",
+"types": [
+"ghost",
+"poison"
+],
+"height": 1.5
+},
+{
+"dex": 95,
+"official": "Onix",
+"category": "Rock Snake",
+"types": [
+"rock",
+"ground"
+],
+"height": 8.8
+},
+{
+"dex": 96,
+"official": "Drowzee",
+"category": "Hypnosis",
+"types": [
+"psychic"
+],
+"height": 1.0
+},
+{
+"dex": 97,
+"official": "Hypno",
+"category": "Hypnosis",
+"types": [
+"psychic"
+],
+"height": 1.6
+},
+{
+"dex": 98,
+"official": "Krabby",
+"category": "River Crab",
+"types": [
+"water"
+],
+"height": 0.4
+},
+{
+"dex": 99,
+"official": "Kingler",
+"category": "Pincer",
+"types": [
+"water"
+],
+"height": 1.3
+},
+{
+"dex": 100,
+"official": "Voltorb",
+"category": "Ball",
+"types": [
+"electric"
+],
+"height": 0.5
+},
+{
+"dex": 101,
+"official": "Electrode",
+"category": "Ball",
+"types": [
+"electric"
+],
+"height": 1.2
+},
+{
+"dex": 102,
+"official": "Exeggcute",
+"category": "Egg",
+"types": [
+"grass",
+"psychic"
+],
+"height": 0.4
+},
+{
+"dex": 103,
+"official": "Exeggutor",
+"category": "Coconut",
+"types": [
+"grass",
+"psychic"
+],
+"height": 2.0
+},
+{
+"dex": 104,
+"official": "Cubone",
+"category": "Lonely",
+"types": [
+"ground"
+],
+"height": 0.4
+},
+{
+"dex": 105,
+"official": "Marowak",
+"category": "Bone Keeper",
+"types": [
+"ground"
+],
+"height": 1.0
+},
+{
+"dex": 106,
+"official": "Hitmonlee",
+"category": "Kicking",
+"types": [
+"fighting"
+],
+"height": 1.5
+},
+{
+"dex": 107,
+"official": "Hitmonchan",
+"category": "Punching",
+"types": [
+"fighting"
+],
+"height": 1.4
+},
+{
+"dex": 108,
+"official": "Lickitung",
+"category": "Licking",
+"types": [
+"normal"
+],
+"height": 1.2
+},
+{
+"dex": 109,
+"official": "Koffing",
+"category": "Poison Gas",
+"types": [
+"poison"
+],
+"height": 0.6
+},
+{
+"dex": 110,
+"official": "Weezing",
+"category": "Poison Gas",
+"types": [
+"poison"
+],
+"height": 1.2
+},
+{
+"dex": 111,
+"official": "Rhyhorn",
+"category": "Spikes",
+"types": [
+"ground",
+"rock"
+],
+"height": 1.0
+},
+{
+"dex": 112,
+"official": "Rhydon",
+"category": "Drill",
+"types": [
+"ground",
+"rock"
+],
+"height": 1.9
+},
+{
+"dex": 113,
+"official": "Chansey",
+"category": "Egg",
+"types": [
+"normal"
+],
+"height": 1.1
+},
+{
+"dex": 114,
+"official": "Tangela",
+"category": "Vine",
+"types": [
+"grass"
+],
+"height": 1.0
+},
+{
+"dex": 115,
+"official": "Kangaskhan",
+"category": "Parent",
+"types": [
+"normal"
+],
+"height": 2.2
+},
+{
+"dex": 116,
+"official": "Horsea",
+"category": "Dragon",
+"types": [
+"water"
+],
+"height": 0.4
+},
+{
+"dex": 117,
+"official": "Seadra",
+"category": "Dragon",
+"types": [
+"water"
+],
+"height": 1.2
+},
+{
+"dex": 118,
+"official": "Goldeen",
+"category": "Goldfish",
+"types": [
+"water"
+],
+"height": 0.6
+},
+{
+"dex": 119,
+"official": "Seaking",
+"category": "Goldfish",
+"types": [
+"water"
+],
+"height": 1.3
+},
+{
+"dex": 120,
+"official": "Staryu",
+"category": "Star Shape",
+"types": [
+"water"
+],
+"height": 0.8
+},
+{
+"dex": 121,
+"official": "Starmie",
+"category": "Mysterious",
+"types": [
+"water",
+"psychic"
+],
+"height": 1.1
+},
+{
+"dex": 122,
+"official": "Mr. Mime",
+"category": "Barrier",
+"types": [
+"psychic"
+],
+"height": 1.3
+},
+{
+"dex": 123,
+"official": "Scyther",
+"category": "Mantis",
+"types": [
+"bug",
+"flying"
+],
+"height": 1.5
+},
+{
+"dex": 124,
+"official": "Jynx",
+"category": "Human Shape",
+"types": [
+"ice",
+"psychic"
+],
+"height": 1.4
+},
+{
+"dex": 125,
+"official": "Electabuzz",
+"category": "Electric",
+"types": [
+"electric"
+],
+"height": 1.1
+},
+{
+"dex": 126,
+"official": "Magmar",
+"category": "Spitfire",
+"types": [
+"fire"
+],
+"height": 1.3
+},
+{
+"dex": 127,
+"official": "Pinsir",
+"category": "Stag Beetle",
+"types": [
+"bug"
+],
+"height": 1.5
+},
+{
+"dex": 128,
+"official": "Tauros",
+"category": "Wild Bull",
+"types": [
+"normal"
+],
+"height": 1.4
+},
+{
+"dex": 129,
+"official": "Magikarp",
+"category": "Fish",
+"types": [
+"water"
+],
+"height": 0.9
+},
+{
+"dex": 130,
+"official": "Gyarados",
+"category": "Atrocious",
+"types": [
+"water",
+"flying"
+],
+"height": 6.5
+},
+{
+"dex": 131,
+"official": "Lapras",
+"category": "Transport",
+"types": [
+"water",
+"ice"
+],
+"height": 2.5
+},
+{
+"dex": 132,
+"official": "Ditto",
+"category": "Transform",
+"types": [
+"normal"
+],
+"height": 0.3
+},
+{
+"dex": 133,
+"official": "Eevee",
+"category": "Evolution",
+"types": [
+"normal"
+],
+"height": 0.3
+},
+{
+"dex": 134,
+"official": "Vaporeon",
+"category": "Bubble Jet",
+"types": [
+"water"
+],
+"height": 1.0
+},
+{
+"dex": 135,
+"official": "Jolteon",
+"category": "Lightning",
+"types": [
+"electric"
+],
+"height": 0.8
+},
+{
+"dex": 136,
+"official": "Flareon",
+"category": "Flame",
+"types": [
+"fire"
+],
+"height": 0.9
+},
+{
+"dex": 137,
+"official": "Porygon",
+"category": "Virtual",
+"types": [
+"normal"
+],
+"height": 0.8
+},
+{
+"dex": 138,
+"official": "Omanyte",
+"category": "Spiral",
+"types": [
+"rock",
+"water"
+],
+"height": 0.4
+},
+{
+"dex": 139,
+"official": "Omastar",
+"category": "Spiral",
+"types": [
+"rock",
+"water"
+],
+"height": 1.0
+},
+{
+"dex": 140,
+"official": "Kabuto",
+"category": "Shellfish",
+"types": [
+"rock",
+"water"
+],
+"height": 0.5
+},
+{
+"dex": 141,
+"official": "Kabutops",
+"category": "Shellfish",
+"types": [
+"rock",
+"water"
+],
+"height": 1.3
+},
+{
+"dex": 142,
+"official": "Aerodactyl",
+"category": "Fossil",
+"types": [
+"rock",
+"flying"
+],
+"height": 1.8
+},
+{
+"dex": 143,
+"official": "Snorlax",
+"category": "Sleeping",
+"types": [
+"normal"
+],
+"height": 2.1
+},
+{
+"dex": 144,
+"official": "Articuno",
+"category": "Freeze",
+"types": [
+"ice",
+"flying"
+],
+"height": 1.7
+},
+{
+"dex": 145,
+"official": "Zapdos",
+"category": "Electric",
+"types": [
+"electric",
+"flying"
+],
+"height": 1.6
+},
+{
+"dex": 146,
+"official": "Moltres",
+"category": "Flame",
+"types": [
+"fire",
+"flying"
+],
+"height": 2.0
+},
+{
+"dex": 147,
+"official": "Dratini",
+"category": "Dragon",
+"types": [
+"dragon"
+],
+"height": 1.8
+},
+{
+"dex": 148,
+"official": "Dragonair",
+"category": "Dragon",
+"types": [
+"dragon"
+],
+"height": 4.0
+},
+{
+"dex": 149,
+"official": "Dragonite",
+"category": "Dragon",
+"types": [
+"dragon",
+"flying"
+],
+"height": 2.2
+},
+{
+"dex": 150,
+"official": "Mewtwo",
+"category": "Genetic",
+"types": [
+"psychic"
+],
+"height": 2.0
+},
+{
+"dex": 151,
+"official": "Mew",
+"category": "New Species",
+"types": [
+"psychic"
+],
+"height": 0.4
+}
+]

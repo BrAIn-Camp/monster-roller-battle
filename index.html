@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Critter Roller</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #9ad8f5; font-family: "Trebuchet MS", "Segoe UI", sans-serif; color: #2b2540; }
+  canvas#c { display: block; width: 100vw; height: 100vh; }
+  .pill { background: rgba(255,255,255,.88); border: 3px solid #2b2540; border-radius: 16px; padding: 8px 14px; box-shadow: 0 4px 0 rgba(43,37,64,.35); }
+  #hud { position: fixed; inset: 0; pointer-events: none; display: none; }
+  #size { position: absolute; left: 16px; top: 16px; font-size: 28px; font-weight: 800; }
+  #size small { display: block; font-size: 12px; font-weight: 600; opacity: .7; }
+  #bar { height: 8px; border: 2px solid #2b2540; border-radius: 6px; margin-top: 4px; overflow: hidden; background: #fff; }
+  #barfill { height: 100%; width: 0; background: #ffb52e; }
+  #seek { position: absolute; left: 50%; top: 66px; transform: translateX(-50%); font-size: 13px; font-weight: 700; white-space: nowrap; display: none; padding: 4px 12px; }
+  #seek .arr { display: inline-block; font-size: 18px; font-weight: 900; }
+  #seek .type { display: inline-block; padding: 0 8px; border-radius: 8px; color: #fff; font-size: 11px; }
+  #timer { position: absolute; left: 50%; top: 16px; transform: translateX(-50%); font-size: 26px; font-weight: 800; min-width: 80px; text-align: center; }
+  #goals { position: absolute; right: 16px; top: 16px; font-size: 14px; font-weight: 700; line-height: 1.6; max-width: 260px; }
+  #goals .done { color: #2f8a3f; }
+  #pick { position: absolute; left: 50%; bottom: 28px; transform: translateX(-50%); font-size: 18px; font-weight: 800; opacity: 0; white-space: nowrap; }
+  #pick.show { animation: pop 1.6s ease-out; }
+  #pick .type { display: inline-block; padding: 1px 8px; border-radius: 8px; color: #fff; font-size: 13px; margin-left: 6px; }
+  @keyframes pop { 0% { opacity: 0; transform: translateX(-50%) scale(.7); } 12% { opacity: 1; transform: translateX(-50%) scale(1.08); } 20% { transform: translateX(-50%) scale(1); } 80% { opacity: 1; } 100% { opacity: 0; } }
+  #hudMute { position: absolute; left: 16px; top: 108px; font-size: 12px; font-weight: 700; padding: 4px 10px; margin: 0; pointer-events: auto; box-shadow: 0 2px 0 #2b2540; }
+  #dexpop { position: absolute; right: 16px; top: 132px; width: 176px; text-align: center; opacity: 0; transform: translateX(40px); transition: opacity .25s, transform .25s; font-size: 13px; font-weight: 700; padding: 8px 10px 10px; }
+  #dexpop.show { opacity: 1; transform: none; }
+  #dexpop canvas { width: 150px; height: 150px; display: block; margin: 0 auto; }
+  #dexpop .nm { font-size: 16px; font-weight: 800; }
+  #dexpop .meta { font-weight: 600; opacity: .75; font-size: 12px; }
+  #dexpop .new { display: inline-block; background: #ffe169; border: 2px solid #2b2540; border-radius: 8px; padding: 0 8px; font-size: 12px; font-weight: 800; }
+  #dexpop .type { display: inline-block; padding: 1px 8px; border-radius: 8px; color: #fff; font-size: 11px; margin: 2px 1px; }
+  #area { position: absolute; left: 50%; top: 30%; transform: translateX(-50%); font-size: 30px; font-weight: 800; color: #fff; text-shadow: 0 2px 0 #2b2540, 0 0 12px rgba(43,37,64,.6); letter-spacing: 1px; opacity: 0; white-space: nowrap; }
+  #area.show { animation: areain 2.6s ease-out; }
+  @keyframes areain { 0% { opacity: 0; letter-spacing: 8px; } 15% { opacity: 1; letter-spacing: 1px; } 75% { opacity: 1; } 100% { opacity: 0; } }
+  .lineup { display: flex; flex-wrap: wrap; justify-content: center; gap: 2px; max-width: 560px; margin: 8px auto 0; }
+  .lineup span { border: 2px solid transparent; border-radius: 8px; line-height: 0; }
+  .lineup span.isnew { border-color: #f0b400; background: #fff6cc; }
+  .lineup img { width: 40px; height: 40px; }
+  .dot { display: inline-block; width: 11px; height: 11px; border-radius: 50%; border: 2px solid #2b2540; margin-right: 5px; vertical-align: -1px; }
+  .sb { white-space: nowrap; font-size: 13px; } .sb b { display: inline-block; min-width: 46px; }
+  .sbnote { font-size: 11px; font-weight: 600; opacity: .7; margin-top: 2px; }
+  #battleui { position: fixed; inset: 0; pointer-events: none; display: none; }
+  #battlebars { position: absolute; left: 50%; top: 14px; transform: translateX(-50%); display: flex; gap: 10px; }
+  .bb { background: rgba(255,255,255,.9); border: 3px solid #2b2540; border-radius: 14px; padding: 6px 10px; font-size: 13px; font-weight: 700; min-width: 130px; box-shadow: 0 4px 0 rgba(43,37,64,.35); }
+  .bb .hpbar { height: 10px; border: 2px solid #2b2540; border-radius: 6px; background: #fff; overflow: hidden; margin: 4px 0 2px; }
+  .bb .hpbar i { display: block; height: 100%; }
+  #battlebanner { position: absolute; left: 50%; top: 34%; transform: translateX(-50%); font-size: 46px; font-weight: 800; color: #fff; text-shadow: 0 3px 0 #2b2540, 0 0 14px rgba(43,37,64,.6); white-space: nowrap; }
+  #btnSkip { position: absolute; right: 16px; bottom: 16px; pointer-events: auto; font-size: 14px; }
+  .tag { position: absolute; transform: translate(-50%, -100%); color: #fff; font-size: 12px; font-weight: 800; padding: 2px 9px; border-radius: 9px; border: 2px solid #2b2540; text-align: center; white-space: nowrap; display: none; text-shadow: 0 1px 0 rgba(0,0,0,.35); }
+  .tag i { position: absolute; left: 50%; top: 100%; transform: translateX(-50%); font-style: normal; color: #2b2540; font-size: 13px; line-height: 1; }
+  .tag.edge { transform: translate(-50%, -50%); opacity: .92; }
+  #toast { position: absolute; left: 50%; top: 104px; transform: translateX(-50%); font-size: 20px; font-weight: 800; background: #ffe169; opacity: 0; transition: opacity .3s; }
+  #toast.show { opacity: 1; }
+  .overlay { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(43,37,64,.45); }
+  .overlay.open { display: flex; }
+  .card { background: #fffaf0; border: 4px solid #2b2540; border-radius: 24px; padding: 24px 28px; max-width: min(760px, 92vw); max-height: 86vh; overflow: auto; box-shadow: 0 8px 0 rgba(43,37,64,.4); text-align: center; }
+  h1 { margin: 0 0 4px; font-size: 44px; letter-spacing: 1px; }
+  h2 { margin: 0 0 12px; font-size: 28px; }
+  p { margin: 6px 0; }
+  .sub { opacity: .75; font-size: 14px; }
+  button { font: inherit; font-weight: 800; font-size: 18px; color: #2b2540; background: #ffe169; border: 3px solid #2b2540; border-radius: 14px; padding: 10px 20px; margin: 6px; cursor: pointer; box-shadow: 0 4px 0 #2b2540; }
+  button:hover { background: #fff1a8; }
+  button:active { transform: translateY(3px); box-shadow: 0 1px 0 #2b2540; }
+  button.alt { background: #bfe7ff; }
+  .keys { text-align: left; display: inline-block; font-size: 14px; line-height: 1.7; margin-top: 10px; }
+  kbd { background: #fff; border: 2px solid #2b2540; border-radius: 6px; padding: 0 6px; font: inherit; font-size: 12px; font-weight: 800; }
+  #dexgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 10px; margin: 12px 0; }
+  #dex .card { width: min(1100px, 94vw); max-width: none; }
+  .dex { border: 3px solid #2b2540; border-radius: 14px; padding: 8px; background: #fff; font-size: 13px; font-weight: 700; }
+  .dex img { width: 84px; height: 84px; display: block; margin: 0 auto; }
+  .dex.unseen img { filter: brightness(0) opacity(.55); }
+  .dex .type { display: inline-block; padding: 0 8px; border-radius: 8px; color: #fff; font-size: 11px; }
+  .dex .meta { font-weight: 600; opacity: .75; font-size: 12px; }
+  table.res { margin: 10px auto; border-collapse: collapse; font-weight: 700; }
+  table.res td { padding: 3px 12px; text-align: left; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="hud">
+  <div id="size" class="pill">45.0 cm<small>ball size</small><div id="bar"><div id="barfill"></div></div></div>
+  <div id="seek" class="pill"></div>
+  <button id="hudMute" class="alt">Sound: on (M)</button>
+  <div id="timer" class="pill">8:00</div>
+  <div id="goals" class="pill"></div>
+  <div id="dexpop" class="pill"><canvas id="dexcv" width="300" height="300"></canvas><div id="dexinfo"></div></div>
+  <div id="tag1" class="tag"></div><div id="tag2" class="tag"></div><div id="tag3" class="tag"></div>
+  <div id="area"></div>
+  <div id="toast" class="pill"></div>
+  <div id="pick" class="pill"></div>
+</div>
+
+<div id="battleui"><div id="battlebars"></div><div id="battlebanner"></div><button id="btnSkip" class="alt">Skip to result (Space)</button></div>
+
+<div id="menu" class="overlay open">
+  <div class="card">
+    <h1>Critter Roller</h1>
+    <p class="sub" id="levelname"></p>
+    <p id="best" class="sub"></p>
+    <div>
+      <button id="btnTimed">Play a round</button>
+      <button id="btnFree" class="alt">Free roam</button>
+      <button id="btnDex" class="alt">Critter dex</button>
+      <button id="btnMute" class="alt">Sound: on (M)</button>
+    </div>
+    <div class="keys">
+      <div><b>Simple steering</b> — <kbd>W</kbd><kbd>S</kbd> roll, <kbd>A</kbd><kbd>D</kbd> turn (or arrows); gamepad left stick</div>
+      <div><b>Tank steering</b> — <kbd>W</kbd><kbd>S</kbd> left hand, <kbd>I</kbd><kbd>K</kbd> right hand; gamepad both sticks</div>
+      <div><b>Sprint</b> — hold <kbd>Shift</kbd> (gamepad A or RT): more than twice as fast and very hard to steer. Crash at speed and you drop things, more the faster you were going</div>
+      <div><b>Mouse</b> — moves the camera: left and right swing it round the ball, up and down tilt it, wheel zooms. Click to capture the pointer so it never runs out of screen.</div>
+      <div><kbd>M</kbd> mute · add <kbd>?mute</kbd> to the address to start silent</div>
+      <div><kbd>T</kbd> switch steering (now: <span id="steer">simple</span>) · <kbd>Esc</kbd> / Start to pause</div>
+      <div>Gamepad on this screen: A = play a round, X = free roam</div>
+      <div><b>The round</b> — you are Red. Three CPU teams (Green, Yellow, Blue) roll on the same island. Ram a ball to knock critters off it. When time is up, every team's critters fight it out.</div>
+    </div>
+  </div>
+</div>
+
+<div id="pause" class="overlay">
+  <div class="card">
+    <h2>Paused</h2>
+    <button id="btnResume">Resume</button>
+    <button id="btnMute2" class="alt">Sound: on (M)</button>
+    <button id="btnEnd" class="alt">End run</button>
+  </div>
+</div>
+
+<div id="results" class="overlay">
+  <div class="card">
+    <h2 id="resTitle"></h2>
+    <div id="resBody"></div>
+    <button id="btnAgain">Play again</button>
+    <button id="btnMenu" class="alt">Menu</button>
+  </div>
+</div>
+
+<div id="dex" class="overlay">
+  <div class="card">
+    <h2>Critter dex <span id="dexcount" class="sub"></span></h2>
+    <div id="dexgrid"></div>
+    <button id="btnDexBack">Back</button>
+  </div>
+</div>
+
+<script src="roster.js?v=7"></script>
+<script type="module" src="main.js"></script>
+</body>
+</html>
