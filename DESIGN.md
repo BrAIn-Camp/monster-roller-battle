@@ -98,6 +98,13 @@ The first human playtest reached 24 m against CPUs at 8-13 m, pulling ahead in t
 - **Growth:** big balls get less from each thing (half at 6 m wide, was 9 m), aiming at a winner of about 15 m.
 - **Difficulty** (menu, saved): Easy, Normal and Hard change CPU speed, how keenly they dash, how quickly they pick targets and how
   much a CPU that is ahead eases off. Numbers are in `DIFFS` at the top of `main.js`.
+- **Weight (second pass):** top speed still rises with size, slightly less steeply for giants, so big balls are not slow. Instead
+  `heft(d)` scales acceleration, braking, sideways grip and turning down gradually with size (83% at 3 m, 66% at 8 m, 53% at 15 m),
+  for the player and the CPUs alike: a big ball is slow to start, slow to stop and carries its momentum.
+- **Committal wind-up:** steering by keys and mouse drops to 35% while charging (`CHARGE_STEER`).
+- **Dash effects:** dust kicked out behind the spinning ball and sparks off it that build with the charge, marching chevrons on the
+  ground showing the direction and reach of the burst, a camera pull-in and rumble, a dust ring on release, a team-coloured
+  trail and speed lines at the screen edges during the burst. CPU balls show the same dust, sparks, chevrons and trail, so a dash can be seen coming.
 - **Late bloomer:** any ball still under 1 m when Expedition begins is boosted to 1 m, so nobody is stuck in the Green.
 
 ## 5. Events

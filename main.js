@@ -73,7 +73,12 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 // What a thing adds to a ball's volume. Big balls get less out of each thing (half at BIG_D wide), which keeps a leader in reach.
 const BIG_D = 6;
 const growthOf = (Bq, o) => GROW * o.size ** 3 * (o.spec.mass ?? 1) * (o.bonus ?? 1) / (1 + (Bq.d / BIG_D) ** 2);
-const topSpeed = (d) => 3.2 * Math.pow(d + 0.5, 0.85);
+// Top speed still rises with size, a little less steeply for the giants, so a big ball never feels slow across the ground.
+// What changes with mass is heft: a bigger ball takes longer to get going, to stop and to turn (gradually: 0.6 m = 96%,
+// 3 m = 83%, 8 m = 66%, 15 m = 53% of a small ball's pull), so it carries its momentum.
+const topSpeed = (d) => 3.2 * Math.pow(d + 0.5, 0.85) / Math.pow(1 + d / 10, 0.25);
+const heft = (d) => 1 / Math.pow(1 + d / 8, 0.6);
+const CHARGE_STEER = 0.35; // steering (keys and mouse) while winding up a dash: you commit to a direction
 // How many things a crash knocks off: nothing below top speed, then more the faster you were going (a full sprint: about 14).
 const crashLoss = () => 0;      // running into scenery only stops the ball; rams and charging critters are what knock things off
 const V3 = THREE.Vector3;
@@ -748,7 +753,78 @@ function mark(id, x, z, opt = {}) {
 }
 function moveMark(id, x, z) { const m = markers.get(id); if (m) { m.x = x; m.z = z; m.g.position.set(x, groundAt(x, z), z); } }
 function unmark(id) { const m = markers.get(id); if (m) { fx.remove(m.g); markers.delete(id); } }
-function clearFx() { for (const id of [...markers.keys()]) unmark(id); fx.clear(); }
+// ---------- dash effects: dust and sparks (one instanced mesh of little cubes), and the aim arrow on the ground ----------
+const PMAX = 500, parts = [], pDummy = new THREE.Object3D(), pCol = new THREE.Color();
+const pMesh = new THREE.InstancedMesh(G.box, new THREE.MeshBasicMaterial({ fog: false }), PMAX);
+pMesh.frustumCulled = false; pMesh.count = 0; scene.add(pMesh);
+function puff(x, y, z, vx, vy, vz, life, size, color, grav = 6) { if (parts.length < PMAX) parts.push({ x, y, z, vx, vy, vz, life, max: life, size, color, grav }); }
+function tickParts(dt) {
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const q = parts[i];
+    q.life -= dt;
+    if (q.life <= 0) { parts[i] = parts[parts.length - 1]; parts.pop(); continue; }
+    q.vy -= q.grav * dt; q.x += q.vx * dt; q.y += q.vy * dt; q.z += q.vz * dt;
+  }
+  for (let i = 0; i < parts.length; i++) {
+    const q = parts[i], s = q.size * (0.35 + 0.65 * q.life / q.max);
+    pDummy.position.set(q.x, q.y, q.z); pDummy.rotation.set(q.life * 7, q.life * 5, 0); pDummy.scale.setScalar(s); pDummy.updateMatrix();
+    pMesh.setMatrixAt(i, pDummy.matrix); pMesh.setColorAt(i, pCol.setHex(q.color));
+  }
+  pMesh.count = parts.length; pMesh.instanceMatrix.needsUpdate = true;
+  if (pMesh.instanceColor) pMesh.instanceColor.needsUpdate = true;
+}
+const DUST = [0xe6d9b8, 0xd8c8a0, 0xf3ead7];
+// Winding up: dust kicked out behind the spinning ball and sparks flying off it, more as the charge builds (c = 0..1).
+function chargeFx(Bq, c, dt) {
+  const d = Bq.d, r = d / 2, hx = Math.sin(Bq.heading), hz = Math.cos(Bq.heading), gy = groundAt(Bq.x, Bq.z), k = Math.pow(d, 0.7), col = TEAMS[Bq.team].hex;
+  let n = (14 + 46 * c) * dt; n = Math.floor(n) + (rand() < n % 1 ? 1 : 0);
+  for (let i = 0; i < n; i++) {
+    const side = (rand() - 0.5) * r * 1.4;
+    puff(Bq.x - hx * r * 0.7 + hz * side, gy + 0.05 * k, Bq.z - hz * r * 0.7 - hx * side, -hx * (2.5 + 4 * c) * k + (rand() - 0.5) * k, (1.2 + 2.5 * rand()) * k, -hz * (2.5 + 4 * c) * k + (rand() - 0.5) * k, 0.45 + rand() * 0.3, (0.1 + 0.1 * rand()) * k, DUST[i % 3], 5 * k);
+    if (rand() < 0.35 + 0.5 * c) {
+      const a = rand() * 6.28, up = 0.2 + rand() * 0.9;
+      puff(Bq.x + Math.cos(a) * r * 0.9, gy + r * (0.4 + up), Bq.z + Math.sin(a) * r * 0.9, Math.cos(a) * (2 + 4 * c) * k, (1.5 + 3 * rand()) * k, Math.sin(a) * (2 + 4 * c) * k, 0.25 + rand() * 0.25, (0.05 + 0.05 * c) * k, rand() < 0.5 ? 0xffe169 : rand() < 0.5 ? 0xffffff : col, 9 * k);
+    }
+  }
+}
+// Letting go: a ring of dust thrown out, then a streak of team-coloured sparks for as long as the burst lasts.
+function burstFx(Bq, c) {
+  const r = Bq.d / 2, gy = groundAt(Bq.x, Bq.z), k = Math.pow(Bq.d, 0.7);
+  for (let i = 0; i < 26; i++) { const a = i / 26 * 6.28, sp = (3 + 5 * c) * k; puff(Bq.x + Math.cos(a) * r, gy + 0.1 * k, Bq.z + Math.sin(a) * r, Math.cos(a) * sp, (1 + rand() * 2) * k, Math.sin(a) * sp, 0.5 + rand() * 0.3, (0.14 + 0.1 * rand()) * k, DUST[i % 3], 4 * k); }
+}
+function trailFx(Bq, dt) {
+  const r = Bq.d / 2, hx = Math.sin(Bq.heading), hz = Math.cos(Bq.heading), gy = groundAt(Bq.x, Bq.z), k = Math.pow(Bq.d, 0.7), col = TEAMS[Bq.team].hex;
+  let n = 40 * dt; n = Math.floor(n) + (rand() < n % 1 ? 1 : 0);
+  for (let i = 0; i < n; i++) puff(Bq.x - hx * r + (rand() - 0.5) * r, gy + rand() * r * 1.4, Bq.z - hz * r + (rand() - 0.5) * r, -hx * k + (rand() - 0.5) * k, rand() * k, -hz * k + (rand() - 0.5) * k, 0.35 + rand() * 0.3, (0.08 + 0.1 * rand()) * k, i % 3 === 0 ? 0xffffff : i % 3 === 1 ? col : DUST[0], 1.5 * k);
+}
+// The aim arrow: lies on the ground ahead of a ball that is winding up, pointing where the burst will go and growing with the charge.
+const arrows = new THREE.Group();
+scene.add(arrows);
+const arrowGeo = new THREE.BufferGeometry();      // one chevron, pointing along +z, 1 wide
+arrowGeo.setAttribute('position', new THREE.Float32BufferAttribute([-0.5, 0, 0, 0, 0, 0.55, 0, 0, 0.25, 0.5, 0, 0, 0, 0, 0.25, 0, 0, 0.55, -0.5, 0, 0, 0, 0, 0.25, -0.5, 0, -0.22, 0.5, 0, 0, 0.5, 0, -0.22, 0, 0, 0.25], 3));
+const CHEVRONS = 9;
+function aimArrow(Bq, c) {
+  if (c <= 0) { if (Bq.arrow) Bq.arrow.visible = false; return; }
+  if (!Bq.arrow || Bq.arrow.parent !== arrows) {
+    const g = new THREE.Group(), m = new THREE.MeshBasicMaterial({ color: Bq === S ? 0xffe169 : TEAMS[Bq.team].hex, transparent: true, opacity: 0.8, depthWrite: false, fog: false, side: THREE.DoubleSide });
+    for (let i = 0; i < CHEVRONS; i++) { const ch = new THREE.Mesh(arrowGeo, m); ch.renderOrder = 3; g.add(ch); }
+    g.userData.mat = m; Bq.arrow = g; arrows.add(g);
+  }
+  const r = Bq.d / 2, hx = Math.sin(Bq.heading), hz = Math.cos(Bq.heading), len = r * 1.2 + c * topSpeed(Bq.d) * RUN * burstTime(c) * 0.55, step = Math.max(Bq.d * 0.8, len / CHEVRONS);
+  Bq.arrow.visible = true;
+  Bq.arrow.userData.mat.opacity = 0.5 + 0.4 * c + (c >= 0.999 ? 0.1 * Math.sin(S.time * 30) : 0);
+  Bq.arrow.children.forEach((ch, i) => {
+    const dist = r * 1.25 + (i + (S.time * 2.5) % 1) * step;                 // the chevrons march forward
+    ch.visible = dist < len + r;
+    if (!ch.visible) return;
+    const x = Bq.x + hx * dist, z = Bq.z + hz * dist;
+    ch.position.set(x, groundAt(x, z) + 0.08 + Bq.d * 0.02, z);
+    ch.rotation.y = Bq.heading;
+    ch.scale.set(Bq.d * (0.75 + 0.35 * c), 1, Bq.d * 0.9);
+  });
+}
+function clearFx() {
+  parts.length = 0; pMesh.count = 0; arrows.clear(); S.arrow = null; for (const id of [...markers.keys()]) unmark(id); fx.clear(); }
 
 // ---------- pickups and knocks ----------
 const tmpV = new V3(), tmpQ = new THREE.Quaternion(), tmpQ2 = new THREE.Quaternion(), UP = new V3(0, 1, 0), downLocal = new V3(), axis = new V3();
@@ -1061,12 +1137,17 @@ function updateRivals(dt, frozen) {
     const goal = R.wander > 0 ? null : R.dash ? PLACES.feast : evg || routeGoal(R, R.x, R.z, R.d, dt);
     let diff = (goal ? Math.atan2(goal[0] - R.x, goal[1] - R.z) : tp ? Math.atan2(tp.x - R.x, tp.z - R.z) : R.wh) - R.heading;
     while (diff > Math.PI) diff -= 2 * Math.PI; while (diff < -Math.PI) diff += 2 * Math.PI;
-    R.heading += clamp(diff, -2.6 * dt, 2.6 * dt);
+    const hf = heft(R.d), turnR = 2.6 * Math.sqrt(hf) * (R.wind > 0 ? CHARGE_STEER : 1) * dt;
+    R.heading += clamp(diff, -turnR, turnR);
     const clear = Math.abs(diff) < 0.2 && (goal || (tp && Math.hypot(tp.x - R.x, tp.z - R.z) > R.d * 5));     // lined up with a long run ahead: sprint
     // the charge dash: with a clear run ahead and energy to spare it winds up (crawling), then bursts
-    if (R.wind > 0) { R.wind -= dt; if (R.wind <= 0) { R.boostT = burstTime(0.65); R.v = Math.max(R.v, topSpeed(R.d) * CPU_SPEED * RUN * burstKick(0.65)); } }
+    const windC = R.wind > 0 ? 0.65 * (1 - R.wind / (CHARGE_TIME * 0.65)) : 0;
+    aimArrow(R, windC);
+    if (R.wind > 0) { chargeFx(R, windC, dt); rollAxis.set(Math.cos(R.heading), 0, -Math.sin(R.heading)); tmpQ.setFromAxisAngle(rollAxis, (6 + 22 * windC) * dt); R.ball.quaternion.premultiply(tmpQ); }
+    else if (R.boostT > 0 && !frozen) trailFx(R, dt);
+    if (R.wind > 0) { R.wind -= dt; if (R.wind <= 0) { burstFx(R, 0.65); R.boostT = burstTime(0.65); R.v = Math.max(R.v, topSpeed(R.d) * CPU_SPEED * RUN * burstKick(0.65)); } }
     else if (clear && !frozen && R.boostT <= 0 && R.energy >= 0.7 && rand() < DIFF.dash * dt) { R.wind = CHARGE_TIME * 0.65; R.energy -= 0.65; }
-    R.v += ((Math.abs(diff) < 1 ? vmax : vmax * 0.35) - R.v) * (1 - Math.exp(-DRIVE * (R.boostT > 0 ? 3 : 1) * dt));
+    R.v += ((Math.abs(diff) < 1 ? vmax : vmax * 0.35) - R.v) * (1 - Math.exp(-DRIVE * (R.boostT > 0 ? 3 : hf) * dt));
     const hx = Math.sin(R.heading), hz = Math.cos(R.heading);
     const nx = clamp(R.x + hx * R.v * dt, BOUNDS.x1 + 5, BOUNDS.x2 - 5), nz = clamp(R.z + hz * R.v * dt, BOUNDS.z1 + 5, BOUNDS.z2 - 5);
     const px = nx + hx * r * 0.8, pz = nz + hz * r * 0.8;
@@ -1463,12 +1544,16 @@ function update(dt) {
     S.charge += add; S.energy -= add; charging = true;
     if (add > 0 && Math.floor(S.time * 14) !== Math.floor((S.time - dt) * 14)) tone(180 + 520 * S.charge, 200 + 560 * S.charge, 0.05, 'sawtooth', 0.035);
   } else if (S.charge > 0) { released = S.charge; S.charge = 0; }
-  if (released > 0.05) { S.boostT = burstTime(released); S.boostK = 1 + 0.2 * released; tone(240, 1100 + 500 * released, 0.3, 'sawtooth', 0.11); }
+  if (released > 0.05) { S.boostT = burstTime(released); S.boostK = 1 + 0.2 * released; S.dashed = true; burstFx(S, released); tone(240, 1100 + 500 * released, 0.3, 'sawtooth', 0.11); }
+  if (charging) chargeFx(S, S.charge, dt);
+  else if (S.boostT > 0 && S.dashed && !frozen) trailFx(S, dt);
+  aimArrow(S, charging ? S.charge : 0);
   const boosting = S.boostT > 0;
   if (boosting) { S.boostT -= dt; f = 1; }
   run = boosting;
   const top = vmax * (boosting ? RUN * S.boostK : charging ? CHARGE_CRAWL : 1);
-  S.heading -= t * 2.4 * dt * (boosting ? RUN_STEER : 1) + S.mdx * MOUSE_YAW;     // a burst dulls the keys, never the camera
+  const hf = heft(S.d);
+  S.heading -= (t * 2.4 * dt * Math.sqrt(hf) * (boosting ? RUN_STEER : 1) + S.mdx * MOUSE_YAW) * (charging ? CHARGE_STEER : 1);     // a burst dulls the keys; winding up dulls keys and mouse alike
   S.mdx = 0;
   const hx = Math.sin(S.heading), hz = Math.cos(S.heading);
   if (released > 0.05) { const v = vmax * RUN * burstKick(released); S.vx = hx * v; S.vz = hz * v; S.shake = 0.08; }
@@ -1476,10 +1561,11 @@ function update(dt) {
   // Momentum: the ball takes time to get up to speed and to stop, and the faster it is going the less it grips,
   // so at a sprint it keeps sliding the way it was headed long after the camera has turned.
   const fast = Math.hypot(S.vx, S.vz) / vmax;                 // speed as a share of ordinary top speed
-  S.vx += hx * f * top * DRIVE * dt; S.vz += hz * f * top * DRIVE * dt;
+  const drive = DRIVE * (boosting ? 1 : hf);                  // a heavy ball is slower to get going and to stop
+  S.vx += hx * f * top * drive * dt; S.vz += hz * f * top * drive * dt;
   let vf = S.vx * hx + S.vz * hz, vl = -S.vx * hz + S.vz * hx;
-  vf *= Math.exp(-DRIVE * (f * vf < 0 ? 2.2 : 1) * dt);        // pulling back brakes harder than coasting
-  vl *= Math.exp(-(GRIP / (1 + 2.6 * fast * fast)) * dt);
+  vf *= Math.exp(-drive * (f * vf < 0 ? 2.2 : 1) * dt);        // pulling back brakes harder than coasting
+  vl *= Math.exp(-(GRIP * Math.sqrt(hf) / (1 + 2.6 * fast * fast)) * dt);
   S.vx = hx * vf - hz * vl; S.vz = hz * vf + hx * vl;
 
   // sideways movement, one axis at a time, stopped by any step too tall to climb
@@ -1595,6 +1681,8 @@ function update(dt) {
   aimSun(S.x, feet, S.z, S.d);
   const floor = groundAt(camera.position.x, camera.position.z) + S.d * 0.35 + th * 0.2;
   if (camera.position.y < floor) camera.position.y = floor;  // never inside a cliff
+  if (charging) { camera.position.x += (rand() - 0.5) * S.d * 0.05 * S.charge; camera.position.y += (rand() - 0.5) * S.d * 0.05 * S.charge; }     // the wind-up rumbles
+  $('speedlines').style.opacity = boosting ? Math.min(0.85, S.boostT * 2.5).toFixed(2) : '0';
   if (S.shake > 0) { S.shake -= dt; camera.position.x += (rand() - 0.5) * S.d * 0.25; camera.position.y += (rand() - 0.5) * S.d * 0.25; }
   S.camLook.set(S.x + hx * S.d, S.camY + Math.max(S.d * 0.7, th * 0.6), S.z + hz * S.d);
   camera.lookAt(S.camLook);
@@ -1604,6 +1692,7 @@ function update(dt) {
   scene.fog.near = (60 + S.d * 30) * S.fogK; scene.fog.far = (260 + S.d * 120) * S.fogK;
   for (const m of markers.values()) { m.ring.scale.setScalar(1 + 0.06 * Math.sin(S.time * 5)); m.g.rotation.y += dt; }
 
+  tickParts(dt);
   updateSeek(dt, hx, hz);
   updateTags();
   updateSky(dt);
@@ -1712,7 +1801,7 @@ function go(q) {
   $('boosthint').className = 'pill';
   setTimeout(() => { $('lights').className = ''; }, 900);
   const hx = Math.sin(S.heading), hz = Math.cos(S.heading), v = topSpeed(S.d) * RUN;
-  S.boostK = 1.35;
+  S.boostK = 1.35; S.dashed = true;
   if (q === 2) { S.boostT = 2.3; S.vx = hx * v * 1.2; S.vz = hz * v * 1.2; toast('ROCKET START!'); tone(200, 1400, 0.5, 'sawtooth', 0.12); }
   else if (q === 1) { S.boostT = 1.1; S.vx = hx * v * 0.8; S.vz = hz * v * 0.8; toast('Boost start!'); tone(200, 900, 0.35, 'sawtooth', 0.1); }
   else if (q === -1) { S.stallT = 0.9; toast('Stalled! Too early'); tone(220, 60, 0.5, 'sawtooth', 0.14); }
