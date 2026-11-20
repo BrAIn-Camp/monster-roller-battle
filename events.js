@@ -447,7 +447,7 @@ const golden = {
     jingle(H, [1319, 1568, 2093, 1568, 2093], 'sine', 0.1, 0.08, 0.12);
   },
   blocked(H, D, x0, z0, x, z) {
-    return Math.hypot(x, z) > D.lim || !inMap(H, x, z) || H.waterAt(x, z) !== 0 && H.waterAt(x, z) === 2 || H.groundAt(x, z) - H.groundAt(x0, z0) > D.step;
+    return Math.hypot(x, z) > D.lim || !inMap(H, x, z) || H.waterAt(x, z) === 2 || H.groundAt(x, z) - H.groundAt(x0, z0) > D.step;
   },
   tick(H, ev, dt) {
     const D = ev.data, o = D.o;

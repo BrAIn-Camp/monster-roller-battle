@@ -24,9 +24,9 @@ const START_D = 0.6;      // starting ball diameter (m): big enough that the 30 
 const TRAINER_H = 1.5;    // the trainer's full height (m), reached once the ball is 1.9 m wide
 const trainerHeight = (d) => clamp(d * 0.6, 0.25, TRAINER_H);    // shorter than the ball, so it never hides it; human-sized from a 1.9 m ball
 const PICK_RATIO = 0.5;   // can roll up things up to this fraction of the ball's diameter, so critters stay big next to it
-const GROW = 0.95;        // d^3 += GROW * size^3 per pickup. Low: the map is packed and a sprinting ball sweeps up a lot
+const GROW = 3;           // d^3 += GROW * size^3 * mass per pickup: tuned so a ball doubles about once a minute
 const MAX_ON_BALL = 300;  // the newest this-many things are drawn on a ball; older ones still count and still fight
-const CPU_SPEED = 0.92;   // CPU balls roll at this fraction of the player's top speed (and sprint on a clear run)
+const CPU_SPEED = 0.86;   // CPU balls roll at this fraction of the player's top speed (and sprint on a clear run)
 // The four teams. Team 0 is the player. A team's critters are tinted in its colour once rolled up.
 const TEAMS = [
   { id: 'red', name: 'Red', hex: 0xe24a4a, css: '#e24a4a' },
@@ -54,6 +54,9 @@ const PHASES = [
 const EVENT_TIMES = [262, 218, 176, 134, 94, 58];   // seconds left at which an event begins (each a few seconds either way)
 const KNOCK_LOSS = 3;     // things a ball drops when a heavier ball rams it
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+// What a thing adds to a ball's volume. Big balls get less out of each thing (half at BIG_D wide), which keeps a leader in reach.
+const BIG_D = 9;
+const growthOf = (Bq, o) => GROW * o.size ** 3 * (o.spec.mass ?? 1) * (o.bonus ?? 1) / (1 + (Bq.d / BIG_D) ** 2);
 const topSpeed = (d) => 2.7 * Math.pow(d + 0.5, 0.85);
 // How many things a crash knocks off: nothing below top speed, then more the faster you were going (a full sprint: about 14).
 const crashLoss = (v, vmax) => (v < 1.05 * vmax ? 0 : Math.max(1, Math.round((v / vmax - 0.9) * 9)));   // a big ball should feel like an avalanche, not a barge
@@ -758,7 +761,7 @@ function stick(ballGroup, o, cx, cy, cz, r) {
 }
 function attach(o) {
   stick(ball, o, S.x, S.y, S.z, S.d / 2);
-  o.contrib = GROW * o.size ** 3 * (o.spec.mass ?? 1) * (o.bonus ?? 1);
+  o.contrib = growthOf(S, o);
   S.vol3 += o.contrib; S.d = Math.cbrt(S.vol3);
   S.objects.splice(S.objects.indexOf(o), 1);
   S.attached.push(o); S.caught++;
@@ -981,7 +984,7 @@ function makeRivals() {
 }
 function rivalAttach(R, o) {
   stick(R.ball, o, R.x, R.y, R.z, R.d / 2);
-  o.contrib = GROW * o.size ** 3 * (o.spec.mass ?? 1) * (o.bonus ?? 1);
+  o.contrib = growthOf(R, o);
   R.vol3 += o.contrib; R.d = Math.cbrt(R.vol3);
   S.objects.splice(S.objects.indexOf(o), 1);
   R.attached.push(o);
