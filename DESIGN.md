@@ -112,6 +112,11 @@ The first human playtest reached 24 m against CPUs at 8-13 m, pulling ahead in t
   HUD re-laid: the player's panel (critters, ball size with the dash gauge, army power) sits bottom centre just under the ball;
   standings are a ranked list with size bars top left; the dex card is top right; the clock, phase bar and event chip stay top centre;
   the minimap is bottom left and the sound button bottom right.
+- **Critter attacks and getting boxed in (fifth pass):** a bold critter that reaches the ball now attacks instead of just blocking: it
+  rears back for 0.4 s, lunges for 0.2 s, then backs off. A hit throws the ball clear and lets it pass through critters for 1.1 s.
+  If the ball is held between solid things, or has stayed within its own width of one spot for two seconds while pushing with
+  too-big critters beside it, all of them attack, so a ring of critters cannot trap a ball. Tested in the browser with rings of
+  4-8 critters (and 5 titans round a 6 m ball): out in 1.5-2.1 s, 7 s for the titans.
 - **Late bloomer:** any ball still under 1 m when Expedition begins is boosted to 1 m, so nobody is stuck in the Green.
 
 ## 5. Events
@@ -137,6 +142,9 @@ chosen if the smaller balls can reach it.
 | Checkpoint Dash | 45 | Five gates light one at a time; the first ball through each wins growth and two critters. | Short Race |
 | Twister | 35 | A tornado crosses three habitats flinging loose things about and spinning any ball it touches. | Gordos |
 | Overcharge | 28 | Dash energy refills five times as fast for every ball. | Energy Tanks |
+| Hyperspeed | 20 | Every ball's top speed is tripled. | Energy Tanks Amok |
+| Growth Spurt | 30 | Every critter doubles in size; one rolled up while giant stays giant in its team's army for the arena, the rest shrink back. | Giant Items |
+| Critter Parade | 30 | Every critter walks towards the nearest ball, even ones that ball can roll up. | (new) |
 | Oracle's Whisper | 10 | A quiet hint at the final arena's favoured types, right four times in five. | Stadium Prediction |
  Each event is one object with `start`, `tick` and `end`,
 given a host object `H` (defined in `main.js`) so it never reaches into the game's internals. `window.__game.fireEvent('id')` in the

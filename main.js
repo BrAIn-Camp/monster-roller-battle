@@ -454,9 +454,9 @@ const S = {
   counts: { type: {}, species: {} },
   runSeen: new Map(), runNew: new Set(), zone: '', army: [],
   debugInput: null, mdx: 0, pitch: 0, zoom: 1, locked: false, mouseX: 0, mouseY: 0, mouseIn: false,
-  team: 0, phase: 0, boostT: 0, stallT: 0, energy: 1, charge: 0, boostK: 1.35, camGoal: new V3(), camLook: new V3(),
+  team: 0, phase: 0, boostT: 0, stallT: 0, energy: 1, charge: 0, boostK: 1.35, pen: [], anchor: null, camGoal: new V3(), camLook: new V3(),
 };
-const MODS = { knock: 1, iced: false, fog: 1, energy: 1 };      // things events change for a while
+const MODS = { knock: 1, iced: false, fog: 1, energy: 1, speed: 1, lure: false };      // things events change for a while
 window.__game = S;
 
 // ---------- world generation ----------
@@ -520,6 +520,7 @@ function populate() {
     group.rotation.y = opt.rot ?? rand() * Math.PI * 2;
     worldGroup.add(group);
     const o = { kind: e.kind, spec: e.spec, size, rad, group, bonus: opt.bonus ?? 1, on: false, fly: null, cool: 0, contrib: 0, ldist: 0, vis: size, lump: new V3(), spawnT: 0 };
+    if (e.kind === 'creature') group.rotation.order = 'YXZ';       // so a critter can tip forward whichever way it faces
     if (e.kind === 'creature') Object.assign(o, { ai: 'idle', timer: rand() * 3, home: [x, z], tx: x, tz: z, phase: rand() * 6.28, leader: null });
     else if (size >= 0.5 && !e.spec.flat) solids.push({ x, z, rad });
     S.objects.push(o);
@@ -878,7 +879,7 @@ function attach(o) {
   if (o.kind === 'creature') {
     const sp = o.spec;
     S.attachedCritters++;
-    S.army.push(sp); setTeamLook(o, 0);
+    S.army.push(armySpec(o)); setTeamLook(o, 0);
     for (const t of sp.types) bump(S.counts.type, t, 1);
     bump(S.counts.species, sp.id, 1);
     const key = baseOf(sp).id;
@@ -915,7 +916,7 @@ function hardHit(nx, nz, vmax, lose = 2) {
     S.vol3 -= o.contrib; S.caught--;
     if (o.kind === 'creature') {
       S.attachedCritters--;
-      { const k = S.army.lastIndexOf(o.spec); if (k >= 0) S.army.splice(k, 1); }
+      armyDrop(S.army, o);
       setTeamLook(o, null);
       for (const t of o.spec.types) bump(S.counts.type, t, -1);
       bump(S.counts.species, o.spec.id, -1); o.ai = 'idle'; o.timer = 1.5;
@@ -952,6 +953,31 @@ function terrainContact(x, z, feet, r, dx = 0, dz = 0) {
 
 // ---------- the same few actions for any ball (the player's S or a CPU's), used by collisions and by events ----------
 const allBalls = () => [S, ...rivals];
+// What goes into a team's army for a critter: its species, or a copy at the size it was caught at if that was bigger than
+// normal (Growth Spurt), so it fights at that size in the arena.
+const armySpec = (o) => o.armySpec || (o.armySpec = o.size > o.spec.height * 1.05 ? Object.assign({}, o.spec, { height: Math.round(o.size * 100) / 100, base: baseOf(o.spec), giant: true, _pw: 0 }) : o.spec);
+const armyDrop = (army, o) => { const k = army.lastIndexOf(o.armySpec || o.spec); if (k >= 0) army.splice(k, 1); o.armySpec = null; };
+// A critter's attack: it rears back for a moment, then lunges at the ball. A hit throws the ball clear and, for a second,
+// lets it pass through critters, so a ball boxed in by several of them always gets out.
+function startLunge(o, Bq) {
+  if (o.ai === 'lunge' || o.ai === 'retreat' || o.script || o.spec.move === 'still') return;
+  o.ai = 'lunge'; o.lt = 0; o.struck = false; o.lunB = Bq;
+  cry(o.spec, 0.04);
+}
+function strike(Bq, o, nx, nz) {                  // (nx, nz) points from the critter to the ball
+  const vm = topSpeed(Bq.d);
+  Bq.ghostT = 1.1;
+  const k = Math.pow(Bq.d, 0.7);
+  for (let i = 0; i < 10; i++) puff(Bq.x - nx * Bq.d / 2, groundAt(Bq.x, Bq.z) + Bq.d * (0.2 + 0.5 * rand()), Bq.z - nz * Bq.d / 2, (nx + rand() - 0.5) * 4 * k, (1 + 2 * rand()) * k, (nz + rand() - 0.5) * 4 * k, 0.35, 0.1 * k, i % 2 ? 0xffffff : 0xffe169, 6 * k);
+  if (Bq === S) {
+    S.vx = nx * vm * 1.8; S.vz = nz * vm * 1.8; S.charge = 0;
+    if (o.size > S.d) hardHit(-nx, -nz, vm, 1);           // only a critter taller than the ball knocks anything off; smaller ones just shove
+    else { S.shake = 0.15; sfxBump(); }
+  } else {
+    Bq.wander = 1.2; Bq.wh = Math.atan2(nx, nz); Bq.heading = Bq.wh; Bq.v = vm * 1.3; Bq.wind = 0;
+    if (o.size > Bq.d) rivalKnock(Bq, -nx, -nz, 1);
+  }
+}
 const pickRatio = (Bq) => PICK_RATIO + (Bq.ratioBonus || 0);
 const ballName = (Bq) => (Bq === S ? 'You' : TEAMS[Bq.team].name);
 function give(Bq, o) { if (o.on || !S.objects.includes(o)) return; if (Bq === S) attach(o); else rivalAttach(Bq, o); }
@@ -975,7 +1001,7 @@ function takeFrom(Bq, n, crittersOnly) {
     Bq.vol3 -= o.contrib;
     if (Bq === S) S.caught--;
     if (o.kind === 'creature') {
-      const kk = Bq.army.lastIndexOf(o.spec); if (kk >= 0) Bq.army.splice(kk, 1);
+      armyDrop(Bq.army, o);
       setTeamLook(o, null); o.ai = 'idle'; o.timer = 1.5; o.home = [o.group.position.x, o.group.position.z];
       if (Bq === S) { S.attachedCritters--; for (const t of o.spec.types) bump(S.counts.type, t, -1); bump(S.counts.species, o.spec.id, -1); }
     }
@@ -1020,7 +1046,9 @@ function updateCreature(o, dt, B) {
   let speed = (sp.move === 'fly' ? 1.4 : sp.move === 'slither' ? 0.75 : 0.95) * Math.sqrt(h), ux = 0, uz = 0;
   o.timer -= dt;
   const scare = sp.temper === 'timid' ? 6 * B.d + 4 * h : sp.temper === 'calm' ? 2.2 * B.d + 1.5 * h : 3.5 * B.d + 2.5 * h;
-  if (pickable && dist < scare) o.ai = 'flee';
+  const busy = o.ai === 'lunge' || o.ai === 'retreat', lure = MODS.lure && !busy && !still;     // Critter Parade: everything walks to the nearest ball
+  if (lure) o.ai = 'lure'; else if (o.ai === 'lure') { o.ai = 'idle'; o.timer = 1; }
+  if (!busy && !lure && pickable && dist < scare) o.ai = 'flee';
   else if (o.ai === 'flee') { o.ai = 'idle'; o.timer = 1; }
   const notice = !pickable && (o.ai === 'idle' || o.ai === 'walk') && B.d > h * 0.15 && dist < 5 * h + B.d;
   if (notice && sp.temper === 'bold' && B.d < h * 2.5) { o.ai = 'charge'; o.timer = 3; cry(sp, 0.04); }
@@ -1030,7 +1058,20 @@ function updateCreature(o, dt, B) {
     case 'charge':
       ux = bx / dist; uz = bz / dist; speed *= 2.4;
       if (o.timer <= 0 || dist > 8 * h + B.d) { o.ai = 'rest'; o.timer = 3; }
+      if (dist < B.d / 2 + o.rad + h * 0.7) startLunge(o, B);       // close enough: attack
       break;
+    case 'lure': if (dist > B.d / 2 + o.rad * 0.6) { ux = bx / dist; uz = bz / dist; speed *= 1.7; } break;
+    case 'lunge': {                                 // rear back (0.4 s), spring at the ball (0.2 s), then back off
+      const Lb = o.lunB || B, lx = Lb.x - p.x, lz = Lb.z - p.z, ld = Math.hypot(lx, lz) || 1e-6;
+      o.lt += dt; o.yaw = Math.atan2(lx, lz);
+      if (o.lt < 0.4) { ux = -lx / ld; uz = -lz / ld; speed = h * 0.8; }
+      else if (o.lt < 0.6) {
+        ux = lx / ld; uz = lz / ld; speed = h * 5 + 3;
+        if (!o.struck && ld < Lb.d / 2 + o.rad + h * 0.6) { o.struck = true; strike(Lb, o, lx / ld, lz / ld); }
+      } else { o.ai = 'retreat'; o.timer = 1.6; }
+      break;
+    }
+    case 'retreat': ux = -bx / dist; uz = -bz / dist; speed *= 1.6; if (o.timer <= 0) { o.ai = 'rest'; o.timer = 4; } break;
     case 'follow':                                  // trots after the ball, keeping a little distance
       if (dist > 1.6 * (h + B.d)) { ux = bx / dist; uz = bz / dist; speed *= 1.5; }
       if (o.timer <= 0 || dist > 9 * h + 2 * B.d) { o.ai = 'rest'; o.timer = 2; }
@@ -1067,8 +1108,9 @@ function updateCreature(o, dt, B) {
   else if (sp.move === 'swim') lift = T.waterAt(p.x, p.z) === 2 ? Math.max(0, SEA_LEVEL - h * 0.55 - groundAt(p.x, p.z)) : 0;
   else if (moving) lift = Math.abs(Math.sin(wob)) * h * (sp.move === 'hop' ? 0.22 : sp.move === 'slither' ? 0 : 0.06);
   p.y = groundAt(p.x, p.z) + lift;
-  if (moving) o.yaw = Math.atan2(ux, uz);
-  if (o.yaw !== undefined) o.group.rotation.set(0, o.yaw + (moving && sp.move === 'slither' ? Math.sin(wob) * 0.35 : 0), moving && !air ? Math.sin(wob) * 0.09 : 0);
+  if (moving && o.ai !== 'lunge') o.yaw = Math.atan2(ux, uz);
+  const tip = o.ai === 'lunge' ? (o.lt < 0.4 ? -0.45 * (o.lt / 0.4) : 0.6) : 0;          // leans back to wind up, then pitches forward into the lunge
+  if (o.yaw !== undefined) o.group.rotation.set(tip, o.yaw + (moving && sp.move === 'slither' ? Math.sin(wob) * 0.35 : 0), moving && !air ? Math.sin(wob) * 0.09 : 0);
 }
 
 // ---------- rivals: three CPU players rolling their own balls on the same map ----------
@@ -1097,7 +1139,7 @@ function rivalAttach(R, o) {
   S.objects.splice(S.objects.indexOf(o), 1);
   R.attached.push(o); R.energy = Math.min(1, R.energy + ENERGY_PICK);
   o.script = null; if (o.onPick) { const f = o.onPick; o.onPick = null; f(R, o); }
-  if (o.kind === 'creature') { R.army.push(o.spec); setTeamLook(o, R.team); }
+  if (o.kind === 'creature') { R.army.push(armySpec(o)); setTeamLook(o, R.team); }
   while (R.attached.length > MAX_ON_BALL) R.ball.remove(R.attached.shift().group);
   seatOn(R.attached, R.d / 2);
 }
@@ -1112,7 +1154,7 @@ function rivalKnock(R, nx, nz, lose) {            // things fly off in direction
     o.on = false; o.cool = 1.2;
     o.fly = { vx: (-nx + rand() - 0.5) * sp * 0.8, vy: Math.sqrt(20 * R.d) + 0.5, vz: (-nz + rand() - 0.5) * sp * 0.8 };
     R.vol3 -= o.contrib;
-    if (o.kind === 'creature') { const k = R.army.lastIndexOf(o.spec); if (k >= 0) R.army.splice(k, 1); setTeamLook(o, null); o.ai = 'idle'; o.timer = 1.5; }
+    if (o.kind === 'creature') { armyDrop(R.army, o); setTeamLook(o, null); o.ai = 'idle'; o.timer = 1.5; }
     S.objects.push(o);
   }
   R.vol3 = Math.max(START_D ** 3, R.vol3); R.d = Math.cbrt(R.vol3);
@@ -1120,11 +1162,11 @@ function rivalKnock(R, nx, nz, lose) {            // things fly off in direction
 }
 function updateRivals(dt, frozen) {
   for (const R of rivals) {
-    R.hitCool = Math.max(0, R.hitCool - dt);
+    R.hitCool = Math.max(0, R.hitCool - dt); R.ghostT = Math.max(0, (R.ghostT || 0) - dt);
     R.stallT = Math.max(0, R.stallT - dt); R.boostT = Math.max(0, R.boostT - dt);
     if (!frozen) R.energy = Math.min(1, R.energy + dt / ENERGY_FILL * MODS.energy);
     const band = clamp(1.04 - DIFF.band * Math.log2(R.d / S.d), DIFF.floor, 1.08);     // a CPU well ahead of the player eases off; one behind hurries
-    const r = R.d / 2, vmax = frozen || R.stallT > 0 ? 0 : topSpeed(R.d) * CPU_SPEED * band * (R.boostT > 0 ? dashMult(R.d) * 0.95 : R.wind > 0 ? CHARGE_CRAWL : 1), g0 = groundAt(R.x, R.z);
+    const r = R.d / 2, vmax = frozen || R.stallT > 0 ? 0 : topSpeed(R.d) * MODS.speed * CPU_SPEED * band * (R.boostT > 0 ? dashMult(R.d) * 0.95 : R.wind > 0 ? CHARGE_CRAWL : 1), g0 = groundAt(R.x, R.z);
     // choose what to chase: the nearest thing it can roll up on its own level, preferring critters
     R.retarget -= dt;
     if (R.wander > 0) { R.wander -= dt; R.target = null; }
@@ -1176,12 +1218,9 @@ function updateRivals(dt, frozen) {
       if (!o.noPick && o.size <= R.d * pickRatio(R)) { if (o.cool <= 0) rivalAttach(R, o); continue; }
       if (o.spec.flat) continue;
       if (o.onBump && o.cool <= 0) o.onBump(R, o);
+      if (o.kind === 'creature' && R.ghostT > 0) continue;       // just thrown clear by a lunge: passes through critters for a moment
       R.x -= ox / (dist || 1) * (reach - dist); R.z -= oz / (dist || 1) * (reach - dist);
-      if (o.kind === 'creature' && o.ai === 'charge') {       // charged, just as the player would be
-        R.v = -Math.abs(R.v) * 0.6; R.wander = 1; R.wh = Math.atan2(-ox, -oz);
-        if (o.size > R.d) rivalKnock(R, ox / (dist || 1), oz / (dist || 1), 1);
-        o.ai = 'rest'; o.timer = 8;
-      }
+      if (o.kind === 'creature' && o.ai === 'charge') startLunge(o, R);
     }
     if (Math.abs(R.v) > 1e-4) {
       rollAxis.set(hz * Math.sign(R.v), 0, -hx * Math.sign(R.v));
@@ -1268,7 +1307,7 @@ const ORACLE = { id: 'oracle', name: "Oracle's Whisper", quiet: true, duration: 
 function timeUp() {
   if (S.state === 'timeup') return;
   endEvent(); clearFx(); music.stop();
-  MODS.knock = 1; MODS.fog = 1; MODS.energy = 1; H.setIce(false); S.skyOverride = null;
+  MODS.knock = 1; MODS.fog = 1; MODS.energy = 1; MODS.speed = 1; MODS.lure = false; H.setIce(false); S.skyOverride = null;
   for (const R of rivals) R.ev = null;
   S.state = 'timeup'; S.tuT = 0; S.timeLeft = 0;
   if (document.pointerLockElement) document.exitPointerLock();
@@ -1538,8 +1577,9 @@ const rollAxis = new V3();
 function update(dt) {
   const frozen = S.state !== 'play' && S.state !== 'sim';      // the fly-over and the countdown: everything stands still
   S.time += dt;
-  S.hitCool = Math.max(0, S.hitCool - dt);
-  const vmax = topSpeed(S.d);
+  S.hitCool = Math.max(0, S.hitCool - dt); S.ghostT = Math.max(0, (S.ghostT || 0) - dt);
+  const vmax = topSpeed(S.d) * MODS.speed;
+  let boxers = null, touching = 0;
   const inp = frozen ? { f: 0, t: 0, run: false } : readInput();
   let f = inp.f, t = inp.t, run = !!inp.run;
   if (frozen) S.mdx = 0;
@@ -1649,21 +1689,32 @@ function update(dt) {
     }
     r = S.d / 2;
     const reach = r + o.rad;
+    if (o.kind === 'creature' && dist < reach + S.d * 0.35 && (o.noPick || o.size > S.d * pickRatio(S)) && !(S.ghostT > 0)) (boxers || (boxers = [])).push(o);   // a critter too big to roll up, right beside the ball
     if (dist >= reach) continue;
     if (feet > p.y + o.size || S.y + r < p.y) continue;      // on a different level: passes over or under
     if (!o.noPick && o.size <= S.d * pickRatio(S)) { if (o.cool <= 0) attach(o); continue; }
     if (o.spec.flat) continue;
     if (o.onBump && o.cool <= 0) o.onBump(S, o);
+    if (o.kind === 'creature' && S.ghostT > 0) continue;        // just thrown clear by a lunge: passes through critters for a moment
+    touching++;
     const nx = dist > 1e-6 ? ox / dist : 1, nz = dist > 1e-6 ? oz / dist : 0;
     S.x -= nx * (reach - dist); S.z -= nz * (reach - dist);
     const vn = S.vx * nx + S.vz * nz;
     if (vn > 0) { S.vx -= 1.6 * vn * nx; S.vz -= 1.6 * vn * nz; if (o.size > S.d * 0.8 && !o.onBump) { const n = crashLoss(vn, vmax); if (n) hardHit(nx, nz, vmax, n); } }      // only a sprint into something big knocks things loose
-    if (o.kind === 'creature' && o.ai === 'charge') {
-      S.vx = -nx * vmax * 1.3; S.vz = -nz * vmax * 1.3;
-      if (o.size > S.d) hardHit(nx, nz, vmax, 1);           // only a critter taller than the ball knocks anything off; smaller ones just shove
-      else { S.shake = 0.12; sfxBump(); }
-      o.ai = 'rest'; o.timer = 8;
-    }
+    if (o.kind === 'creature' && o.ai === 'charge') startLunge(o, S);
+  }
+  // boxed in: hardly moving for most of a second with three or more too-big critters right beside the ball, or held between
+  // two solid things at least one of which is such a critter. The critters attack, and their lunges throw the ball clear (see strike).
+  S.boxT = boxers && !frozen && Math.hypot(S.vx, S.vz) < vmax * 0.3 && (boxers.length >= 3 || touching >= 2) ? (S.boxT || 0) + dt : 0;
+  if (S.boxT > 0.7) { S.boxT = 0; for (const o of boxers) startLunge(o, S); }
+  // the slower check, for a ball that can still roll about but is penned in: it has stayed within its own width of one spot
+  // for two seconds while pushing, with too-big critters beside it on at least two occasions. Every one of them attacks.
+  if (boxers) for (const o of boxers) { o.nearT = S.time; if (!S.pen.includes(o)) S.pen.push(o); }
+  if (!S.anchor || Math.hypot(S.x - S.anchor[0], S.z - S.anchor[1]) > Math.max(1.2, S.d * 0.8) || frozen) { S.anchor = [S.x, S.z, S.time]; }
+  else if (S.time - S.anchor[2] > 2 && (f !== 0 || t !== 0)) {
+    S.pen = S.pen.filter((o) => !o.on && !o.gone && S.time - o.nearT < 2);
+    if (S.pen.length >= 2) for (const o of S.pen) startLunge(o, S);
+    S.anchor[2] = S.time - 0.8;
   }
 
   updateRivals(dt, frozen);
@@ -1758,8 +1809,8 @@ function start(mode) {
   const gy = groundAt(START.x, START.z), timed = mode === 'timed';
   Object.assign(S, { state: timed ? 'intro' : 'play', mode, d: START_D, vol3: START_D ** 3, x: START.x, y: gy + START_D / 2, z: START.z, vx: 0, vy: 0, vz: 0, sup: START_D / 2, camY: gy,
     heading: Math.atan2(-START.x, -START.z), time: 0, timeLeft: LEVEL.seconds, reachedAt: null, hitCool: 0, shake: 0, caught: 0, attachedCritters: 0, counts: { type: {}, species: {} }, pitch: 0, zoom: 1, mdx: 0, runSeen: new Map(), runNew: new Set(), zone: '', army: [], autoGate: null,
-    phase: 0, lastSec: -1, boostT: 0, stallT: 0, energy: 1, charge: 0, boostK: 1.35, introT: 0, cdT: 0, cdStep: -1, cdHold: null, ev: null, evCount: 0, evUsed: new Set(), evTimes: EVENT_TIMES.map((t) => t + Math.round((rand() - 0.5) * 8)), skyOverride: null, fogK: 1, battleResult: null, battleArena: null, ratioBonus: 0 });
-  MODS.knock = 1; MODS.fog = 1; MODS.energy = 1; H.setIce(false);
+    phase: 0, lastSec: -1, boostT: 0, stallT: 0, energy: 1, charge: 0, boostK: 1.35, pen: [], anchor: null, ghostT: 0, boxT: 0, introT: 0, cdT: 0, cdStep: -1, cdHold: null, ev: null, evCount: 0, evUsed: new Set(), evTimes: EVENT_TIMES.map((t) => t + Math.round((rand() - 0.5) * 8)), skyOverride: null, fogK: 1, battleResult: null, battleArena: null, ratioBonus: 0 });
+  MODS.knock = 1; MODS.fog = 1; MODS.energy = 1; MODS.speed = 1; MODS.lure = false; H.setIce(false);
   DIFF = DIFFS[save.difficulty] || DIFFS.normal; CPU_SPEED = DIFF.speed;
   clearFx();
   $('timer').classList.remove('hot'); $('evchip').style.display = 'none'; $('count').className = '';

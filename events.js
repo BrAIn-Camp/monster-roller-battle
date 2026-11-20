@@ -1117,4 +1117,45 @@ const overcharge = {
   tick(H, ev, dt) { if (Math.floor(ev.t * 2) !== Math.floor((ev.t - dt) * 2)) H.sfx.tone(1400, 1900, 0.04, 'sine', 0.03); },
   end(H) { H.MODS.energy = 1; H.setSky(null); },
 };
-export const EVENTS = [meteor, stampede, swarm, golden, supply, magpie, staticStorm, growthRing, ghostFog, coldSnap, pinata, vault, dash, twister, overcharge].map(guard);
+// Hyperspeed: every ball's top speed is tripled for the length of the event.
+const hyperspeed = {
+  id: 'hyperspeed', name: 'Hyperspeed', sub: 'Every ball rolls <b>three times</b> as fast. Hold on tight!', color: '#ff8fd8',
+  duration: 20, weight: 1, late: true,
+  start(H) { H.MODS.speed = 3; H.setSky(0xffd6f0); for (let i = 0; i < 8; i++) H.sfx.tone(300 + i * 120, 600 + i * 240, 0.09, 'sawtooth', 0.07, i * 0.05); },
+  tick(H, ev, dt) { if (Math.floor(ev.t * 4) !== Math.floor((ev.t - dt) * 4)) H.sfx.tone(1800, 2600, 0.03, 'square', 0.02); },
+  end(H) { H.MODS.speed = 1; H.setSky(null); },
+};
+// Growth Spurt: every critter on the map doubles in size. One rolled up while giant stays giant in its team's army for the
+// final battle; the rest shrink back when the event ends.
+const growthSpurt = {
+  id: 'giants', name: 'Growth Spurt', sub: 'Every critter is <b>twice</b> its size. Catch one now and it stays giant for the final battle!', color: '#8fe36a',
+  duration: 30, weight: 1, late: true,
+  start(H, ev) {
+    ev.data.grown = [];
+    for (const o of H.objects()) {
+      if (o.kind !== 'creature' || o.noPick || o.fly || o.script || o.spec.titan) continue;
+      o.size *= 2; o.rad *= 2; o.vis = o.size; o.spawnT = 0.75; o.armySpec = null;
+      ev.data.grown.push(o);
+    }
+    [196, 247, 294, 392].forEach((f, i) => H.sfx.tone(f, f * 2, 0.3, 'triangle', 0.12, i * 0.12));
+  },
+  tick() {},
+  end(H, ev) {
+    const free = new Set(H.objects());
+    for (const o of ev.data.grown || []) {
+      if (o.on || o.gone || !free.has(o)) continue;           // caught: it keeps its size
+      o.size /= 2; o.rad /= 2; o.vis = o.size; o.armySpec = null;
+      if (!o.fly) o.spawnT = 0.75; else o.group.scale.setScalar(o.size);
+    }
+    ev.data.grown = [];
+  },
+};
+// Critter Parade: every critter walks towards the nearest ball, even the ones that ball can roll up.
+const parade = {
+  id: 'parade', name: 'Critter Parade', sub: 'Critters are walking <b>towards</b> the nearest ball, even ones it can roll up. Let them come!', color: '#ffb347',
+  duration: 30, weight: 1, late: true,
+  start(H) { H.MODS.lure = true; [523, 659, 784, 659, 523, 784].forEach((f, i) => H.sfx.tone(f, f, 0.14, 'square', 0.07, i * 0.13)); },
+  tick() {},
+  end(H) { H.MODS.lure = false; },
+};
+export const EVENTS = [meteor, stampede, swarm, golden, supply, magpie, staticStorm, growthRing, ghostFog, coldSnap, pinata, vault, dash, twister, overcharge, hyperspeed, growthSpurt, parade].map(guard);
