@@ -13,6 +13,13 @@
   #size small { display: block; font-size: 12px; font-weight: 600; opacity: .7; }
   #bar { height: 8px; border: 2px solid #2b2540; border-radius: 6px; margin-top: 4px; overflow: hidden; background: #fff; }
   #barfill { height: 100%; width: 0; background: #ffb52e; }
+  #energy { position: relative; height: 12px; width: 150px; border: 2px solid #2b2540; border-radius: 7px; margin-top: 5px; overflow: hidden; background: #fff; }
+  #energyfill { height: 100%; width: 100%; background: #4ac2ff; } #chargefill { position: absolute; left: 0; top: 0; height: 100%; width: 0; background: #ffd23f; opacity: .9; }
+  #energy.full #energyfill { background: #36d6ff; box-shadow: 0 0 8px #36d6ff inset; } #energy.empty #energyfill { background: #b8c4d0; }
+  #energy.charging { animation: chg .12s infinite alternate; } @keyframes chg { from { transform: translateX(-1px); } to { transform: translateX(1px); } }
+  #size small.en { margin-top: 3px; }
+  .diffrow { margin: 6px 0 2px; font-size: 14px; font-weight: 700; } .diffrow button { font-size: 14px; padding: 5px 14px; margin: 3px; background: #fff; box-shadow: 0 3px 0 #2b2540; }
+  .diffrow button.on { background: #ffe169; }
   #seek { position: absolute; left: 50%; top: 124px; transform: translateX(-50%); font-size: 13px; font-weight: 700; white-space: nowrap; display: none; padding: 4px 12px; }
   #seek .arr { display: inline-block; font-size: 18px; font-weight: 900; }
   #seek .type { display: inline-block; padding: 0 8px; border-radius: 8px; color: #fff; font-size: 11px; }
@@ -23,7 +30,7 @@
   #pick.show { animation: pop 1.6s ease-out; }
   #pick .type { display: inline-block; padding: 1px 8px; border-radius: 8px; color: #fff; font-size: 13px; margin-left: 6px; }
   @keyframes pop { 0% { opacity: 0; transform: translateX(-50%) scale(.7); } 12% { opacity: 1; transform: translateX(-50%) scale(1.08); } 20% { transform: translateX(-50%) scale(1); } 80% { opacity: 1; } 100% { opacity: 0; } }
-  #hudMute { position: absolute; left: 16px; top: 108px; font-size: 12px; font-weight: 700; padding: 4px 10px; margin: 0; pointer-events: auto; box-shadow: 0 2px 0 #2b2540; }
+  #hudMute { position: absolute; left: 16px; top: 140px; font-size: 12px; font-weight: 700; padding: 4px 10px; margin: 0; pointer-events: auto; box-shadow: 0 2px 0 #2b2540; }
   #dexpop { position: absolute; right: 16px; top: 132px; width: 176px; text-align: center; opacity: 0; transform: translateX(40px); transition: opacity .25s, transform .25s; font-size: 13px; font-weight: 700; padding: 8px 10px 10px; }
   #dexpop.show { opacity: 1; transform: none; }
   #dexpop canvas { width: 150px; height: 150px; display: block; margin: 0 auto; }
@@ -122,7 +129,7 @@
 <canvas id="c"></canvas>
 
 <div id="hud">
-  <div id="size" class="pill">45.0 cm<small>ball size</small><div id="bar"><div id="barfill"></div></div></div>
+  <div id="size" class="pill">45.0 cm<small>ball size</small><div id="bar"><div id="barfill"></div></div><div id="energy"><div id="energyfill"></div><div id="chargefill"></div></div><small class="en">dash energy</small></div>
   <div id="seek" class="pill"></div>
   <button id="hudMute" class="alt">Sound: on (M)</button>
   <div id="timer" class="pill">5:00</div>
@@ -156,10 +163,11 @@
       <button id="btnDex" class="alt">Critter dex</button>
       <button id="btnMute" class="alt">Sound: on (M)</button>
     </div>
+    <div class="diffrow">CPU teams: <button id="diff_easy">Easy</button><button id="diff_normal">Normal</button><button id="diff_hard">Hard</button></div>
     <div class="keys">
       <div><b>Simple steering</b> — <kbd>W</kbd><kbd>S</kbd> roll, <kbd>A</kbd><kbd>D</kbd> turn (or arrows); gamepad left stick</div>
       <div><b>Tank steering</b> — <kbd>W</kbd><kbd>S</kbd> left hand, <kbd>I</kbd><kbd>K</kbd> right hand; gamepad both sticks</div>
-      <div><b>Sprint</b> — hold <kbd>Shift</kbd> (gamepad A or RT): more than twice as fast and very hard to steer. Crash at speed and you drop things, more the faster you were going</div>
+      <div><b>Charge dash</b> — hold <kbd>Shift</kbd> (gamepad A or RT) to wind up: the ball slows to a crawl and spins, spending dash energy. Let go to burst forward; the longer the wind-up, the longer and faster the burst. Energy refills over time and with every thing you roll up. A burst into another ball knocks twice as much off it.</div>
       <div><b>Mouse</b> — moves the camera: left and right swing it round the ball, up and down tilt it, wheel zooms. Click to capture the pointer so it never runs out of screen.</div>
       <div><kbd>M</kbd> mute · add <kbd>?mute</kbd> to the address to start silent</div>
       <div><kbd>T</kbd> switch steering (now: <span id="steer">simple</span>) · <kbd>Esc</kbd> / Start to pause</div>

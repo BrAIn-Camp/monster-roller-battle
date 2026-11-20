@@ -1105,4 +1105,16 @@ function guard(def) {
   def.tick = (H, ev, dt) => { if (!ev.data.ended) tick(H, ev, dt); };
   return def;
 }
-export const EVENTS = [meteor, stampede, swarm, golden, supply, magpie, staticStorm, growthRing, ghostFog, coldSnap, pinata, vault, dash, twister].map(guard);
+// Overcharge: dash energy refills five times as fast for every ball, so everyone can burst almost back to back.
+const overcharge = {
+  id: 'overcharge', name: 'Overcharge', sub: 'Dash energy refills <b>five times</b> as fast for everyone. Burst, burst, burst!', color: '#5ad8ff',
+  duration: 28, weight: 1.2, late: true,
+  start(H, ev) {
+    H.MODS.energy = 5; H.setSky(0xbdeeff);
+    for (let i = 0; i < 6; i++) H.sfx.tone(500 + i * 160, 700 + i * 200, 0.12, 'square', 0.08, i * 0.07);
+    for (const b of H.balls()) if (typeof b.energy === 'number') b.energy = 1;
+  },
+  tick(H, ev, dt) { if (Math.floor(ev.t * 2) !== Math.floor((ev.t - dt) * 2)) H.sfx.tone(1400, 1900, 0.04, 'sine', 0.03); },
+  end(H) { H.MODS.energy = 1; H.setSky(null); },
+};
+export const EVENTS = [meteor, stampede, swarm, golden, supply, magpie, staticStorm, growthRing, ghostFog, coldSnap, pinata, vault, dash, twister, overcharge].map(guard);

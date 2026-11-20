@@ -86,6 +86,20 @@ The phase bar under the clock shows all four phases in proportion, a pin for now
 - Rocket start: begin holding forward during the "2" second and keep holding until GO. First 0.4 s of that second = perfect (2.3 s boost),
   rest of it = good (1.1 s). Holding from before the 2 = stall (0.9 s). Starting during the "1" = no boost. CPU teams roll for the same outcomes.
 
+## 4b. The charge dash, growth and difficulty (balance pass after the first playtest)
+
+The first human playtest reached 24 m against CPUs at 8-13 m, pulling ahead in the inner habitats by sprinting everywhere. Changes:
+
+- **Sprint is gone; the dash is charged.** Hold the dash button and the ball slows to 30% speed, spins and winds up for up to 1.2 s,
+  spending energy; release and it bursts (0.45-1.8 s at about 2.4-2.9 times top speed, steering dulled). A full meter is one full burst.
+  Energy refills in 8 s on its own and by 2.5% per thing rolled up; the Overcharge event makes it refill five times as fast.
+  A burst into a rival knocks twice as much off it. Running into scenery no longer knocks anything off.
+- **Base speed up 19%** to make up some of the lost sprint.
+- **Growth:** big balls get less from each thing (half at 6 m wide, was 9 m), aiming at a winner of about 15 m.
+- **Difficulty** (menu, saved): Easy, Normal and Hard change CPU speed, how keenly they dash, how quickly they pick targets and how
+  much a CPU that is ahead eases off. Numbers are in `DIFFS` at the top of `main.js`.
+- **Late bloomer:** any ball still under 1 m when Expedition begins is boosted to 1 m, so nobody is stuck in the Green.
+
 ## 5. Events
 
 About five run per round, at the pips on the phase bar; the third is always the Oracle's Whisper. Fourteen more are in the pool
@@ -108,6 +122,7 @@ chosen if the smaller balls can reach it.
 | Vault | 30 | A hoard of fourteen critters of one type and gold coins at a landmark, first come first served. | Secret Rooms |
 | Checkpoint Dash | 45 | Five gates light one at a time; the first ball through each wins growth and two critters. | Short Race |
 | Twister | 35 | A tornado crosses three habitats flinging loose things about and spinning any ball it touches. | Gordos |
+| Overcharge | 28 | Dash energy refills five times as fast for every ball. | Energy Tanks |
 | Oracle's Whisper | 10 | A quiet hint at the final arena's favoured types, right four times in five. | Stadium Prediction |
  Each event is one object with `start`, `tick` and `end`,
 given a host object `H` (defined in `main.js`) so it never reaches into the game's internals. `window.__game.fireEvent('id')` in the

@@ -26,7 +26,15 @@ const trainerHeight = (d) => clamp(d * 0.6, 0.25, TRAINER_H);    // shorter than
 const PICK_RATIO = 0.5;   // can roll up things up to this fraction of the ball's diameter, so critters stay big next to it
 const GROW = 3;           // d^3 += GROW * size^3 * mass per pickup: tuned so a ball doubles about once a minute
 const MAX_ON_BALL = 300;  // the newest this-many things are drawn on a ball; older ones still count and still fight
-const CPU_SPEED = 0.86;   // CPU balls roll at this fraction of the player's top speed (and sprint on a clear run)
+// CPU difficulty (chosen on the menu). speed = share of the player's top speed; dash = how keenly they use the charge dash
+// (0 = never); band = how much a CPU that is ahead of the player eases off (and one behind hurries); think = how slowly they
+// pick their next target (1 = normal).
+const DIFFS = {
+  easy:   { label: 'Easy',   speed: 0.78, dash: 0,   band: 0.3,  floor: 0.6,  think: 1.6 },
+  normal: { label: 'Normal', speed: 0.94, dash: 0.6, band: 0.18, floor: 0.75, think: 1 },
+  hard:   { label: 'Hard',   speed: 1.04, dash: 1.5, band: 0.06, floor: 0.92, think: 0.65 },
+};
+let DIFF = DIFFS.normal, CPU_SPEED = DIFF.speed;
 // The four teams. Team 0 is the player. A team's critters are tinted in its colour once rolled up.
 const TEAMS = [
   { id: 'red', name: 'Red', hex: 0xe24a4a, css: '#e24a4a' },
@@ -36,8 +44,16 @@ const TEAMS = [
 ];
 const CLIMB = 0.8;        // the ball climbs steps up to this fraction of its radius (40% of its width): outgrowing walls is the point
 const LUMP_MAX = 1.3;     // a stuck object can prop the ball up to this many radii off the ground
-const RUN = 2.4;          // speed multiplier while sprinting
-const RUN_STEER = 0.25;   // steering multiplier while sprinting: fast, and very hard to turn
+const RUN = 2.4;          // speed multiplier during a dash burst
+const RUN_STEER = 0.45;   // steering multiplier during a burst: fast, and hard to turn
+// The charge dash. Hold the button: the ball slows to a crawl and winds up, spending energy; let go and it bursts forward.
+// A longer wind-up gives a longer, faster burst. Energy refills on its own and a little with every thing rolled up.
+const CHARGE_TIME = 1.2;  // seconds of wind-up for a full charge (which costs a full energy meter)
+const CHARGE_CRAWL = 0.3; // share of top speed while winding up
+const ENERGY_FILL = 8;    // seconds for the meter to refill on its own
+const ENERGY_PICK = 0.025;// energy gained per thing rolled up
+const DASH_MIN = 0.2;     // the least energy needed to start a wind-up
+const burstTime = (c) => 0.45 + 1.35 * c, burstKick = (c) => 0.75 + 0.55 * c;   // by charge 0..1: seconds of burst, and its speed as a share of RUN x top speed
 const DRIVE = 1.6;        // how quickly the ball gets up to speed (per second); lower = heavier
 const GRIP = 7;           // sideways grip at a standstill (per second); it falls away as speed rises
 const WAVE_SHARE = 0.3;   // each minute a wave of new critters this big appears (as a share of the starting population)
@@ -55,11 +71,11 @@ const EVENT_TIMES = [262, 218, 176, 134, 94, 58];   // seconds left at which an 
 const KNOCK_LOSS = 3;     // things a ball drops when a heavier ball rams it
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 // What a thing adds to a ball's volume. Big balls get less out of each thing (half at BIG_D wide), which keeps a leader in reach.
-const BIG_D = 9;
+const BIG_D = 6;
 const growthOf = (Bq, o) => GROW * o.size ** 3 * (o.spec.mass ?? 1) * (o.bonus ?? 1) / (1 + (Bq.d / BIG_D) ** 2);
-const topSpeed = (d) => 2.7 * Math.pow(d + 0.5, 0.85);
+const topSpeed = (d) => 3.2 * Math.pow(d + 0.5, 0.85);
 // How many things a crash knocks off: nothing below top speed, then more the faster you were going (a full sprint: about 14).
-const crashLoss = (v, vmax) => (v < 1.05 * vmax ? 0 : Math.max(1, Math.round((v / vmax - 0.9) * 9)));   // a big ball should feel like an avalanche, not a barge
+const crashLoss = () => 0;      // running into scenery only stops the ball; rams and charging critters are what knock things off
 const V3 = THREE.Vector3;
 let rand = Math.random;
 const $ = (id) => document.getElementById(id);
@@ -371,7 +387,7 @@ scene.add(trainer);
 
 // ---------- save data ----------
 const SAVE_KEY = 'critter-roller-save-v2';
-let save = { dex: {}, best: {}, muted: false };
+let save = { dex: {}, best: {}, muted: false, difficulty: 'normal' };
 try { save = Object.assign(save, JSON.parse(localStorage.getItem(SAVE_KEY) || '{}')); } catch (e) { /* storage unavailable */ }
 function persist() { try { localStorage.setItem(SAVE_KEY, JSON.stringify(save)); } catch (e) { /* storage unavailable */ } }
 
@@ -429,9 +445,9 @@ const S = {
   counts: { type: {}, species: {} },
   runSeen: new Map(), runNew: new Set(), zone: '', army: [],
   debugInput: null, mdx: 0, pitch: 0, zoom: 1, locked: false, mouseX: 0, mouseY: 0, mouseIn: false,
-  team: 0, phase: 0, boostT: 0, stallT: 0, camGoal: new V3(), camLook: new V3(),
+  team: 0, phase: 0, boostT: 0, stallT: 0, energy: 1, charge: 0, boostK: 1.35, camGoal: new V3(), camLook: new V3(),
 };
-const MODS = { knock: 1, iced: false, fog: 1 };      // things events change for a while
+const MODS = { knock: 1, iced: false, fog: 1, energy: 1 };      // things events change for a while
 window.__game = S;
 
 // ---------- world generation ----------
@@ -635,6 +651,9 @@ function showPick(html) { const el = $('pick'); el.innerHTML = html; el.classLis
 function challengeProgress(c) { return (c.kind === 'type' ? S.counts.type[c.value] : S.counts.species[c.value]) || 0; }
 function armyPower(army) { let s = 0; for (const sp of army) s += sp._pw || (sp._pw = power(sp)); return s; }
 function updateHud() {
+  const en = $('energyfill'), ch = $('chargefill');
+  en.style.width = (S.energy * 100).toFixed(1) + '%'; ch.style.width = (S.charge * 100).toFixed(1) + '%';
+  $('energy').className = S.charge > 0 ? 'charging' : S.energy >= 0.999 ? 'full' : S.energy < DASH_MIN ? 'empty' : '';
   $('size').firstChild.nodeValue = fmtSize(S.d);
   const target = S.mode === 'timed' && LEVEL.targetDiameter > 0;
   $('bar').style.display = target ? 'block' : 'none';
@@ -769,6 +788,7 @@ function attach(o) {
   S.attached.push(o); S.caught++;
   o.script = null; if (o.onPick) { const f = o.onPick; o.onPick = null; f(S, o); }
   sfxPickup(Math.min(1, o.size / (S.d * PICK_RATIO)));
+  S.energy = Math.min(1, S.energy + ENERGY_PICK);
   if (o.kind === 'creature') {
     const sp = o.spec;
     S.attachedCritters++;
@@ -981,7 +1001,7 @@ function makeRivals() {
     const figure = buildTrainer(TEAMS[i].hex); scene.add(figure);
     rivals.push({ team: i, x, z, y: groundAt(x, z) + START_D / 2, d: START_D, vol3: START_D ** 3, heading: Math.atan2(-x, -z), v: 0, ball: ballG, core: coreG, trainer: figure,
       attached: [], army: [], hitCool: 0, retarget: rand(), target: null, chasing: null, avoid: new Set(), wander: 0, wh: 0, lastX: x, lastZ: z, stuckT: 3,
-      wedge: wedges[i], dash: true, dashUntil: 14, boostT: 0, stallT: 0, ev: null });
+      wedge: wedges[i], dash: true, dashUntil: 14, boostT: 0, stallT: 0, ev: null, energy: 1, wind: 0 });
   }
 }
 function rivalAttach(R, o) {
@@ -989,7 +1009,7 @@ function rivalAttach(R, o) {
   o.contrib = growthOf(R, o);
   R.vol3 += o.contrib; R.d = Math.cbrt(R.vol3);
   S.objects.splice(S.objects.indexOf(o), 1);
-  R.attached.push(o);
+  R.attached.push(o); R.energy = Math.min(1, R.energy + ENERGY_PICK);
   o.script = null; if (o.onPick) { const f = o.onPick; o.onPick = null; f(R, o); }
   if (o.kind === 'creature') { R.army.push(o.spec); setTeamLook(o, R.team); }
   while (R.attached.length > MAX_ON_BALL) R.ball.remove(R.attached.shift().group);
@@ -1016,12 +1036,14 @@ function updateRivals(dt, frozen) {
   for (const R of rivals) {
     R.hitCool = Math.max(0, R.hitCool - dt);
     R.stallT = Math.max(0, R.stallT - dt); R.boostT = Math.max(0, R.boostT - dt);
-    const r = R.d / 2, vmax = frozen || R.stallT > 0 ? 0 : topSpeed(R.d) * CPU_SPEED * (R.boostT > 0 ? 2.3 : 1) * clamp(1.06 - 0.2 * Math.log2(R.d / S.d), 0.7, 1.06), g0   /* a CPU well ahead of the player eases off; one behind hurries */ = groundAt(R.x, R.z);
+    if (!frozen) R.energy = Math.min(1, R.energy + dt / ENERGY_FILL * MODS.energy);
+    const band = clamp(1.04 - DIFF.band * Math.log2(R.d / S.d), DIFF.floor, 1.08);     // a CPU well ahead of the player eases off; one behind hurries
+    const r = R.d / 2, vmax = frozen || R.stallT > 0 ? 0 : topSpeed(R.d) * CPU_SPEED * band * (R.boostT > 0 ? RUN * 0.95 : R.wind > 0 ? CHARGE_CRAWL : 1), g0 = groundAt(R.x, R.z);
     // choose what to chase: the nearest thing it can roll up on its own level, preferring critters
     R.retarget -= dt;
     if (R.wander > 0) { R.wander -= dt; R.target = null; }
     else if (R.retarget <= 0) {
-      R.retarget = 0.45 + rand() * 0.3;                 // CPUs dither: they only look for a new target every second or two
+      R.retarget = (0.45 + rand() * 0.3) * DIFF.think;                 // CPUs dither: they only look for a new target every second or two
       let best = null, bd = 1e9;
       for (const o of S.objects) {
         if (o.fly || o.cool > 0 || o.noPick || o.size > R.d * pickRatio(R) || o.size < R.d * 0.08 || R.avoid.has(o)) continue;
@@ -1041,7 +1063,10 @@ function updateRivals(dt, frozen) {
     while (diff > Math.PI) diff -= 2 * Math.PI; while (diff < -Math.PI) diff += 2 * Math.PI;
     R.heading += clamp(diff, -2.6 * dt, 2.6 * dt);
     const clear = Math.abs(diff) < 0.2 && (goal || (tp && Math.hypot(tp.x - R.x, tp.z - R.z) > R.d * 5));     // lined up with a long run ahead: sprint
-    R.v += ((Math.abs(diff) < 1 ? vmax * (clear ? 1.6 : 1) : vmax * 0.35) - R.v) * (1 - Math.exp(-DRIVE * dt));
+    // the charge dash: with a clear run ahead and energy to spare it winds up (crawling), then bursts
+    if (R.wind > 0) { R.wind -= dt; if (R.wind <= 0) { R.boostT = burstTime(0.65); R.v = Math.max(R.v, topSpeed(R.d) * CPU_SPEED * RUN * burstKick(0.65)); } }
+    else if (clear && !frozen && R.boostT <= 0 && R.energy >= 0.7 && rand() < DIFF.dash * dt) { R.wind = CHARGE_TIME * 0.65; R.energy -= 0.65; }
+    R.v += ((Math.abs(diff) < 1 ? vmax : vmax * 0.35) - R.v) * (1 - Math.exp(-DRIVE * (R.boostT > 0 ? 3 : 1) * dt));
     const hx = Math.sin(R.heading), hz = Math.cos(R.heading);
     const nx = clamp(R.x + hx * R.v * dt, BOUNDS.x1 + 5, BOUNDS.x2 - 5), nz = clamp(R.z + hz * R.v * dt, BOUNDS.z1 + 5, BOUNDS.z2 - 5);
     const px = nx + hx * r * 0.8, pz = nz + hz * r * 0.8;
@@ -1096,7 +1121,8 @@ function updateRivals(dt, frozen) {
     [Bv.x, Bv.z] = shove(Bv.x, Bv.z, Bv.d, nx, nz);
     if (closing < 0.5) continue;
     const ma = ad ** 3 * (Math.hypot(avx, avz) + 0.5), mb = Bv.d ** 3 * (Math.abs(Bv.v) + 0.5);
-    knock(ma >= mb ? Bv : (A || S), ma >= mb ? -nx : nx, ma >= mb ? -nz : nz, KNOCK_LOSS);
+    const hitter = ma >= mb ? (A || S) : Bv;                                   // a ball in mid-burst knocks twice as much loose
+    knock(ma >= mb ? Bv : (A || S), ma >= mb ? -nx : nx, ma >= mb ? -nz : nz, KNOCK_LOSS * (hitter.boostT > 0 ? 2 : 1));
     if (!A || Bv === S) { S.shake = 0.2; sfxBump(); }
     if (A) { A.v *= -0.4; A.wander = 1; A.wh = Math.atan2(-nx, -nz); } else { S.vx -= nx * closing * 1.2; S.vz -= nz * closing * 1.2; }
     Bv.v *= -0.4; Bv.wander = 1; Bv.wh = Math.atan2(nx, nz);
@@ -1151,7 +1177,7 @@ const ORACLE = { id: 'oracle', name: "Oracle's Whisper", quiet: true, duration: 
 function timeUp() {
   if (S.state === 'timeup') return;
   endEvent(); clearFx(); music.stop();
-  MODS.knock = 1; MODS.fog = 1; H.setIce(false); S.skyOverride = null;
+  MODS.knock = 1; MODS.fog = 1; MODS.energy = 1; H.setIce(false); S.skyOverride = null;
   for (const R of rivals) R.ev = null;
   S.state = 'timeup'; S.tuT = 0; S.timeLeft = 0;
   if (document.pointerLockElement) document.exitPointerLock();
@@ -1277,6 +1303,10 @@ function enterPhase(ph) {
   const P2 = PHASES[ph];
   let sub = P2.sub;
   if (ph === 1 || ph === 2) spawnWave();
+  if (ph === 1) for (const b of allBalls()) if (b.d < 1) {            // nobody is left stuck in the Green: a ball still under 1 m gets a leg up
+    growBall(b, 1 - b.vol3);
+    if (b === S) { sub = 'You got a leg up to 1 m: climb out of the Green! ' + sub; toast('Late bloomer: boosted to 1 m'); }
+  }
   if (ph === 3) { spawnTitans(); refillMap(); $('timer').classList.add('hot'); }
   if (ph > 0) { announce(P2.name.toUpperCase(), sub, ph === 3 ? '#ff8a6a' : '#ffe169', `Phase ${ph + 1} of ${PHASES.length}`); [523, 659, 784, 1047].forEach((f, i) => tone(f, f, 0.2, 'triangle', 0.16, i * 0.1)); }
   music.setPhase(ph);
@@ -1423,12 +1453,26 @@ function update(dt) {
   let f = inp.f, t = inp.t, run = !!inp.run;
   if (frozen) S.mdx = 0;
   if (S.stallT > 0) { S.stallT -= dt; f = 0; }
+  // the charge dash
+  if (!frozen) S.energy = Math.min(1, S.energy + dt / ENERGY_FILL * MODS.energy);
+  let hold = run && !frozen && S.boostT <= 0 && S.stallT <= 0;
+  if (inp.auto) hold = inp.auto === 'dash' && S.boostT <= 0 && S.charge < 0.7 && (S.charge > 0 || S.energy >= 0.75);      // the playtest bot: wind up most of the way, then let go
+  let charging = false, released = 0;
+  if (hold && (S.charge > 0 || S.energy >= DASH_MIN)) {
+    const add = Math.min(dt / CHARGE_TIME, S.energy, 1 - S.charge);
+    S.charge += add; S.energy -= add; charging = true;
+    if (add > 0 && Math.floor(S.time * 14) !== Math.floor((S.time - dt) * 14)) tone(180 + 520 * S.charge, 200 + 560 * S.charge, 0.05, 'sawtooth', 0.035);
+  } else if (S.charge > 0) { released = S.charge; S.charge = 0; }
+  if (released > 0.05) { S.boostT = burstTime(released); S.boostK = 1 + 0.2 * released; tone(240, 1100 + 500 * released, 0.3, 'sawtooth', 0.11); }
   const boosting = S.boostT > 0;
-  if (boosting) { S.boostT -= dt; f = 1; run = true; }
-  const top = vmax * (run ? RUN : 1) * (boosting ? 1.35 : 1);                 // running: faster, but it steers like a truck
-  S.heading -= t * 2.4 * dt * (run && !boosting ? RUN_STEER : 1) + S.mdx * MOUSE_YAW;     // running dulls the keys, never the camera
+  if (boosting) { S.boostT -= dt; f = 1; }
+  run = boosting;
+  const top = vmax * (boosting ? RUN * S.boostK : charging ? CHARGE_CRAWL : 1);
+  S.heading -= t * 2.4 * dt * (boosting ? RUN_STEER : 1) + S.mdx * MOUSE_YAW;     // a burst dulls the keys, never the camera
   S.mdx = 0;
   const hx = Math.sin(S.heading), hz = Math.cos(S.heading);
+  if (released > 0.05) { const v = vmax * RUN * burstKick(released); S.vx = hx * v; S.vz = hz * v; S.shake = 0.08; }
+  if (charging) { const br = Math.exp(-4 * dt); S.vx *= br; S.vz *= br; }          // winding up: the ball digs in
   // Momentum: the ball takes time to get up to speed and to stop, and the faster it is going the less it grips,
   // so at a sprint it keeps sliding the way it was headed long after the camera has turned.
   const fast = Math.hypot(S.vx, S.vz) / vmax;                 // speed as a share of ordinary top speed
@@ -1452,7 +1496,8 @@ function update(dt) {
   if (S.vz !== 0 && terrainContact(S.x, tryZ, feet, r, 0, Math.sign(S.vz))) { const n = crashLoss(Math.abs(S.vz), vmax); if (n) hardHit(0, Math.sign(S.vz), vmax, n); S.vz *= -0.35; }
   else S.z = tryZ;
 
-  // roll
+  // roll (and, while winding up, spin on the spot)
+  if (charging) { rollAxis.set(hz, 0, -hx); tmpQ.setFromAxisAngle(rollAxis, (6 + 22 * S.charge) * dt); ball.quaternion.premultiply(tmpQ); }
   const speed = Math.hypot(S.vx, S.vz);
   if (speed > 1e-5) {
     rollAxis.set(S.vz / speed, 0, -S.vx / speed);
@@ -1546,7 +1591,7 @@ function update(dt) {
   tmpV.set(S.x - hx * camL * Math.cos(camE), S.camY + camL * Math.sin(camE), S.z - hz * camL * Math.cos(camE));
   S.camGoal.copy(tmpV);
   camera.position.lerp(tmpV, 1 - Math.exp(-10 * dt));
-  camera.fov += ((boosting ? 74 : run && f > 0 ? 64 : 55) - camera.fov) * (1 - Math.exp(-5 * dt));
+  camera.fov += ((boosting ? 72 : charging ? 50 : 55) - camera.fov) * (1 - Math.exp(-5 * dt));
   aimSun(S.x, feet, S.z, S.d);
   const floor = groundAt(camera.position.x, camera.position.z) + S.d * 0.35 + th * 0.2;
   if (camera.position.y < floor) camera.position.y = floor;  // never inside a cliff
@@ -1595,7 +1640,7 @@ S.autoplay = (seconds, everySec = 30) => {
       const goal = wander > 0 ? null : S.time < 10 && Math.hypot(S.x, S.z) > 5 ? PLACES.feast : routeGoal(gs, S.x, S.z, S.d, 1 / 30);
       if (goal) best = [goal[0] - S.x, goal[1] - S.z];
       let diff = (best ? Math.atan2(best[0], best[1]) : wh) - S.heading; while (diff > Math.PI) diff -= 2 * Math.PI; while (diff < -Math.PI) diff += 2 * Math.PI;
-      S.debugInput = { f: Math.abs(diff) < 1 ? 1 : 0.3, t: clamp(-diff * 3, -1, 1), run: !!best && Math.abs(diff) < 0.2 && Math.hypot(best[0], best[1]) > S.d * 5 }; }
+      S.debugInput = { f: Math.abs(diff) < 1 ? 1 : 0.3, t: clamp(-diff * 3, -1, 1), run: false, auto: !!best && Math.abs(diff) < 0.2 && Math.hypot(best[0], best[1]) > S.d * 5 ? 'dash' : 'none' }; }
     const before = S.caught;
     update(1 / 30);
     if (S.caught < before) hits++;
@@ -1614,8 +1659,9 @@ function start(mode) {
   const gy = groundAt(START.x, START.z), timed = mode === 'timed';
   Object.assign(S, { state: timed ? 'intro' : 'play', mode, d: START_D, vol3: START_D ** 3, x: START.x, y: gy + START_D / 2, z: START.z, vx: 0, vy: 0, vz: 0, sup: START_D / 2, camY: gy,
     heading: Math.atan2(-START.x, -START.z), time: 0, timeLeft: LEVEL.seconds, reachedAt: null, hitCool: 0, shake: 0, caught: 0, attachedCritters: 0, counts: { type: {}, species: {} }, pitch: 0, zoom: 1, mdx: 0, runSeen: new Map(), runNew: new Set(), zone: '', army: [], autoGate: null,
-    phase: 0, lastSec: -1, boostT: 0, stallT: 0, introT: 0, cdT: 0, cdStep: -1, cdHold: null, ev: null, evCount: 0, evUsed: new Set(), evTimes: EVENT_TIMES.map((t) => t + Math.round((rand() - 0.5) * 8)), skyOverride: null, fogK: 1, battleResult: null, battleArena: null, ratioBonus: 0 });
-  MODS.knock = 1; MODS.fog = 1; H.setIce(false);
+    phase: 0, lastSec: -1, boostT: 0, stallT: 0, energy: 1, charge: 0, boostK: 1.35, introT: 0, cdT: 0, cdStep: -1, cdHold: null, ev: null, evCount: 0, evUsed: new Set(), evTimes: EVENT_TIMES.map((t) => t + Math.round((rand() - 0.5) * 8)), skyOverride: null, fogK: 1, battleResult: null, battleArena: null, ratioBonus: 0 });
+  MODS.knock = 1; MODS.fog = 1; MODS.energy = 1; H.setIce(false);
+  DIFF = DIFFS[save.difficulty] || DIFFS.normal; CPU_SPEED = DIFF.speed;
   clearFx();
   $('timer').classList.remove('hot'); $('evchip').style.display = 'none'; $('count').className = '';
   for (const id of ['phasebar', 'mini']) $(id).style.display = timed ? '' : 'none';
@@ -1666,6 +1712,7 @@ function go(q) {
   $('boosthint').className = 'pill';
   setTimeout(() => { $('lights').className = ''; }, 900);
   const hx = Math.sin(S.heading), hz = Math.cos(S.heading), v = topSpeed(S.d) * RUN;
+  S.boostK = 1.35;
   if (q === 2) { S.boostT = 2.3; S.vx = hx * v * 1.2; S.vz = hz * v * 1.2; toast('ROCKET START!'); tone(200, 1400, 0.5, 'sawtooth', 0.12); }
   else if (q === 1) { S.boostT = 1.1; S.vx = hx * v * 0.8; S.vz = hz * v * 0.8; toast('Boost start!'); tone(200, 900, 0.35, 'sawtooth', 0.1); }
   else if (q === -1) { S.stallT = 0.9; toast('Stalled! Too early'); tone(220, 60, 0.5, 'sawtooth', 0.14); }
@@ -1756,6 +1803,9 @@ $('btnEnd').onclick = () => { if (S.mode === 'timed') { S.state = 'play'; show(n
 $('btnAgain').onclick = () => start(S.mode);
 $('btnMenu').onclick = toMenu;
 for (const id of ['btnMute', 'btnMute2', 'hudMute']) $(id).onclick = () => setMuted(!save.muted);
+function setDifficulty(d) { save.difficulty = DIFFS[d] ? d : 'normal'; persist(); for (const k in DIFFS) $('diff_' + k).classList.toggle('on', k === save.difficulty); }
+for (const k in DIFFS) $('diff_' + k).onclick = () => setDifficulty(k);
+setDifficulty(save.difficulty);
 setMuted(!!save.muted);
 $('levelname').textContent = `${LEVEL.name} — four teams, ${fmtTime(LEVEL.seconds)} to gather critters, then a wheel picks the arena and they fight`;
 $('btnSkip').onclick = skipBattle;
