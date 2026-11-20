@@ -181,7 +181,7 @@ function tile(x, z) {
     }
     case 'canyon': { const m = n1(x, z, 17, 70) * 0.75 + n1(x, z, 7, 75) * 0.25; h = m > 0.7 && rw > 64 && rw < 116 ? (m > 0.77 ? 5.2 : 3.2) : LIP; if (h > 1) c = m > 0.77 ? 0xc47a4a : 0xd39a62; break; }
     case 'ruins': { const t = PLACES.temple, d = Math.max(Math.abs(x - t[0]), Math.abs(z - t[1])); h = d < 9 ? 5.45 : d < 16 ? 3.85 : d < 23 ? 2.65 : d < 30 ? 1.75 : 1.15; if (d < 30) c = d < 9 ? 0xf0e6c4 : 0xe0d6b4; break; }
-    case 'marsh': if (n1(x, z, 10, 90) > 0.62) { h = 0.2; w = 1; c = MURK; } break;
+    case 'marsh': if (rw > 58 && n1(x, z, 10, 90) > 0.62) { h = 0.2; w = 1; c = MURK; } break;      // no pools against the lip of the Green: they would be a step out
     case 'graveyard': h = cone(dist(x, z, PLACES.crypt), [[26, 1.9], [14, 2.8]], 1.15); break;
     case 'forest': h = LIP; break;
     case 'gorge': h = rw < 150 ? 1.55 : 2.75; break;

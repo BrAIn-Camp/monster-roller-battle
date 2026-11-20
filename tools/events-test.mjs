@@ -71,7 +71,7 @@ function put(id, x, z, opt = {}) {
   if (x < BOUNDS.x1 || x > BOUNDS.x2 || z < BOUNDS.z1 || z > BOUNDS.z2) throw new Error(`put: ${id} off the map at ${x.toFixed(0)},${z.toFixed(0)}`);
   const size = e.size * (opt.scale ?? 1), rad = size * (e.spec.rad ?? (e.kind === 'creature' ? 0.3 : 0.35)), group = new Mesh({ host: 1 }, { host: 1 });
   group.scale.setScalar(size); group.position.set(x, groundAt(x, z), z); group.rotation.y = opt.rot ?? rand() * 6.28;
-  const o = { kind: e.kind, spec: e.spec, size, rad, group, bonus: opt.bonus ?? 1, on: false, fly: null, cool: 0, contrib: 0, spawnT: 0 };
+  const o = { kind: e.kind, spec: e.spec, size, rad, group, bonus: opt.bonus ?? 1, on: false, fly: null, cool: 0, contrib: 0, spawnT: 0, made: !!G_.inEvent };
   if (e.kind === 'creature') Object.assign(o, { ai: 'idle', timer: rand() * 3, home: [x, z], tx: x, tz: z, phase: rand() * 6.28, leader: null });
   G_.objects.push(o); G_.stats.put++;
   return o;
@@ -232,6 +232,7 @@ function run(def, preset, sd, mode) {
   g.stats = Object.assign(g.stats, { put: 0, picks: 0 });
   const d0 = g.balls.map((b) => b.d), okNow = !def.ok || !!def.ok(H);
   const ev = { def, t: 0, done: false, data: {} };
+  g.inEvent = true;
   let frames = 0, maxFx = 0, where = '';
   const tag = `${def.id} [${preset} seed ${sd} ${mode}]`;
   try {
@@ -250,9 +251,9 @@ function run(def, preset, sd, mode) {
   for (const b of bad) fails.push(`${tag}: ${b}`);
   if (mode === 'full') {
     const st = g.stats, growth = g.balls.map((b, i) => (b.d / d0[i]).toFixed(2)).join(' ');
-    rows.push({ event: def.id, preset, ok: okNow ? 'y' : 'n', secs: (frames / 60).toFixed(1), where, title: ev.title || def.name, put: st.put, picks: st.picks, bumps: st.bumps, knocks: st.knocks, lost: st.lost, flings: st.flings, grows: st.grows, ratio: st.ratio, maxFx: maxFx - base.fx, left: g.objects.length - base.n, growth, toasts: st.toasts.length });
+    rows.push({ event: def.id, preset, ok: okNow ? 'y' : 'n', secs: (frames / 60).toFixed(1), where, title: ev.title || def.name, put: st.put, picks: st.picks, bumps: st.bumps, knocks: st.knocks, lost: st.lost, flings: st.flings, grows: st.grows, ratio: st.ratio, maxFx: maxFx - base.fx, left: g.objects.filter((o) => o.made).length, growth, toasts: st.toasts.length });
     if (verbose) console.log(tag, '|', ev.title || def.name, '|', ev.sub || def.sub, '|', st.toasts.join(' / '));
-    if (g.objects.length - base.n > 90) fails.push(`${tag}: ${g.objects.length - base.n} more things in the world afterwards`);
+    if (g.objects.filter((o) => o.made).length > 70) fails.push(`${tag}: ${g.objects.filter((o) => o.made).length} things made by the event are still lying about`);
     if (!st.cpuGoto && def.id !== 'fog') fails.push(`${tag}: never called cpuGoto`);
   }
 }
