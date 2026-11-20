@@ -12,6 +12,8 @@
 //   grass(x1,z1,x2,z2)                            tall-grass patch
 //   hills(x1,z1,x2,z2, maxRise, step, onlyColour) raises ground in stepped knolls, optionally only on one colour
 //   zone(name, cx,cz, rx,rz, colours)             marks an ellipse as a habitat; colours (optional) limits it to tiles of those colours
+//   tiles(fn)                                     calls fn(x, z) for every tile; it returns { h, c, w, b } (height, colour, water 0/1, biome number)
+//   biome(cx,cz, rx,rz, b)                        marks an ellipse of tiles as biome number b
 export const SEA_LEVEL = -0.25;   // where the water surface is drawn
 export const SEA_FLOOR = -0.3;    // any tile lower than this is sea
 export const SEA_MIN_D = 3;       // the ball cannot enter the sea until it is this wide
@@ -26,7 +28,7 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
 export function createTerrain(BOUNDS, scenery) {
   const NX = BOUNDS.x2 - BOUNDS.x1, NZ = BOUNDS.z2 - BOUNDS.z1;
-  const tH = new Float32Array(NX * NZ), tC = new Uint32Array(NX * NZ), tR = new Uint16Array(NX * NZ), tW = new Uint8Array(NX * NZ);
+  const tH = new Float32Array(NX * NZ), tC = new Uint32Array(NX * NZ), tR = new Uint16Array(NX * NZ), tW = new Uint8Array(NX * NZ), tB = new Uint8Array(NX * NZ);
   const ramps = [null], grassRects = [], zones = {};
   const eachTile = (x1, z1, x2, z2, fn) => {
     const i1 = Math.max(0, Math.round(x1 - BOUNDS.x1)), i2 = Math.min(NX, Math.round(x2 - BOUNDS.x1));
@@ -78,6 +80,9 @@ export function createTerrain(BOUNDS, scenery) {
         tH[k] += Math.round(Math.max(0, n - 0.42) / 0.58 * amp / step) * step; tR[k] = 0;
       });
     },
+    tiles(fn) { eachTile(BOUNDS.x1, BOUNDS.z1, BOUNDS.x2, BOUNDS.z2, (k, x, z) => { const t = fn(x, z); tH[k] = t.h; tC[k] = t.c; tW[k] = t.w || 0; tB[k] = t.b || 0; tR[k] = 0; }); },
+    biome(cx, cz, rx, rz, b) { eachTile(cx - rx, cz - rz, cx + rx, cz + rz, (k, x, z) => { if (((x - cx) / rx) ** 2 + ((z - cz) / rz) ** 2 < 1) tB[k] = b; }); },
+    ground: (x, z) => groundAt(x, z), water: (x, z) => tW[index(x, z)], biomeAt: (x, z) => tB[index(x, z)],
     zone(name, cx, cz, rx, rz, colors) { (zones[name] || (zones[name] = [])).push({ cx, cz, rx, rz, colors: colors || null }); },
   };
   scenery(api);
@@ -102,5 +107,28 @@ export function createTerrain(BOUNDS, scenery) {
     }
     return null;
   };
-  return { BOUNDS, NX, NZ, tH, tC, tR, tW, ramps, rampH, grassRects, zones, groundAt, index, sample, waterAt: (x, z) => tW[index(x, z)] };
+  // Tiles of each biome, for picking spots. sampleBiome(list of biome numbers, want, rTarget, rTol) picks a random tile
+  // of those biomes, preferring ones about rTarget metres from the map's centre (the tolerance widens until one is found).
+  const biomeTiles = [];
+  for (let k = 0; k < tB.length; k++) (biomeTiles[tB[k]] || (biomeTiles[tB[k]] = [])).push(k);
+  const sampleBiome = (ids, want = 'land', rTarget = null, rTol = 20, rand = Math.random) => {
+    const lists = ids.map((b) => biomeTiles[b]).filter((l) => l && l.length);
+    if (!lists.length) return null;
+    const total = lists.reduce((n, l) => n + l.length, 0);
+    for (let t = 0; t < 240; t++) {
+      let n = Math.floor(rand() * total), li = 0;
+      while (n >= lists[li].length) { n -= lists[li].length; li++; }
+      const k = lists[li][n], x = BOUNDS.x1 + (k % NX) + rand(), z = BOUNDS.z1 + Math.floor(k / NX) + rand();
+      if (x < BOUNDS.x1 + 8 || x > BOUNDS.x2 - 8 || z < BOUNDS.z1 + 8 || z > BOUNDS.z2 - 8 || tR[k]) continue;
+      if (rTarget !== null && Math.abs(Math.hypot(x, z) - rTarget) > rTol * (1 + t / 40)) continue;
+      const w = tW[k];
+      if (want === 'land' && w !== 0) continue;
+      if (want === 'water' && w === 0) continue;
+      if (want === 'dry' && w === 2) continue;
+      return [x, z];
+    }
+    return null;
+  };
+  const biomeRange = (ids) => { let lo = 1e9, hi = 0; for (const b of ids) for (const k of biomeTiles[b] || []) { const r = Math.hypot(BOUNDS.x1 + (k % NX) + 0.5, BOUNDS.z1 + Math.floor(k / NX) + 0.5); if (r < lo) lo = r; if (r > hi) hi = r; } return [lo, hi]; };
+  return { BOUNDS, NX, NZ, tH, tC, tR, tW, tB, sampleBiome, biomeRange, biomeAt: (x, z) => tB[index(x, z)], ramps, rampH, grassRects, zones, groundAt, index, sample, waterAt: (x, z) => tW[index(x, z)] };
 }

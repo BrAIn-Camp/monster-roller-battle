@@ -1,0 +1,6 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    { "name": "critter-roller", "runtimeExecutable": "python", "runtimeArgs": ["tools/serve.py", "8417"], "port": 8417 }
+  ]
+}
