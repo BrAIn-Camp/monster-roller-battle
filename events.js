@@ -54,9 +54,9 @@ function flatAt(H, x, z, r, tol) {
   for (let i = 0; i < 16; i += 4) if (Math.abs(H.groundAt(x + DIRS[i][0] * r, z + DIRS[i][1] * r) - h) > tol || H.waterAt(x + DIRS[i][0] * r, z + DIRS[i][1] * r) === 2) return false;
   return true;
 }
-function clearAt(H, x, z, r) {                           // no building, tree or boulder in the way
+function clearAt(H, x, z, r, ignore = 0) {               // no building, tree or boulder in the way (things of `ignore` metres or less do not count)
   for (const o of H.objects()) {
-    if (o.kind !== 'item' || o.size < 0.5 || o.spec.flat) continue;
+    if (o.kind !== 'item' || o.size < 0.5 || o.size <= ignore || o.spec.flat) continue;
     const p = o.group.position;
     if (Math.hypot(p.x - x, p.z - z) < r + o.rad) return false;
   }
@@ -64,7 +64,7 @@ function clearAt(H, x, z, r) {                           // no building, tree or
 }
 const inMap = (H, x, z) => x > H.BOUNDS.x1 + 8 && x < H.BOUNDS.x2 - 8 && z > H.BOUNDS.z1 + 8 && z < H.BOUNDS.z2 - 8;
 // A dry, level, reachable spot between rMin and rMax metres from the centre (in the Green while balls are small).
-// q: { rMin, rMax, d, near: [x, z] (prefer close to this), gap (keep this far from every ball), clear (radius free of props), flat }
+// q: { rMin, rMax, d, near: [x, z] (prefer close to this), gap (keep this far from every ball), clear (radius free of props bigger than `ignore`), flat }
 function findSite(H, q) {
   const hub = q.d < 0.95, r0 = hub ? 15 : q.rMin, r1 = hub ? 40 : q.rMax, balls = H.balls();
   let best = null, bs = 1e9, found = 0;
@@ -73,7 +73,7 @@ function findSite(H, q) {
     if (H.waterAt(x, z) !== 0 || !flatAt(H, x, z, q.flat || 3, 0.3)) continue;
     if (q.gap && balls.some((b) => Math.hypot(b.x - x, b.z - z) < q.gap + b.d)) continue;
     if (!pathOK(H, 0, 0, x, z, q.d)) continue;
-    if (q.clear && !clearAt(H, x, z, q.clear)) continue;
+    if (q.clear && !clearAt(H, x, z, q.clear, q.ignore)) continue;
     found++;
     const sc = q.near ? Math.hypot(x - q.near[0], z - q.near[1]) : t;
     if (sc < bs) { bs = sc; best = [x, z]; }
@@ -97,7 +97,7 @@ const INNER_PLACES = ['frozenLake', 'yard', 'hotSprings', 'oasis', 'pier', 'bog'
 const OUTER_PLACES = ['temple', 'crypt', 'lighthouse', 'windmillHill', 'gorgeMouth', 'dam', 'craterFoot', 'peakFoot'];
 function shuffled(H, list) { const a = list.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.min(i, Math.floor(H.rand() * (i + 1))); [a[i], a[j]] = [a[j], a[i]]; } return a; }
 // A clear, level, reachable spot at (or a few metres from) one of the named places. -> { x, z, short, long } | null
-function placeSite(H, keys, d, clear, gap) {
+function placeSite(H, keys, d, clear, gap, ignore) {
   const balls = H.balls();
   for (const key of shuffled(H, keys)) {
     const at = H.PLACES[key] || EXTRA_PLACES[key];
@@ -105,7 +105,7 @@ function placeSite(H, keys, d, clear, gap) {
     for (let k = 0; k < 25; k++) {
       const rr = k === 0 ? 0 : 7 + 6 * Math.floor((k - 1) / 8), dir = DIRS[((k - 1) * 2 + 16) % 16];
       const x = at[0] + dir[0] * rr, z = at[1] + dir[1] * rr;
-      if (H.waterAt(x, z) !== 0 || !flatAt(H, x, z, Math.max(2, clear * 0.7), 0.3) || !pathOK(H, 0, 0, x, z, d) || !clearAt(H, x, z, clear)) continue;
+      if (H.waterAt(x, z) !== 0 || !flatAt(H, x, z, Math.max(2, clear * 0.7), 0.3) || !pathOK(H, 0, 0, x, z, d) || (clear && !clearAt(H, x, z, clear, ignore))) continue;
       if (gap && balls.some((b) => Math.hypot(b.x - x, b.z - z) < gap + b.d)) continue;
       return { x, z, short: PLACE_INFO[key][0], long: PLACE_INFO[key][1] };
     }
@@ -115,9 +115,10 @@ function placeSite(H, keys, d, clear, gap) {
 // A landmark if the balls are big enough for one, else the heart of an inner habitat, else somewhere in the Green.
 function namedSite(H, s, clear, gap, outerChance = 0.6) {
   let site = null;
-  if (!s.hub && s.go >= 1.6 && H.rand() < outerChance) site = placeSite(H, OUTER_PLACES, s.go, clear, gap);
-  if (!site && !s.hub) site = placeSite(H, INNER_PLACES, s.go, clear, gap);
-  if (!site) { const p = findSite(H, { rMin: 15, rMax: 40, d: 0.5, clear, gap }); site = { x: p[0], z: p[1], short: 'Green', long: 'Crossway Green' }; }
+  const ignore = 0.5 * s.min;                              // anything every ball can roll up is not in the way
+  if (!s.hub && s.go >= 1.6 && H.rand() < outerChance) site = placeSite(H, OUTER_PLACES, s.go, clear, gap, ignore);
+  if (!site && !s.hub) site = placeSite(H, INNER_PLACES, s.go, clear, gap, ignore);
+  if (!site) { const p = findSite(H, { rMin: 15, rMax: 40, d: 0.5, clear, gap, ignore }); site = { x: p[0], z: p[1], short: 'Green', long: 'Crossway Green' }; }
   return site;
 }
 
@@ -433,14 +434,14 @@ const golden = {
   start(H, ev) {
     const D = begin(H, ev), s = D.s;
     const sp = pick(H, H.CREATURES.filter((c) => (c.move === 'walk' || c.move === 'hop') && c.height <= 1.6));
-    const at = findSite(H, { rMin: 58, rMax: 112, d: Math.min(s.go, s.min), near: centroid(H), gap: 14 });
+    const at = findSite(H, { rMin: 58, rMax: 112, d: Math.min(s.go, s.min), near: centroid(H), gap: 22 });
     D.sp = sp; D.scale = 0.4 * s.min / sp.height;                            // small enough for the smallest ball
     D.lim = s.min < 0.95 ? 44 : 205;                                         // it stays where every ball can follow
     D.step = 0.3 * s.min;
     D.o = hold(ev, H.put(sp.id, at[0], at[1], { scale: D.scale, gold: true }), { onPick: (ball) => { D.winner = ball; } });
     if (!D.o) { ev.done = true; return; }
     D.hx = 0; D.hz = 1; D.gx = 0; D.gz = 1; D.speed = 0; D.think = 0; D.cpuT = 0; D.glint = 0;
-    D.vmax = H.topSpeed(s.min) * 1.12;
+    D.vmax = H.topSpeed(s.med) * 1.15;                 // quicker than a median ball at a roll, slower than one at a sprint
     ev.sub = `A golden <b>${sp.name}</b> is on the run. Catch it for a huge growth spurt and six more like it!`;
     mk(H, ev, 'golden', at[0], at[1], { label: 'Golden ' + sp.name, color: hexOf(golden.color), radius: Math.max(2.5, s.min * 1.5) });
     H.cpuGoto(at[0], at[1], golden.duration, 0.8);
@@ -470,7 +471,7 @@ const golden = {
       for (const b of balls) near = Math.min(near, Math.hypot(b.x - p.x, b.z - p.z) - b.d / 2);
       if (near > 26 + D.s.max * 2) D.speed = 0;            // nobody about: it stops to preen
       else {
-        D.speed = D.vmax * (1.1 - 0.45 * ev.t / golden.duration);           // it tires, so somebody gets it in the end
+        D.speed = D.vmax * (1.1 - 0.5 * ev.t / golden.duration);           // it tires, so somebody gets it in the end
         const look = 3 + D.speed * 0.9;
         let bs = -1e9, bi = -1;
         for (let i = 0; i < 16; i++) {
@@ -577,7 +578,7 @@ const supply = {
       const b = D.jacks.pop(), kinds = pickSpecies(H, landMover, 0.34 * b.d, 3);
       for (let i = 0; i < 3 && kinds.length; i++) {
         const a = H.rand() * TAU, r = b.d * 0.5 + 1 + H.rand() * 2, x = b.x + Math.cos(a) * r, z = b.z + Math.sin(a) * r, sp = kinds[i % kinds.length];
-        if (H.waterAt(x, z) !== 2) H.put(sp.id, x, z, fit(H, sp, 0.34 * b.d));
+        if (inMap(H, x, z) && H.waterAt(x, z) !== 2) H.put(sp.id, x, z, fit(H, sp, 0.34 * b.d));
       }
       if (H.isPlayer(b)) { H.toast('Jackpot crate: three critters!'); H.sfx.win(); }
     }
@@ -601,11 +602,13 @@ const magpie = {
     if (!D.loot.length) { ev.done = true; return; }
     D.n0 = D.loot.length;
     const sp = pickSpecies(H, (c) => c.move === 'fly' && c.types.includes('flying'), 1.6, 3)[0] || pickSpecies(H, flier, 1.6, 1)[0];
-    const size = H.clamp(0.8 * s.med, 0.9, 4.5), a = H.rand() * TAU, x = v.x + Math.cos(a) * (v.d / 2 + size + 1), z = v.z + Math.sin(a) * (v.d / 2 + size + 1);
+    const size = H.clamp(0.8 * s.med, 0.9, 4.5);
+    let x = v.x, z = v.z;
+    for (let t = 0; t < 8; t++) { const a = H.rand() * TAU, px = v.x + Math.cos(a) * (v.d / 2 + size + 1.5), pz = v.z + Math.sin(a) * (v.d / 2 + size + 1.5); if (inMap(H, px, pz) && H.waterAt(px, pz) !== 2) { x = px; z = pz; break; } }
     D.hits = [];
-    D.o = hold(ev, H.put(sp.id, x, z, { scale: size / sp.height }), { noPick: true, onBump: (ball, o) => { o.cool = 0.8; D.hits.push(ball); } });
+    D.o = hold(ev, H.put(sp.id, x, z, { scale: size / sp.height }), { noPick: true, cool: 2.5, onBump: (ball, o) => { o.cool = 1.6; D.hits.push(ball); } });
     if (!D.o) { ev.done = true; return; }
-    D.speed = Math.max(3.2, H.topSpeed(s.med) * 0.85); D.stun = 1.2; D.cpuT = 0; D.caw = 0; D.tx = x; D.tz = z; D.ring = s.hub ? 36 : 95;
+    D.speed = Math.max(3.2, H.topSpeed(s.med) * 0.85); D.stun = 0.7; D.boost = 4; D.cpuT = 0;       // it gets a head start, and bolts again after every ram D.caw = 0; D.tx = x; D.tz = z; D.ring = s.hub ? 36 : 95;
     const sack = new H.THREE.Group();
     H.P(sack, 'sph', 0x8a5a2b, [0.5, 0.55, 0.5], [0, 0, 0]);
     H.P(sack, 'cyl', 0xe8d9a8, [0.16, 0.2, 0.16], [0, 0.55, 0]);
@@ -642,7 +645,7 @@ const magpie = {
         const a = H.rand() * TAU, sp = 3 + H.rand() * (2 + D.s.med);
         H.fling(m, Math.cos(a) * sp, 6 + H.rand() * 3, Math.sin(a) * sp);
       }
-      D.stun = 0.7;
+      D.stun = 0.4; D.boost = 1.6;
       if (nearPlayer(H, p.x, p.z, 50)) { H.sfx.cry(o.spec, 0.09); H.sfx.tone(700, 300, 0.15, 'square', 0.07); }
       if (!D.loot.length) { H.toast('The thief dropped everything and fled!'); ev.done = true; return; }
       magpie.flee(H, D);
@@ -650,11 +653,12 @@ const magpie = {
     let x = p.x, z = p.z, yaw = o.group.rotation.y;
     if (D.stun > 0) D.stun -= dt;
     else {
-      const dx = D.tx - x, dz = D.tz - z, d = Math.hypot(dx, dz);
+      const dx = D.tx - x, dz = D.tz - z, d = Math.hypot(dx, dz), v = D.speed * (D.boost > 0 ? 1.7 : 1);
+      D.boost -= dt;
       if (d < 3) magpie.flee(H, D);
       else {
         const wob = Math.sin(ev.t * 2.3) * 0.5, ux = dx / d, uz = dz / d, vx = ux - uz * wob, vz = uz + ux * wob, vl = Math.hypot(vx, vz);
-        x += vx / vl * D.speed * dt; z += vz / vl * D.speed * dt; yaw = Math.atan2(vx, vz);
+        x += vx / vl * v * dt; z += vz / vl * v * dt; yaw = Math.atan2(vx, vz);
       }
     }
     stand(H, o, x, z, yaw, ev.t);
@@ -716,7 +720,7 @@ const growthRing = {
   start(H, ev) {
     const D = begin(H, ev), s = D.s, T3 = H.THREE;
     D.R = 14;
-    const site = namedSite(H, s, 10, 0, 0);
+    const site = namedSite(H, s, 0, 0, 0);
     D.x = site.x; D.z = site.z; D.loot = []; D.wave = 0; D.tidy = 0;
     D.items = ['crate', 'barrel', 'pumpkin', 'cake', 'teddy', 'bucket', 'stump'].filter((id) => H.SPECS[id]);
     if (!D.items.length) D.items = ['coin'];
@@ -867,7 +871,7 @@ const pinata = {
     const site = namedSite(H, s, rad + 2, rad + 2, 0.4);
     D.sp = sp; D.x = site.x; D.z = site.z; D.rams = 0; D.hits = []; D.wob = 0; D.last = null;
     D.small = fit(H, sp, Math.min(sp.height, 0.42 * s.med), 0.05, s.med);
-    D.o = hold(ev, H.put(tid, site.x, site.z, { scale: big / H.SPECS[tid].size }), { noPick: true, onBump: (ball, o) => { o.cool = 0.7; D.hits.push(ball); } });
+    D.o = hold(ev, H.put(tid, site.x, site.z, { scale: big / H.SPECS[tid].size }), { noPick: true, onBump: (ball, o) => { o.cool = 1.4; D.hits.push(ball); } });
     if (!D.o) { ev.done = true; return; }
     ev.title = site.short + ' Colossus';
     ev.sub = `A giant <b>${sp.name}</b> has landed at ${site.long}. Ram it to shake critters loose: ${pinata.RAMS} rams and it bursts!`;
@@ -919,7 +923,7 @@ const vault = {
     for (const sp of H.CREATURES) if (landMover(sp) || flier(sp)) for (const t of sp.types) types[t] = (types[t] || 0) + 1;
     const type = pick(H, Object.keys(types).filter((t) => types[t] >= 3));
     const target = 0.36 * s.med, kinds = pickSpecies(H, (sp) => (landMover(sp) || flier(sp)) && sp.types.includes(type), target, 3);
-    const r1 = target * 2.3 + 1, site = namedSite(H, s, r1 + 1.5, r1 + 2, 0.7);
+    const r1 = target * 2.3 + 1, site = namedSite(H, s, r1 + 1.5, r1 + 16, 0.7);
     D.x = site.x; D.z = site.z; D.hoard = [];
     for (let i = 0; i < 14; i++) {                         // nine round the outside, five inside
       const outer = i < 9, a = (outer ? i / 9 : (i - 9) / 5 + 0.1) * TAU, r = outer ? r1 : r1 * 0.5, sp = kinds[i % kinds.length];
@@ -952,9 +956,9 @@ const dash = {
   id: 'dash', name: 'Checkpoint Dash', sub: 'Five gates, one at a time. First ball through each wins growth and two critters!', color: '#4ad7ff', duration: 45, weight: 1,
   start(H, ev) {
     const D = begin(H, ev), s = D.s, T3 = H.THREE;
-    const gapM = s.hub ? 26 : 35, turns = [0, 0.45, -0.45, 0.9, -0.9, 1.4, -1.4, 1.95, -1.95, 2.5, -2.5, Math.PI], flip = H.rand() < 0.5 ? 1 : -1;
+    const gapM = s.hub ? 26 : H.clamp(H.topSpeed(s.med) * 3.2, 35, 60), turns = [0, 0.45, -0.45, 0.9, -0.9, 1.4, -1.4, 1.95, -1.95, 2.5, -2.5, Math.PI], flip = H.rand() < 0.5 ? 1 : -1;
     const okAt = (x, z) => inMap(H, x, z) && Math.hypot(x, z) < 200 && H.waterAt(x, z) !== 2 && flatAt(H, x, z, 2, 0.5);
-    // the first gate: about 40 m out (nearer while balls are small), then each next one 35 m on, turning only as far as the ground demands
+    // the first gate: about 40 m out (nearer while balls are small), then each next one 35 m on (more for big, quick balls), turning only as far as the ground demands
     let pts = null;
     for (let t = 0; t < 12 && !pts; t++) {
       const a = H.rand() * TAU, r = s.hub ? 22 : 40, chain = [[Math.cos(a) * r, Math.sin(a) * r]];

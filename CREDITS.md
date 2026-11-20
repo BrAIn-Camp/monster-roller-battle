@@ -33,3 +33,14 @@ from simple shapes in `main.js`, as is the fallback shape for any item whose mod
 
 Species categories, types and heights in `critters/slots.json` come from the open PokéAPI data set
 (https://github.com/PokeAPI/pokeapi). They are facts used to size and classify the stand-ins.
+
+## Added 19 November 2026
+
+More Kenney packs (all CC0 1.0, downloaded from kenney.nl) are in `models/kenney/`: Holiday, Pirate, Castle, Survival,
+City Kit Industrial, Factory, Space, Platformer, Mini Arena and Mini Shop, plus fuller copies of Nature, Graveyard,
+Fantasy Town and Food. The pack versions, the download pages and the file counts are in `models/CREDITS-additions.md`;
+every model is listed in `models/INVENTORY.md`.
+
+The props of the Crossway Continent map (about 380 kinds: snowmen, pylons, cacti, gravestones, beach huts and so on) do
+not use these models yet. They are built from simple shapes in `habitats/*.js`, in the same style as the critters.
+The new packs are there to swap in where a model is wanted: give an item in a habitat file a `model:` path.
