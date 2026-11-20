@@ -467,8 +467,8 @@ function critterSpot(sp, hab = habOf(sp), far = null) {
 // chosen wedge's inner habitat, then the outer one. Big balls move on to a neighbouring wedge after a while.
 // Each entry: [inner place, outer place, ball size needed for the outer one], by wedge from north clockwise.
 const ROUTES = [
-  [PLACES.frozenLake, [0, -140], 3.3], [PLACES.yard, [106, -106], 3.3], [PLACES.hotSprings, [140, 0], 3.3], [PLACES.oasis, [112, 100], 2.2],
-  [[0, 96], [30, 140], 1.3], [PLACES.bog, [-108, 112], 2.2], [PLACES.grove, [-150, 2], 1.3], [PLACES.barnyard, [-110, -110], 1.3],
+  [PLACES.frozenLake, [0, -140], 3.4], [PLACES.yard, [106, -106], 3.4], [PLACES.hotSprings, [140, 0], 3.4], [PLACES.oasis, [112, 100], 3],
+  [[0, 96], [30, 140], 2.8], [PLACES.bog, [-108, 112], 3], [PLACES.grove, [-150, 2], 3], [PLACES.barnyard, [-110, -110], 2.8],
 ];
 function routeGoal(st, x, z, d, dt) {
   if (st.wedge === undefined || d < 0.95) return null;
