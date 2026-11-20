@@ -1160,6 +1160,7 @@ function tickTimeUp(dt) {
   if (S.tuT > 2.6) startWheel();
 }
 function startWheel() {
+  $('count').className = '';
   const teams = battleTeams();
   if (!teams.some((t) => t.army.length)) { S.battleTeams = teams; S.battleResult = { winner: -1, mvp: null }; S.battleStatus = teams.map(() => ({ alive: 0, all: 0, hp: 0 })); finish(); return; }
   if (!ARENA || !S.forecast) { startBattle(null); return; }
@@ -1562,6 +1563,7 @@ function update(dt) {
 }
 
 S.step = update; S.groundAt = groundAt; S.T = T;   // debug hooks
+S.rivals = rivals; S.H = H; S.timeUp = () => timeUp();
 S.render = () => { tickDexPop(0.016); if (S.state === 'battle' && battle) { battle.step(0.016); renderer.render(battle.scene, battle.camera); } else renderer.render(scene, camera); };   // draw one frame now (for background tabs)
 // Playtest helper: S.autoplay(seconds) rolls a simple bot through the level in fast-forward and returns a log.
 // It chases the nearest thing it can roll up on its own level, and wanders when stuck. Start a level first.
