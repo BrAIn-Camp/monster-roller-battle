@@ -88,7 +88,28 @@ The phase bar under the clock shows all four phases in proportion, a pin for now
 
 ## 5. Events
 
-See the table at the top of `events.js` for the final list and tuning. Each event is one object with `start`, `tick` and `end`,
+About five run per round, at the pips on the phase bar; the third is always the Oracle's Whisper. Fourteen more are in the pool
+and none repeats within a round. Every prize and hazard is sized from the balls as they are when the event starts, and a site is only
+chosen if the smaller balls can reach it.
+
+| Event | Seconds | What happens | Air Ride / Air Riders cousin |
+|---|---|---|---|
+| Meteor Shower | 30 | A marked zone; meteors land on rings with 1.2 s warning, knock things off balls caught under them and leave gold shards; a big one in the middle leaves rare critters. | Meteors |
+| Stampede | 35 | 34 critters of one type charge in a column through the Green; roll into the column. Every ninth is a bruiser that shoves. | Machine Formation |
+| Surge | 35 | One type swarms its home habitat in five waves at a marked spot. | Same Item |
+| Golden Critter | 40 | A golden critter small enough for the smallest ball flees and slowly tires; the catcher gets a big growth bonus and six of its species. | Tac |
+| Supply Drop | 36 | An airship crosses two habitats dropping parachute crates; every fourth is a jackpot that releases critters. | UFO / Halberd, Raining Boxes |
+| Magpie Raid | 35 | A thief takes six critters from the team with the biggest army and runs; every ram shakes two loose for anyone. The catch-up event. | Tac |
+| Static Storm | 25 | Rams knock off three times as much; the biggest ball is marked as the target. The only map-wide modifier, kept short. | Broken Machine |
+| Growth Ring | 35 | A glowing ring at a named place: inside it a ball rolls up things three-quarters its width, and the ring is stocked with exactly such things. | Restoration Area / Dash Zones |
+| Ghost Fog | 30 | Thick fog; ghost and poison critters appear beside every ball and vanish when it lifts. | Dense Fog |
+| Cold Snap | 35 | The sea freezes into a surface any ball can cross; water and ice critters and crates are out on the bay and the islets. Warning at 5 s. | Slippery Ground |
+| Colossus | 40 | A giant critter lands at a named place; each ram shakes three ordinary ones loose and shrinks it; the tenth ram bursts it. | Dyna Blade, Huge Pillar |
+| Vault | 30 | A hoard of fourteen critters of one type and gold coins at a landmark, first come first served. | Secret Rooms |
+| Checkpoint Dash | 45 | Five gates light one at a time; the first ball through each wins growth and two critters. | Short Race |
+| Twister | 35 | A tornado crosses three habitats flinging loose things about and spinning any ball it touches. | Gordos |
+| Oracle's Whisper | 10 | A quiet hint at the final arena's favoured types, right four times in five. | Stadium Prediction |
+ Each event is one object with `start`, `tick` and `end`,
 given a host object `H` (defined in `main.js`) so it never reaches into the game's internals. `window.__game.fireEvent('id')` in the
 browser console starts any event at once for testing.
 

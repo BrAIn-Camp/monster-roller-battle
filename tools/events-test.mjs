@@ -233,7 +233,7 @@ function run(def, preset, sd, mode) {
   const d0 = g.balls.map((b) => b.d), okNow = !def.ok || !!def.ok(H);
   const ev = { def, t: 0, done: false, data: {} };
   g.inEvent = true;
-  let frames = 0, maxFx = 0, where = '';
+  let frames = 0, maxFx = 0, where = '', far = 0;
   const tag = `${def.id} [${preset} seed ${sd} ${mode}]`;
   try {
     def.start(H, ev);
@@ -241,7 +241,7 @@ function run(def, preset, sd, mode) {
     const m0 = [...g.markers.values()][0];
     where = m0 ? `${Math.round(Math.hypot(m0.x, m0.z))}m ${BIOMES[T.biomeAt(m0.x, m0.z)].id}` : '-';
     const limit = mode === 'instant' ? 0 : mode === 'one' ? 1 : Math.ceil(def.duration * 60) + 5;
-    while (frames < limit && !ev.done && ev.t < def.duration) { step(1 / 60, ev); frames++; maxFx = Math.max(maxFx, g.fx.children.length); }
+    while (frames < limit && !ev.done && ev.t < def.duration) { step(1 / 60, ev); frames++; maxFx = Math.max(maxFx, g.fx.children.length); for (const m of g.markers.values()) far = Math.max(far, Math.hypot(m.x, m.z)); }
     def.end(H, ev);
     if (mode === 'twice') def.end(H, ev);
     def.tick(H, ev, 1 / 60);                                // a stray tick after the end must do nothing
@@ -251,7 +251,7 @@ function run(def, preset, sd, mode) {
   for (const b of bad) fails.push(`${tag}: ${b}`);
   if (mode === 'full') {
     const st = g.stats, growth = g.balls.map((b, i) => (b.d / d0[i]).toFixed(2)).join(' ');
-    rows.push({ event: def.id, preset, ok: okNow ? 'y' : 'n', secs: (frames / 60).toFixed(1), where, title: ev.title || def.name, put: st.put, picks: st.picks, bumps: st.bumps, knocks: st.knocks, lost: st.lost, flings: st.flings, grows: st.grows, ratio: st.ratio, maxFx: maxFx - base.fx, left: g.objects.filter((o) => o.made).length, growth, toasts: st.toasts.length });
+    rows.push({ event: def.id, preset, ok: okNow ? 'y' : 'n', secs: (frames / 60).toFixed(1), where, far: Math.round(far), title: ev.title || def.name, put: st.put, picks: st.picks, bumps: st.bumps, knocks: st.knocks, lost: st.lost, flings: st.flings, grows: st.grows, ratio: st.ratio, maxFx: maxFx - base.fx, left: g.objects.filter((o) => o.made).length, growth, toasts: st.toasts.length });
     if (verbose) console.log(tag, '|', ev.title || def.name, '|', ev.sub || def.sub, '|', st.toasts.join(' / '));
     if (g.objects.filter((o) => o.made).length > 70) fails.push(`${tag}: ${g.objects.filter((o) => o.made).length} things made by the event are still lying about`);
     if (!st.cpuGoto && def.id !== 'fog') fails.push(`${tag}: never called cpuGoto`);
@@ -271,7 +271,7 @@ for (const def of EVENTS) {
 const keyed = {};
 for (const r of rows) { const k = r.event + ' ' + r.preset; (keyed[k] || (keyed[k] = [])).push(r); }
 const avg = (l, f) => Math.round(l.reduce((n, r) => n + r[f], 0) / l.length);
-console.table(Object.values(keyed).map((l) => ({ event: l[0].event, balls: l[0].preset, ok: l[0].ok, secs: l.map((r) => r.secs).join(' '), where: l[0].where, put: avg(l, 'put'), picks: avg(l, 'picks'), bumps: avg(l, 'bumps'), knocks: avg(l, 'knocks'), lost: avg(l, 'lost'), flings: avg(l, 'flings'), grows: avg(l, 'grows'), wide: avg(l, 'ratio'), fx: avg(l, 'maxFx'), left: l.map((r) => r.left).join(' '), growth0: l[0].growth })));
+console.table(Object.values(keyed).map((l) => ({ event: l[0].event, balls: l[0].preset, ok: l[0].ok, secs: l.map((r) => r.secs).join(' '), where: l[0].where, far: l.map((r) => r.far).join(' '), put: avg(l, 'put'), picks: avg(l, 'picks'), bumps: avg(l, 'bumps'), knocks: avg(l, 'knocks'), lost: avg(l, 'lost'), flings: avg(l, 'flings'), grows: avg(l, 'grows'), wide: avg(l, 'ratio'), fx: avg(l, 'maxFx'), left: l.map((r) => r.left).join(' '), growth0: l[0].growth })));
 console.log(`${EVENTS.length} events, ${rows.length} full runs, ${Date.now() - t0} ms`);
 if (fails.length) { console.log('\nFAILURES (' + fails.length + '):\n' + [...new Set(fails)].slice(0, 60).join('\n')); process.exit(1); }
 console.log('all checks passed');

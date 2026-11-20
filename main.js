@@ -257,7 +257,9 @@ function aimSun(x, y, z, d) {                 // the shadow box follows the ball
 
 // ---------- terrain (data in terrain.js, painted by map.js) ----------
 const T = createTerrain(BOUNDS, scenery);
-const { NX, NZ, tH, tC, tR, tW, groundAt } = T;
+const { NX, NZ, tH, tC, tR, tW } = T;
+let iceOn = false;                    // Cold Snap: the sea has a frozen surface that everything stands on
+const groundAt = (x, z) => (iceOn && tW[T.index(x, z)] === 2 ? SEA_LEVEL + 0.04 : T.groundAt(x, z));
 let seaMesh = null;
 (function buildTerrainMesh() {
   // One mesh: a top face per tile, plus a cliff face wherever a tile's edge stands above its neighbour's.
@@ -894,7 +896,7 @@ const H = {
   cpuGoto(x, z, seconds = 20, chance = 0.7) { for (const R of rivals) if (rand() < chance) R.ev = { x, z, until: S.time + seconds }; },
   cpuRelease() { for (const R of rivals) R.ev = null; },
   forecast: () => S.forecast,
-  setIce(on) { MODS.iced = on; if (seaMesh) { seaMesh.material.color.setHex(on ? 0xe4f6fb : 0x3f9be0); seaMesh.material.opacity = on ? 0.93 : 0.72; } },
+  setIce(on) { MODS.iced = on; iceOn = on; if (seaMesh) { seaMesh.material.color.setHex(on ? 0xe4f6fb : 0x3f9be0); seaMesh.material.opacity = on ? 0.93 : 0.72; } },
   setSky(hex) { S.skyOverride = hex; },
 };
 
@@ -1514,7 +1516,7 @@ function update(dt) {
     const nx = dist > 1e-6 ? ox / dist : 1, nz = dist > 1e-6 ? oz / dist : 0;
     S.x -= nx * (reach - dist); S.z -= nz * (reach - dist);
     const vn = S.vx * nx + S.vz * nz;
-    if (vn > 0) { S.vx -= 1.6 * vn * nx; S.vz -= 1.6 * vn * nz; if (o.size > S.d * 0.8) { const n = crashLoss(vn, vmax); if (n) hardHit(nx, nz, vmax, n); } }      // only a sprint into something big knocks things loose
+    if (vn > 0) { S.vx -= 1.6 * vn * nx; S.vz -= 1.6 * vn * nz; if (o.size > S.d * 0.8 && !o.onBump) { const n = crashLoss(vn, vmax); if (n) hardHit(nx, nz, vmax, n); } }      // only a sprint into something big knocks things loose
     if (o.kind === 'creature' && o.ai === 'charge') {
       S.vx = -nx * vmax * 1.3; S.vz = -nz * vmax * 1.3;
       if (o.size > S.d) hardHit(nx, nz, vmax, 1);           // only a critter taller than the ball knocks anything off; smaller ones just shove
@@ -1566,7 +1568,7 @@ function update(dt) {
 }
 
 S.step = update; S.groundAt = groundAt; S.T = T;   // debug hooks
-S.rivals = rivals; S.H = H; S.timeUp = () => timeUp();
+S.rivals = rivals; S.H = H; S.markers = markers; S.timeUp = () => timeUp();
 S.render = () => { tickDexPop(0.016); if (S.state === 'battle' && battle) { battle.step(0.016); renderer.render(battle.scene, battle.camera); } else renderer.render(scene, camera); };   // draw one frame now (for background tabs)
 // Playtest helper: S.autoplay(seconds) rolls a simple bot through the level in fast-forward and returns a log.
 // It chases the nearest thing it can roll up on its own level, and wanders when stuck. Start a level first.

@@ -285,7 +285,7 @@ const meteor = {
         let x, z;
         if (inside.length && H.rand() < 0.55) { const b = pick(H, inside); x = b.x + (H.rand() - 0.5) * D.ri; z = b.z + (H.rand() - 0.5) * D.ri; }   // half are aimed at whoever is in there
         else { const a = H.rand() * TAU, r = Math.sqrt(H.rand()) * D.R; x = D.x + Math.cos(a) * r; z = D.z + Math.sin(a) * r; }
-        if (H.waterAt(x, z) === 2) continue;
+        if (!inMap(H, x, z) || H.waterAt(x, z) === 2) continue;
         meteor.launch(H, D, x, z, D.ri * (0.8 + H.rand() * 0.4), 1.2, false);
         break;
       }
@@ -608,7 +608,8 @@ const magpie = {
     D.hits = [];
     D.o = hold(ev, H.put(sp.id, x, z, { scale: size / sp.height }), { noPick: true, cool: 2.5, onBump: (ball, o) => { o.cool = 1.6; D.hits.push(ball); } });
     if (!D.o) { ev.done = true; return; }
-    D.speed = Math.max(3.2, H.topSpeed(s.med) * 0.85); D.stun = 0.7; D.boost = 4; D.cpuT = 0;       // it gets a head start, and bolts again after every ram D.caw = 0; D.tx = x; D.tz = z; D.ring = s.hub ? 36 : 95;
+    D.speed = Math.max(3.2, H.topSpeed(s.med) * 0.85); D.stun = 0.7; D.boost = 4; D.cpuT = 0;       // it gets a head start, and bolts again after every ram
+    D.caw = 0; D.tx = x; D.tz = z; D.ring = s.hub ? 36 : 95;
     const sack = new H.THREE.Group();
     H.P(sack, 'sph', 0x8a5a2b, [0.5, 0.55, 0.5], [0, 0, 0]);
     H.P(sack, 'cyl', 0xe8d9a8, [0.16, 0.2, 0.16], [0, 0.55, 0]);
