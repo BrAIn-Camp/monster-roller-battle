@@ -49,7 +49,7 @@ const PHASES = [
   { from: 300, name: 'Scramble',   sub: 'Race for the feast, then grow to 90 cm to climb out of the Green', sky: 0x9ad8f5 },
   { from: 225, name: 'Expedition', sub: 'Every habitat is open. New critters have arrived. Watch for events!', sky: 0xa8dcf0 },
   { from: 120, name: 'Frenzy',     sub: 'Two minutes left. More critters are appearing: build your team!', sky: 0xf6dca8 },
-  { from: 45,  name: 'Titan Hour', sub: 'Titans walk the outer lands, and everything rolled up so far is back!', sky: 0xf7a985 },
+  { from: 45,  name: 'Titan Hour', short: 'Titans', sub: 'Titans walk the outer lands, and everything rolled up so far is back!', sky: 0xf7a985 },
 ];
 const EVENT_TIMES = [262, 218, 176, 134, 94, 58];   // seconds left at which an event begins (each a few seconds either way)
 const KNOCK_LOSS = 3;     // things a ball drops when a heavier ball rams it
@@ -639,7 +639,7 @@ function updateHud() {
   if (S.mode === 'timed') {
     const rows = [{ tm: TEAMS[0], name: 'You', d: S.d, army: S.army }, ...rivals.map((R) => ({ tm: TEAMS[R.team], name: TEAMS[R.team].name, d: R.d, army: R.army }))];
     for (const r of rows) html += `<div class="sb"><span class="dot" style="background:${r.tm.css}"></span><b>${r.name}</b> ${fmtSize(r.d)} · ${r.army.length} critters · power ${Math.round(armyPower(r.army))}</div>`;
-    html += '<div class="sbnote">When time is up, everyone\'s critters fight.</div>';
+    html += '<div class="sbnote">When time is up, a wheel picks the arena and the teams fight.</div>';
   } else html += `<div>Critters rolled up: ${S.attachedCritters}</div>`;
   if ($('goals').innerHTML !== html) $('goals').innerHTML = html;
 }
@@ -1281,7 +1281,7 @@ function updatePhaseBar(force) {
   const el = $('phasebar');
   if (force || !el.dataset.built) {
     el.dataset.built = '1';
-    el.innerHTML = PHASES.map((ph, i) => { const end = PHASES[i + 1] ? PHASES[i + 1].from : 0; return `<div class="seg${i === S.phase ? ' on' : i < S.phase ? ' past' : ''}" style="flex:${ph.from - end}"><span>${ph.name}</span></div>`; }).join('') + '<i id="phasepin"></i>'
+    el.innerHTML = PHASES.map((ph, i) => { const end = PHASES[i + 1] ? PHASES[i + 1].from : 0; return `<div class="seg${i === S.phase ? ' on' : i < S.phase ? ' past' : ''}" style="flex:${ph.from - end}"><span>${ph.short || ph.name}</span></div>`; }).join('') + '<i id="phasepin"></i>'
       + S.evTimes.map((t) => `<b class="pip" style="left:${((LEVEL.seconds - t) / LEVEL.seconds * 100).toFixed(1)}%"></b>`).join('');
   }
   $('phasepin').style.left = ((LEVEL.seconds - Math.max(0, S.timeLeft)) / LEVEL.seconds * 100).toFixed(2) + '%';
@@ -1651,14 +1651,15 @@ function tickCountdown(dt) {
   }
   const q = boostQuality(), hint = $('boosthint');
   hint.textContent = q === 2 ? 'Perfect! Keep holding...' : q === 1 ? 'Good! Keep holding...' : q === -1 ? 'Too early - the ball will stall!' : S.cdHold !== null ? 'Too late for a boost' : 'Hold forward as the 2 lands for a rocket start';
-  hint.className = 'show q' + (q + 1);
+  hint.className = 'pill show q' + (q + 1);
   if (S.cdT >= 3) go(q);
 }
 function go(q) {
   S.state = 'play'; S.time = 0;
   showCount('GO!', 'go'); tone(880, 880, 0.55, 'square', 0.18);
   for (const l of $('lights').children) l.className = 'green';
-  setTimeout(() => { $('lights').className = ''; $('boosthint').className = ''; }, 900);
+  $('boosthint').className = 'pill';
+  setTimeout(() => { $('lights').className = ''; }, 900);
   const hx = Math.sin(S.heading), hz = Math.cos(S.heading), v = topSpeed(S.d) * RUN;
   if (q === 2) { S.boostT = 2.3; S.vx = hx * v * 1.2; S.vz = hz * v * 1.2; toast('ROCKET START!'); tone(200, 1400, 0.5, 'sawtooth', 0.12); }
   else if (q === 1) { S.boostT = 1.1; S.vx = hx * v * 0.8; S.vz = hz * v * 0.8; toast('Boost start!'); tone(200, 900, 0.35, 'sawtooth', 0.1); }
