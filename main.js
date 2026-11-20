@@ -1014,7 +1014,7 @@ function updateRivals(dt, frozen) {
   for (const R of rivals) {
     R.hitCool = Math.max(0, R.hitCool - dt);
     R.stallT = Math.max(0, R.stallT - dt); R.boostT = Math.max(0, R.boostT - dt);
-    const r = R.d / 2, vmax = frozen || R.stallT > 0 ? 0 : topSpeed(R.d) * CPU_SPEED * (R.boostT > 0 ? 2.3 : 1), g0 = groundAt(R.x, R.z);
+    const r = R.d / 2, vmax = frozen || R.stallT > 0 ? 0 : topSpeed(R.d) * CPU_SPEED * (R.boostT > 0 ? 2.3 : 1) * clamp(1.06 - 0.2 * Math.log2(R.d / S.d), 0.7, 1.06), g0   /* a CPU well ahead of the player eases off; one behind hurries */ = groundAt(R.x, R.z);
     // choose what to chase: the nearest thing it can roll up on its own level, preferring critters
     R.retarget -= dt;
     if (R.wander > 0) { R.wander -= dt; R.target = null; }
