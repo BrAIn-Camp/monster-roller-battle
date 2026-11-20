@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Arena battle test</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #2b2540; font-family: "Trebuchet MS", "Segoe UI", sans-serif; }
+  canvas#c { display: block; width: 100vw; height: 100vh; }
+  #info { position: fixed; left: 50%; bottom: 6px; transform: translateX(-50%); color: #fff; font-size: 12px; font-weight: 700; opacity: .75; z-index: 50; white-space: nowrap; text-shadow: 0 1px 0 #000; pointer-events: none; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="info"></div>
+<script src="../../roster.js"></script>
+<script type="module" src="./test.js"></script>
+</body>
+</html>

@@ -13,7 +13,7 @@
   #size small { display: block; font-size: 12px; font-weight: 600; opacity: .7; }
   #bar { height: 8px; border: 2px solid #2b2540; border-radius: 6px; margin-top: 4px; overflow: hidden; background: #fff; }
   #barfill { height: 100%; width: 0; background: #ffb52e; }
-  #seek { position: absolute; left: 50%; top: 66px; transform: translateX(-50%); font-size: 13px; font-weight: 700; white-space: nowrap; display: none; padding: 4px 12px; }
+  #seek { position: absolute; left: 50%; top: 124px; transform: translateX(-50%); font-size: 13px; font-weight: 700; white-space: nowrap; display: none; padding: 4px 12px; }
   #seek .arr { display: inline-block; font-size: 18px; font-weight: 900; }
   #seek .type { display: inline-block; padding: 0 8px; border-radius: 8px; color: #fff; font-size: 11px; }
   #timer { position: absolute; left: 50%; top: 16px; transform: translateX(-50%); font-size: 26px; font-weight: 800; min-width: 80px; text-align: center; }
@@ -51,8 +51,43 @@
   .tag { position: absolute; transform: translate(-50%, -100%); color: #fff; font-size: 12px; font-weight: 800; padding: 2px 9px; border-radius: 9px; border: 2px solid #2b2540; text-align: center; white-space: nowrap; display: none; text-shadow: 0 1px 0 rgba(0,0,0,.35); }
   .tag i { position: absolute; left: 50%; top: 100%; transform: translateX(-50%); font-style: normal; color: #2b2540; font-size: 13px; line-height: 1; }
   .tag.edge { transform: translate(-50%, -50%); opacity: .92; }
-  #toast { position: absolute; left: 50%; top: 104px; transform: translateX(-50%); font-size: 20px; font-weight: 800; background: #ffe169; opacity: 0; transition: opacity .3s; }
+  #toast { position: absolute; left: 50%; top: 162px; transform: translateX(-50%); font-size: 20px; font-weight: 800; background: #ffe169; opacity: 0; transition: opacity .3s; }
   #toast.show { opacity: 1; }
+  #timer.hot { background: #ff6a4a; color: #fff; animation: hot .5s infinite alternate; }
+  @keyframes hot { from { transform: translateX(-50%) scale(1); } to { transform: translateX(-50%) scale(1.12); } }
+  #phasebar { position: absolute; left: 50%; top: 64px; transform: translateX(-50%); width: min(420px, 60vw); height: 20px; display: flex; border: 3px solid #2b2540; border-radius: 11px; background: #fff; box-shadow: 0 3px 0 rgba(43,37,64,.35); }
+  #phasebar .seg { position: relative; border-right: 2px solid #2b2540; font-size: 10px; font-weight: 800; text-align: center; line-height: 20px; white-space: nowrap; overflow: hidden; color: rgba(43,37,64,.55); letter-spacing: .5px; text-transform: uppercase; }
+  #phasebar .seg:first-child { border-radius: 8px 0 0 8px; } #phasebar .seg:nth-last-of-type(1) { border-right: 0; }
+  #phasebar .seg.past { background: #d8d4e0; } #phasebar .seg.on { background: #ffe169; color: #2b2540; }
+  #phasebar .seg:nth-child(4) { border-right: 0; border-radius: 0 8px 8px 0; } #phasebar .seg:nth-child(4).on { background: #ff8a6a; color: #fff; }
+  #phasepin { position: absolute; top: -6px; width: 4px; height: 32px; margin-left: -2px; background: #2b2540; border-radius: 2px; }
+  #phasebar .pip { position: absolute; top: 22px; width: 8px; height: 8px; margin-left: -4px; background: #ff5a7a; border: 2px solid #2b2540; border-radius: 50%; }
+  #evchip { position: absolute; left: 50%; top: 96px; transform: translateX(-50%); font-size: 13px; font-weight: 800; padding: 3px 12px 5px; display: none; min-width: 180px; text-align: center; }
+  #evbar { height: 5px; background: #e6e2ee; border-radius: 3px; overflow: hidden; margin-top: 2px; } #evfill { height: 100%; width: 100%; }
+  #banner { position: absolute; left: 50%; top: 21%; transform: translateX(-50%); text-align: center; opacity: 0; white-space: nowrap; }
+  #banner .kick { font-size: 15px; font-weight: 800; color: #fff; letter-spacing: 3px; text-shadow: 0 2px 0 #2b2540; }
+  #banner .ttl { display: inline-block; font-size: 40px; font-weight: 800; padding: 2px 26px; border: 4px solid #2b2540; border-radius: 18px; box-shadow: 0 6px 0 rgba(43,37,64,.4); letter-spacing: 2px; transform: rotate(-1.5deg); }
+  #banner .sub2 { margin-top: 10px; font-size: 16px; font-weight: 700; color: #fff; text-shadow: 0 2px 0 #2b2540, 0 0 10px rgba(43,37,64,.7); white-space: normal; max-width: 80vw; }
+  #banner .sub2 b { color: #ffe169; text-transform: capitalize; }
+  #banner.show { animation: bannerin 4.6s ease-out; }
+  @keyframes bannerin { 0% { opacity: 0; transform: translateX(-50%) scale(1.6); } 8% { opacity: 1; transform: translateX(-50%) scale(.96); } 12% { transform: translateX(-50%) scale(1); } 85% { opacity: 1; } 100% { opacity: 0; } }
+  #count { position: fixed; left: 50%; top: 40%; transform: translate(-50%, -50%); font-size: 190px; font-weight: 800; color: #fff; -webkit-text-stroke: 8px #2b2540; paint-order: stroke fill; text-shadow: 0 10px 0 rgba(43,37,64,.45); opacity: 0; pointer-events: none; white-space: nowrap; }
+  #count.show { animation: countpop .95s ease-out; }
+  #count.go { color: #7be36a; } #count.go.show { animation: countpop 1.1s ease-out; }
+  #count.final { font-size: 150px; color: #ff8a6a; top: 30%; }
+  #count.timeup { font-size: 130px; color: #ffe169; } #count.timeup.show { animation: timeup 2.6s ease-out forwards; }
+  @keyframes countpop { 0% { opacity: 0; transform: translate(-50%, -50%) scale(2.4); } 18% { opacity: 1; transform: translate(-50%, -50%) scale(.9); } 28% { transform: translate(-50%, -50%) scale(1); } 75% { opacity: 1; } 100% { opacity: 0; transform: translate(-50%, -50%) scale(.8); } }
+  @keyframes timeup { 0% { opacity: 0; transform: translate(-50%, -50%) scale(3) rotate(-8deg); } 12% { opacity: 1; transform: translate(-50%, -50%) scale(.92) rotate(-3deg); } 18% { transform: translate(-50%, -50%) scale(1) rotate(-3deg); } 100% { opacity: 1; transform: translate(-50%, -50%) scale(1.05) rotate(-3deg); } }
+  #lights { position: fixed; left: 50%; top: 14%; transform: translateX(-50%); display: none; gap: 14px; padding: 10px 16px; background: #2b2540; border-radius: 22px; box-shadow: 0 6px 0 rgba(43,37,64,.4); }
+  #lights.show { display: flex; }
+  #lights i { width: 38px; height: 38px; border-radius: 50%; background: #55506a; border: 3px solid #17131f; }
+  #lights i.red { background: #ff4a4a; box-shadow: 0 0 18px #ff4a4a; } #lights i.green { background: #5fe35a; box-shadow: 0 0 22px #5fe35a; }
+  #boosthint { position: fixed; left: 50%; top: 62%; transform: translateX(-50%); font-size: 18px; font-weight: 800; display: none; }
+  #boosthint.show { display: block; } #boosthint.q0 { background: #ffb0a0; } #boosthint.q2 { background: #ffe169; } #boosthint.q3 { background: #8fe0ff; }
+  #mini { position: absolute; left: 16px; bottom: 16px; width: 170px; height: 170px; border-radius: 50%; border: 4px solid #2b2540; box-shadow: 0 4px 0 rgba(43,37,64,.35); background: #4a96d6; }
+  #introcard { position: fixed; left: 50%; top: 16%; transform: translateX(-50%); text-align: center; opacity: 0; pointer-events: none; color: #fff; text-shadow: 0 3px 0 #2b2540, 0 0 14px rgba(43,37,64,.6); white-space: nowrap; }
+  #introcard b { display: block; font-size: 54px; letter-spacing: 3px; } #introcard span { font-size: 20px; font-weight: 700; }
+  #introcard.show { animation: areain 5s ease-out; }
   .overlay { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(43,37,64,.45); }
   .overlay.open { display: flex; }
   .card { background: #fffaf0; border: 4px solid #2b2540; border-radius: 24px; padding: 24px 28px; max-width: min(760px, 92vw); max-height: 86vh; overflow: auto; box-shadow: 0 8px 0 rgba(43,37,64,.4); text-align: center; }
@@ -90,7 +125,11 @@
   <div id="size" class="pill">45.0 cm<small>ball size</small><div id="bar"><div id="barfill"></div></div></div>
   <div id="seek" class="pill"></div>
   <button id="hudMute" class="alt">Sound: on (M)</button>
-  <div id="timer" class="pill">8:00</div>
+  <div id="timer" class="pill">5:00</div>
+  <div id="phasebar"></div>
+  <div id="evchip" class="pill"><span id="evname"></span><div id="evbar"><div id="evfill"></div></div></div>
+  <div id="banner"></div>
+  <canvas id="mini" width="170" height="170"></canvas>
   <div id="goals" class="pill"></div>
   <div id="dexpop" class="pill"><canvas id="dexcv" width="300" height="300"></canvas><div id="dexinfo"></div></div>
   <div id="tag1" class="tag"></div><div id="tag2" class="tag"></div><div id="tag3" class="tag"></div>
@@ -98,6 +137,11 @@
   <div id="toast" class="pill"></div>
   <div id="pick" class="pill"></div>
 </div>
+
+<div id="count"></div>
+<div id="lights"><i></i><i></i><i></i></div>
+<div id="boosthint" class="pill"></div>
+<div id="introcard"><b>CROSSWAY CONTINENT</b><span>Four teams. Five minutes. One feast in the middle.</span></div>
 
 <div id="battleui"><div id="battlebars"></div><div id="battlebanner"></div><button id="btnSkip" class="alt">Skip to result (Space)</button></div>
 
@@ -120,7 +164,9 @@
       <div><kbd>M</kbd> mute · add <kbd>?mute</kbd> to the address to start silent</div>
       <div><kbd>T</kbd> switch steering (now: <span id="steer">simple</span>) · <kbd>Esc</kbd> / Start to pause</div>
       <div>Gamepad on this screen: A = play a round, X = free roam</div>
-      <div><b>The round</b> — you are Red. Three CPU teams (Green, Yellow, Blue) roll on the same island. Ram a ball to knock critters off it. When time is up, every team's critters fight it out.</div>
+      <div><b>Rocket start</b> — hold forward as the countdown's <b>2</b> lands and keep holding. Too early and the ball stalls.</div>
+      <div><b>The round</b> — you are Red. Three CPU teams (Green, Yellow, Blue) start round the same feast. Five minutes in four phases, with events on the way (follow the beam of light and the <b>!</b> on the map). Ram a ball to knock critters off it.</div>
+      <div><b>The finale</b> — a wheel picks an arena that favours three types. The armies fight on their own; steer your ball (<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>, <kbd>Shift</kbd> to dash) to scoop enemy critters out of the fight.</div>
     </div>
   </div>
 </div>
@@ -151,7 +197,7 @@
   </div>
 </div>
 
-<script src="roster.js?v=7"></script>
+<script src="roster.js?v=8"></script>
 <script type="module" src="main.js"></script>
 </body>
 </html>

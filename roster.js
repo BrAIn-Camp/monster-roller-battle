@@ -85,8 +85,8 @@
 
     // The round. Free roam uses the same map with no clock, rivals or battle.
     LEVEL: {
-      name: 'The Five Rings',
-      seconds: 180,               // three minutes: new critters at each minute, everything back for the last 30 seconds
+      name: 'Crossway Continent',
+      seconds: 300,               // five minutes in four phases (see PHASES in main.js)
       targetDiameter: 0,          // 0 = no size target: a round is won in the battle afterwards
       challenges: [],             // optional extra goals, e.g. { kind: 'type', value: 'grass', count: 6, label: 'Hold 6 grass types' }
     },
