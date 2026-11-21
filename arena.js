@@ -134,7 +134,8 @@ const STYLE = `
 .ar-lucky{background:#ffe169;border:2px solid #2b2540;border-radius:.6em;padding:0 .5em;font-size:.8em;margin-left:.4em}
 `;
 function injectStyle() { if (!HAS_DOM || document.getElementById('ar-style')) return; const s = document.createElement('style'); s.id = 'ar-style'; s.textContent = STYLE; document.head.appendChild(s); }
-const teamLabel = (tm) => (tm.human ? 'You' : tm.name);
+const isMe = (tm) => (tm.me === undefined ? !!tm.human : !!tm.me);       // human: steered by a player; me: the player at this screen
+const teamLabel = (tm) => (isMe(tm) ? 'You' : tm.name);
 
 // ====================================================================================================
 //  THE WHEEL
@@ -221,8 +222,10 @@ const CORNERS = [[-1, 1], [-1, -1], [1, -1], [1, 1]];          // team 0 bottom-
 const backOut = (u) => 1 + 2.7 * (u - 1) ** 3 + 1.7 * (u - 1) ** 2;
 const bounceOut = (u) => { const n = 7.5625, d = 2.75; return u < 1 / d ? n * u * u : u < 2 / d ? n * (u -= 1.5 / d) * u + 0.75 : u < 2.5 / d ? n * (u -= 2.25 / d) * u + 0.9375 : n * (u -= 2.625 / d) * u + 0.984375; };
 
-export function createBattle({ arena = ARENAS[0], teams = [], buildMesh, buildBall, buildTrainer, poseTrainer, input, sfx } = {}) {
-  const rand = Math.random, NT = teams.length;
+// rand: the dice (a seeded one in multiplayer, so every machine fights the same fight); input(team) gives a player's stick;
+// noSkip: no skipping (a multiplayer fight is stepped by the host).
+export function createBattle({ arena = ARENAS[0], teams = [], buildMesh, buildBall, buildTrainer, poseTrainer, input, sfx, rand: dice, noSkip = false } = {}) {
+  const rand = dice || Math.random, NT = teams.length;
   let quiet = false, auto = false, destroyed = false;           // quiet: no effects or sound (skip); auto: the human's ball is CPU-driven
   const tone = (...a) => { if (quiet) return; try { if (sfx && sfx.tone) sfx.tone(...a); } catch (e) { /* no audio */ } };
   const cry = (spec, vol) => { if (quiet) return; try { if (sfx && sfx.cry) sfx.cry(spec, vol); } catch (e) { /* no audio */ } };
@@ -442,7 +445,7 @@ export function createBattle({ arena = ARENAS[0], teams = [], buildMesh, buildBa
     b.trainer = buildTrainer ? buildTrainer(k) : null; if (b.trainer) scene.add(b.trainer);
     b.ring = put(GEO.ring, glass(tm.hex, 0.9), 0, 0.03, 0); b.stars = new THREE.Group(); b.stars.visible = false; scene.add(b.stars);
     for (let i = 0; i < 3; i++) put(GEO.rock, bas(0xffe169), Math.cos(i * 2.094), 0, Math.sin(i * 2.094), 0.45, 0.45, 0.45, 0, b.stars);
-    if (tm.human) {                                             // the human's ball: a bobbing arrow and a dash cooldown bar
+    if (isMe(tm)) {                                             // the player's own ball: a bobbing arrow and a dash cooldown bar
       b.arrow = put(GEO.cone, bas(0xffe169), 0, 0, 0, 1, 1.4, 1); b.arrow.rotation.x = Math.PI;
       b.cdBg = put(GEO.box, bas(0x2b2540), 0, 0.04, 0, 1, 0.02, 0.4); b.cdFill = put(GEO.box, bas(0xffe169), 0, 0.06, 0, 1, 0.02, 0.24);
     }
@@ -653,7 +656,7 @@ export function createBattle({ arena = ARENAS[0], teams = [], buildMesh, buildBa
       }
       b.ax += (ix - b.ax) * Math.min(1, dt * 7); b.az += (iz - b.az) * Math.min(1, dt * 7); ix = b.ax; iz = b.az;      // reaction lag
     } else {
-      const s = (input && input()) || {}; ix = +s.x || 0; iz = +s.z || 0; dash = !!s.dash;
+      const s = (input && input(b.team)) || {}; ix = +s.x || 0; iz = +s.z || 0; dash = !!s.dash;
       const m = Math.hypot(ix, iz); if (m > 1) { ix /= m; iz /= m; }
     }
     if (dash && b.dashCd <= 0 && b.stun <= 0) {
@@ -782,7 +785,7 @@ export function createBattle({ arena = ARENAS[0], teams = [], buildMesh, buildBa
     const root = el('div', 'ar-root', document.body);
     hud = { root, panels: [], flags: [] };
     teams.forEach((tm, k) => {
-      const p = el('div', `ar-team ar-pill ar-c${k % 4}${tm.human ? ' ar-me' : ''}`, root);
+      const p = el('div', `ar-team ar-pill ar-c${k % 4}${isMe(tm) ? ' ar-me' : ''}`, root);
       el('div', '', p, `<i class="ar-dot" style="background:${tm.css}"></i>${teamLabel(tm)}<span class="ar-out">OUT</span>`);
       const fill = el('i', '', el('div', 'ar-hp', p)); fill.style.background = tm.css;
       const row = el('div', 'ar-row', p), alive = el('span', '', row), sc = el('span', '', row), fv = el('span', 'ar-fv', row);
@@ -794,7 +797,7 @@ export function createBattle({ arena = ARENAS[0], teams = [], buildMesh, buildBa
     el('div', 'ar-pill ar-name', top, `${arena.name} ${arena.types.map(chip).join('')}<small>${arena.hazardName}</small>`);
     hud.intro = el('div', 'ar-pill ar-intro', root, `<h3>${arena.name}</h3><div>Favoured: ${arena.types.map(chip).join('')}</div><p>${arena.blurb}</p>`);
     hud.big = el('div', 'ar-big', root); hud.sub = el('div', 'ar-pill ar-sub', root);
-    hud.skip = el('div', 'ar-pill ar-skip', root, 'Skip (Space)');
+    hud.skip = el('div', 'ar-pill ar-skip', root, 'Skip (Space)'); if (noSkip) hud.skip.style.display = 'none';
     for (let i = 0; i < 8; i++) pops.push(el('div', 'ar-pop', root));
   }
   function big(text, anim, small) { if (!hud) return; hud.big.textContent = text; hud.big.classList.toggle('ar-small', !!small); hud.big.classList.remove('ar-punch', 'ar-stay'); replay(hud.big, anim); }
@@ -890,11 +893,11 @@ export function createBattle({ arena = ARENAS[0], teams = [], buildMesh, buildBa
     camera.position.set(camBase.x + (rand() - 0.5) * shake * 0.6, camBase.y + (rand() - 0.5) * shake * 0.6, camBase.z);
     hudT -= dt; if (hudT <= 0) { hudT = 0.1; drawHud(); }
   }
-  const winText = () => (winner < 0 ? 'Nobody is left standing' : teams[winner].human ? 'You win!' : `${teams[winner].name} wins!`);
+  const winText = () => (winner < 0 ? 'Nobody is left standing' : isMe(teams[winner]) ? 'You win!' : `${teams[winner].name} wins!`);
   function celebrate() {
     cheering = true;
     if (hud) { big(winText(), 'ar-stay', true); if (timedOut) { hud.sub.textContent = 'Time! Decided on health remaining'; hud.sub.classList.add('ar-on'); } }
-    if (winner >= 0) { const s = teams[winner].human ? 1 : 0.8; [523, 659, 784, 1047].forEach((f, i) => tone(f * s, f * s, i === 3 ? 0.5 : 0.14, 'square', 0.16, i * 0.13)); }
+    if (winner >= 0) { const s = isMe(teams[winner]) ? 1 : 0.8; [523, 659, 784, 1047].forEach((f, i) => tone(f * s, f * s, i === 3 ? 0.5 : 0.14, 'square', 0.16, i * 0.13)); }
   }
   function finishNow() { phase = 'done'; finished = true; }
 

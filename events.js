@@ -21,8 +21,9 @@ const landMover = (sp) => sp.move === 'walk' || sp.move === 'hop' || sp.move ===
 const flier = (sp) => sp.move === 'fly' || sp.move === 'float';
 const isFree = (o) => !!o && !o.on && !o.gone;
 const pick = (H, list) => list[Math.min(list.length - 1, Math.floor(H.rand() * list.length))];
-const playerOf = (H) => H.balls().find((b) => H.isPlayer(b)) || H.balls()[0];
-const nearPlayer = (H, x, z, r) => { const p = playerOf(H); return Math.hypot(p.x - x, p.z - z) < r; };
+// The balls steered by people (one in single player; in multiplayer, everybody who is not a CPU).
+const humansOf = (H) => { const hs = H.balls().filter((b) => (H.isHuman ? H.isHuman(b) : H.isPlayer(b))); return hs.length ? hs : [H.balls()[0]]; };
+const nearPlayer = (H, x, z, r) => humansOf(H).some((p) => Math.hypot(p.x - x, p.z - z) < r);
 const jingle = (H, notes, type = 'triangle', vol = 0.12, gap = 0.1, dur = 0.16) => notes.forEach((f, i) => H.sfx.tone(f, f, dur, type, vol, i * gap));
 
 // ---------- the balls as they are now ----------
@@ -31,7 +32,7 @@ const jingle = (H, notes, type = 'triangle', vol = 0.12, gap = 0.1, dur = 0.16) 
 function sizes(H) {
   const ds = H.balls().map((b) => b.d).sort((a, b) => a - b), n = ds.length;
   const med = n % 2 ? ds[(n - 1) / 2] : (ds[n / 2 - 1] + ds[n / 2]) / 2;
-  const go = Math.min(ds[Math.max(0, Math.ceil(n / 2) - 1)], playerOf(H).d);
+  const go = Math.min(ds[Math.max(0, Math.ceil(n / 2) - 1)], ...humansOf(H).map((b) => b.d));
   return { min: ds[0], max: ds[n - 1], med, go, hub: go < 0.95 };
 }
 function centroid(H) { let x = 0, z = 0; const bs = H.balls(); for (const b of bs) { x += b.x; z += b.z; } return [x / bs.length, z / bs.length]; }
@@ -615,7 +616,7 @@ const magpie = {
     H.P(sack, 'cyl', 0xe8d9a8, [0.16, 0.2, 0.16], [0, 0.55, 0]);
     D.sack = D.fx.add(sack); D.size = size;
     magpie.flee(H, D);
-    const who = H.isPlayer(v) ? '<b>YOU</b>' : `the <b>${H.teamOf(v).name}</b> team`;
+    const who = H.who ? H.who(v) : H.isPlayer(v) ? '<b>YOU</b>' : `the <b>${H.teamOf(v).name}</b> team`;
     ev.sub = `A thief stole ${D.n0} critters from ${who}! Ram it to shake them loose: anyone can grab them`;
     mk(H, ev, 'magpie', x, z, { label: 'Thief', color: hexOf(magpie.color), radius: Math.max(3, size * 1.5) });
     H.cpuGoto(x, z, magpie.duration, 0.75);

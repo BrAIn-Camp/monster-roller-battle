@@ -140,7 +140,32 @@
   button:hover { background: #fff1a8; }
   button:active { transform: translateY(3px); box-shadow: 0 1px 0 #2b2540; }
   button.alt { background: #bfe7ff; }
-  .keys { text-align: left; display: inline-block; font-size: 14px; line-height: 1.7; margin-top: 10px; }
+  /* the title screen: the logo over the turning island, two big choices, and a panel for whichever was chosen */
+  #menu { flex-direction: column; overflow: auto; background: linear-gradient(180deg, rgba(43,37,64,.05) 0%, rgba(43,37,64,.12) 45%, rgba(43,37,64,.55) 100%); }
+  .title { margin: auto; padding: 20px 16px; text-align: center; }
+  .logo { margin: 0; font-size: clamp(56px, 11.5vw, 136px); line-height: .88; font-weight: 800; letter-spacing: 2px; color: #fff; -webkit-text-stroke: 12px #2b2540; paint-order: stroke fill; text-shadow: 0 10px 0 rgba(43,37,64,.45); transform: rotate(-3deg); transition: font-size .2s; }
+  .logo span { display: block; } .logo span + span { color: #ffe169; margin-left: .5em; }
+  .tagline { margin: 26px 0 20px; color: #fff; font-size: 20px; font-weight: 800; letter-spacing: .5px; text-shadow: 0 2px 0 #2b2540, 0 0 12px rgba(43,37,64,.7); }
+  #menu.inner .logo { font-size: clamp(34px, 5.5vw, 64px); -webkit-text-stroke-width: 8px; text-shadow: 0 6px 0 rgba(43,37,64,.45); } #menu.inner .tagline { display: none; } #menu.inner .mv { margin-top: 22px; }
+  .mv { display: none; } .mv.on { display: block; } .mv.panel.on { display: inline-block; }
+  button.big { display: block; min-width: 290px; margin: 12px auto; padding: 14px 34px; font-size: 26px; border-width: 4px; border-radius: 20px; box-shadow: 0 6px 0 #2b2540; }
+  button.big:active { transform: translateY(5px); box-shadow: 0 1px 0 #2b2540; }
+  .minor { margin-top: 16px; } .minor button, button.small { font-size: 15px; padding: 7px 14px; margin: 4px; background: #fff; box-shadow: 0 3px 0 #2b2540; }
+  #best { margin-top: 12px; color: #fff; opacity: 1; font-weight: 700; text-shadow: 0 1px 0 #2b2540, 0 0 8px rgba(43,37,64,.8); min-height: 18px; }
+  .panel { min-width: min(360px, 84vw); padding: 18px 26px 16px; background: #fffaf0; border: 4px solid #2b2540; border-radius: 24px; box-shadow: 0 8px 0 rgba(43,37,64,.4); }
+  .panel h2 { margin-bottom: 6px; } .panel .back { background: #fff; font-size: 15px; padding: 7px 16px; box-shadow: 0 3px 0 #2b2540; }
+  .joinrow { display: flex; justify-content: center; align-items: center; gap: 4px; margin-top: 6px; }
+  #joinCode { width: 150px; padding: 8px 4px 8px 12px; font: inherit; font-size: 26px; font-weight: 800; text-align: center; letter-spacing: 8px; text-transform: uppercase; color: #2b2540; background: #fff; border: 3px solid #2b2540; border-radius: 14px; outline: none; }
+  #joinCode::placeholder { color: #c9c4d4; } #joinCode:focus { background: #fff6cc; }
+  .or { margin: 14px 0 2px; font-size: 12px; font-weight: 800; letter-spacing: 2px; text-transform: uppercase; opacity: .5; }
+  #netMsg, #lobbyMsg { min-height: 18px; max-width: 340px; margin: 8px auto; }
+  #roomCode { display: inline-block; margin-left: 6px; padding: 0 6px 0 14px; letter-spacing: 8px; background: #ffe169; border: 3px solid #2b2540; border-radius: 12px; user-select: all; }
+  .seat { display: grid; grid-template-columns: 22px 76px 1fr; align-items: center; margin: 6px 0; padding: 7px 12px; text-align: left; font-weight: 800; background: #fff; border: 3px solid #2b2540; border-radius: 12px; }
+  .seat span { text-align: right; font-weight: 700; opacity: .55; } .seat.in { background: #fff6cc; } .seat.in span { opacity: 1; }
+  #seats { margin: 10px 0 6px; }
+  .keys { display: grid; grid-template-columns: auto 1fr; gap: 7px 16px; text-align: left; font-size: 15px; margin: 8px 0 14px; align-items: baseline; }
+  .keys b { text-align: right; white-space: nowrap; }
+  .how { text-align: left; font-size: 15px; line-height: 1.5; margin: 0 0 12px; padding-left: 20px; }
   kbd { background: #fff; border: 2px solid #2b2540; border-radius: 6px; padding: 0 6px; font: inherit; font-size: 12px; font-weight: 800; }
   #dexgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 10px; margin: 12px 0; }
   #dex .card { width: min(1100px, 94vw); max-width: none; }
@@ -178,7 +203,7 @@
   <canvas id="mini" width="170" height="170"></canvas>
   <div id="goals" class="pill"></div>
   <div id="dexpop" class="pill"><canvas id="dexcv" width="300" height="300"></canvas><div id="dexinfo"></div></div>
-  <div id="tag1" class="tag"></div><div id="tag2" class="tag"></div><div id="tag3" class="tag"></div>
+  <div id="tag0" class="tag"></div><div id="tag1" class="tag"></div><div id="tag2" class="tag"></div><div id="tag3" class="tag"></div>
   <div id="area"></div>
   <div id="toast" class="pill"></div>
   <div id="pick" class="pill"></div>
@@ -193,35 +218,72 @@
 <div id="battleui"><div id="battlebars"></div><div id="battlebanner"></div><button id="btnSkip" class="alt">Skip to result (Space)</button></div>
 
 <div id="menu" class="overlay open">
-  <div class="card">
-    <h1>Critter Roller</h1>
-    <p class="sub" id="levelname"></p>
-    <p id="best" class="sub"></p>
-    <div>
-      <button id="btnTimed">Play a round</button>
+  <div class="title">
+    <h1 class="logo"><span>Critter</span><span>Roller</span></h1>
+    <p class="tagline">Roll them up. Outgrow everyone. Win the arena.</p>
+
+    <div id="mvHome" class="mv on">
+      <button id="btnSolo" class="big">Single player</button>
+      <button id="btnMulti" class="big alt">Multiplayer</button>
+      <div class="minor"><button id="btnDex">Critter dex</button><button id="btnHelp">How to play</button><button id="btnMute">Sound: on (M)</button></div>
+      <p id="best" class="sub"></p>
+    </div>
+
+    <div id="mvSolo" class="mv panel">
+      <h2>Single player</h2>
+      <div class="diffrow">CPU teams <button id="diff_easy">Easy</button><button id="diff_normal">Normal</button><button id="diff_hard">Hard</button></div>
+      <button id="btnTimed" class="big">Play a round</button>
       <button id="btnFree" class="alt">Free roam</button>
-      <button id="btnDex" class="alt">Critter dex</button>
-      <button id="btnMute" class="alt">Sound: on (M)</button>
+      <button class="back" data-back>Back</button>
     </div>
-    <div class="diffrow">CPU teams: <button id="diff_easy">Easy</button><button id="diff_normal">Normal</button><button id="diff_hard">Hard</button></div>
+
+    <div id="mvMulti" class="mv panel">
+      <h2>Multiplayer</h2>
+      <div class="or">Play with anyone</div>
+      <button id="btnQuick" class="big">Quick play</button>
+      <div class="or">Play with friends</div>
+      <button id="btnHost" class="alt">Host a private room</button>
+      <div class="joinrow"><input id="joinCode" maxlength="4" placeholder="CODE" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="Room code"><button id="btnJoin" class="alt">Join</button></div>
+      <p id="netMsg" class="sub"></p>
+      <button class="back" data-back>Back</button>
+    </div>
+
+    <div id="mvLobby" class="mv panel">
+      <h2 id="roomTitle">Room<span id="roomCode"></span></h2>
+      <button id="btnCopy" class="small">Copy invite link</button>
+      <div id="seats"></div>
+      <div class="diffrow" id="lobbyDiff">CPU teams <button id="ldiff_easy">Easy</button><button id="ldiff_normal">Normal</button><button id="ldiff_hard">Hard</button></div>
+      <button id="btnStartMp" class="big">Start game</button>
+      <p id="lobbyMsg" class="sub"></p>
+      <button id="btnLeave" class="back">Leave room</button>
+    </div>
+  </div>
+</div>
+
+<div id="help" class="overlay">
+  <div class="card">
+    <h2>How to play</h2>
+    <ol class="how">
+      <li>Roll over anything up to half your ball's size to pick it up and grow.</li>
+      <li>Ram a smaller ball to knock its critters loose. Follow the beam of light to events.</li>
+      <li>After five minutes your critters fight in an arena. Steer your ball to scoop up enemies.</li>
+    </ol>
     <div class="keys">
-      <div><b>Simple steering</b> — <kbd>W</kbd><kbd>S</kbd> roll, <kbd>A</kbd><kbd>D</kbd> turn (or arrows); gamepad left stick</div>
-      <div><b>Tank steering</b> — <kbd>W</kbd><kbd>S</kbd> left hand, <kbd>I</kbd><kbd>K</kbd> right hand; gamepad both sticks</div>
-      <div><b>Charge dash</b> — hold <kbd>Shift</kbd> (gamepad A or RT) to wind up: the ball slows to a crawl and spins, spending dash energy. Let go to burst forward; the longer the wind-up, the longer and faster the burst. Energy refills over time and with every thing you roll up. A burst into another ball knocks twice as much off it.</div>
-      <div><b>Mouse</b> — moves the camera: left and right swing it round the ball, up and down tilt it, wheel zooms. Click to capture the pointer so it never runs out of screen.</div>
-      <div><kbd>M</kbd> mute · add <kbd>?mute</kbd> to the address to start silent</div>
-      <div><kbd>T</kbd> switch steering (now: <span id="steer">simple</span>) · <kbd>Esc</kbd> / Start to pause</div>
-      <div>Gamepad on this screen: A = play a round, X = free roam</div>
-      <div><b>Rocket start</b> — hold forward as the countdown's <b>2</b> lands and keep holding. Too early and the ball stalls.</div>
-      <div><b>The round</b> — you are Red. Three CPU teams (Green, Yellow, Blue) start round the same feast. Five minutes in four phases, with events on the way (follow the beam of light and the <b>!</b> on the map). Ram a ball to knock critters off it.</div>
-      <div><b>The finale</b> — a wheel picks an arena that favours three types. The armies fight on their own; steer your ball (<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>, <kbd>Shift</kbd> to dash) to scoop enemy critters out of the fight.</div>
+      <b>Roll</b><span><kbd>W</kbd> <kbd>S</kbd> or the arrow keys</span>
+      <b>Turn</b><span><kbd>A</kbd> <kbd>D</kbd> or move the mouse (click to capture it)</span>
+      <b>Dash</b><span>hold <kbd>Shift</kbd> to wind up, let go to burst</span>
+      <b>Rocket start</b><span>hold forward as the countdown's <b>2</b> lands</span>
+      <b>Zoom</b><span>mouse wheel</span>
+      <b>Menu</b><span><kbd>Esc</kbd> &nbsp; mute <kbd>M</kbd> &nbsp; steering <kbd>T</kbd> (now: <span id="steer">simple</span>)</span>
+      <b>Gamepad</b><span>left stick to roll, A or RT to dash, Start for the menu</span>
     </div>
+    <button id="btnHelpBack">Back</button>
   </div>
 </div>
 
 <div id="pause" class="overlay">
   <div class="card">
-    <h2>Paused</h2>
+    <h2 id="pauseTitle">Paused</h2>
     <button id="btnResume">Resume</button>
     <button id="btnMute2" class="alt">Sound: on (M)</button>
     <button id="btnEnd" class="alt">End run</button>

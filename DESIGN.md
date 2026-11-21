@@ -186,3 +186,18 @@ Asked for as a later goal. What was done toward it: the player and the CPU teams
 (`give`, `knock`, `growBall`, `takeFrom`), events only touch the game through `H`, the map layout is seeded so every client builds the
 same world, and the arena takes its human input as a function. What it still needs: one authoritative simulation with the player's
 ball moved out of the special `S` object into the same shape as a rival, seeded critter spawning, and a transport layer.
+
+## Multiplayer (added 20 November 2026)
+
+Up to four players, one of them hosting; CPU teams take the empty seats. See README.md for how to start a game.
+
+- `net.js` is the transport: a room with a four-letter code, every player connected to the host (WebRTC through PeerJS), one reliable ordered channel each.
+- The host runs the round exactly as in single player. Another player's ball is a rival marked `remote`: the host does not steer it, it glides to where that player's machine last reported it.
+- A client runs only its own ball's physics. Everything else is drawn from the host: reliable messages for what was rolled up, dropped, added, removed or changed, for events, markers and effects; and 15 snapshots a second with the balls, the clock and the nearby critters that have moved.
+- Pick-ups are optimistic: the client sticks the thing on at once and asks; the host answers yes (to everyone) or no (and the client puts it back).
+- Rams, critter attacks and event shoves are decided by the host and sent to the player concerned as a new velocity.
+- The map is built from a seed the host sends, so every machine lays out the same world and things can be named by number. Each machine checks its layout against the host's.
+- The arena fight is replayed, not streamed: same armies, same seeded dice, fixed 1/60 s steps, and the host sends every step's stick inputs. The host's result is the one shown.
+- Public games (Quick play) need no server of their own: there are six fixed room names (`pub1` to `pub6` in `net.js`). A player tries each in turn: joins the first that is waiting, or hosts the first that nobody holds. A public host refuses joiners while its round is on, starts by itself on a countdown (`PUBLIC_WAIT` in `main.js`), uses Normal CPUs, and everyone is returned from the results screen to the lobby after 25 seconds.
+- Not done: joining a round already under way, carrying on if the host leaves, relay servers for players behind strict firewalls, and player names.
+

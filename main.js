@@ -1,11 +1,12 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { BOUNDS, START, STARTS, BIOMES, B, PLACES, REHOME, GUESTS, R_HUB, scenery, layout, ITEMS as MAP_ITEMS, SHAPES as MAP_SHAPES } from './map.js';
+import { BOUNDS, STARTS, BIOMES, B, PLACES, REHOME, GUESTS, R_HUB, scenery, layout, ITEMS as MAP_ITEMS, SHAPES as MAP_SHAPES } from './map.js';
 import { createTerrain, vnoise, SEA_LEVEL, SEA_MIN_D } from './terrain.js';
 import { buildCritterGeometry, critterMaterial } from './critters/kit.js';
 import { createBattle, power } from './battle.js';
 import { EVENTS } from './events.js';
+import { openRoom, openPublicRoom, cleanCode } from './net.js';
 import crittersA from './critters/critters_1.js';
 import crittersB from './critters/critters_2.js';
 import crittersC from './critters/critters_3.js';
@@ -87,6 +88,7 @@ const CHARGE_STEER = 0.35; // steering (keys and mouse) while winding up a dash:
 const crashLoss = () => 0;      // running into scenery only stops the ball; rams and charging critters are what knock things off
 const V3 = THREE.Vector3;
 let rand = Math.random;
+let START = { x: STARTS[0][0], z: STARTS[0][1] };      // this player's start pad (their team's)
 const $ = (id) => document.getElementById(id);
 
 // ---------- part kit for generated items, the ball and the trainer ----------
@@ -390,7 +392,7 @@ function poseTrainer(g, t, moving) {
   u.legL.rotation.x = s; u.legR.rotation.x = -s;
   u.armL.rotation.x = -1.3 + s * 0.12; u.armR.rotation.x = -1.3 - s * 0.12;     // arms out in front, pushing
 }
-const trainer = buildTrainer(TEAMS[0].hex);
+let trainer = buildTrainer(TEAMS[0].hex);
 trainer.scale.setScalar(trainerHeight(START_D));
 scene.add(trainer);
 
@@ -459,6 +461,29 @@ const S = {
 const MODS = { knock: 1, iced: false, fog: 1, energy: 1, speed: 1, lure: false };      // things events change for a while
 window.__game = S;
 
+// ---------- multiplayer state (see the "multiplayer" section further down) ----------
+// One player hosts and runs the world: critters, CPU teams, events, the clock, who rolled up what. Every other player
+// steers their own ball on their own machine (so it never lags), tells the host where it is, and is told what happened.
+const NET = {
+  room: null,                  // the open room (net.js), in the lobby and during a match
+  on: false, host: false, client: false,     // on: a multiplayer match is running here; host / client: this machine's part in it
+  seat: 0, seats: ['human', 'cpu', 'cpu', 'cpu'], peers: [null, null, null, null],   // this player's team; who has each team; (host) their connection
+  q: new Map(), pending: new Map(), lunges: new Set(), ready: new Set(), spawned: [], fxRoots: new Map(), fxNodes: new Map(), mmDirty: new Set(),
+  snapT: 0, upT: 0, modsSent: '', cdGo: false, fxKey: 1,
+  arenaIn: [], aLatest: [], aSteps: [], aAcc: 0, aEnd: null, aSent: '', battleSeed: 1,
+};
+const LOB = { kinds: ['human', 'cpu', 'cpu', 'cpu'], peers: [null, null, null, null], seat: 0, diff: 'normal', auto: null, autoAt: 0 };   // the lobby, as last heard (auto: seconds until a public game starts itself, as of autoAt)
+function netTo(id, m) { let q = NET.q.get(id); if (!q) NET.q.set(id, q = []); q.push(m); }
+function netAll(m) { if (NET.on && NET.host && NET.room) for (const id of NET.peers) if (id) netTo(id, m); }
+function netHost(m) { if (NET.on && NET.client && NET.room) netTo('host', m); }
+function netFlush() { if (!NET.room) return; for (const [id, q] of NET.q) if (q.length) { NET.room.send(id, q); NET.q.set(id, []); } }
+const seatHuman = (t) => (NET.on ? NET.seats[t] === 'human' : t === S.team);
+const seatLabel = (t) => (t === S.team ? 'You' : TEAMS[t].name);
+// Messages that name a ball are written with a token, so each player reads "You" for their own team.
+const TOK = '\u0001';
+const loc = (str) => String(str).replace(/\u0001([NW])(\d)\u0001/g, (m, k2, t) => (+t === S.team ? (k2 === 'W' ? '<b>YOU</b>' : 'You') : k2 === 'W' ? `the <b>${TEAMS[t].name}</b> team` : TEAMS[t].name));
+const seeded = (seed) => () => { seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+
 // ---------- world generation ----------
 const SPECS = {};
 for (const s of ITEMS) SPECS[s.id] = { kind: 'item', spec: s, size: s.size };
@@ -481,7 +506,7 @@ function critterSpot(sp, hab = habOf(sp), far = null) {
   const want = sp.move === 'swim' ? 'water' : sp.move === 'fly' || sp.move === 'float' ? 'dry' : 'land';
   const rT = hab === 'town' ? null : lo + (0.1 + 0.8 * t) * (hi - lo);
   for (let i = 0; i < 12; i++) {
-    const p = T.sampleBiome(ids, i < 8 ? want : 'land', rT, tol);
+    const p = T.sampleBiome(ids, i < 8 ? want : 'land', rT, tol, rand);
     if (!p) continue;
     if (hab === 'town' && (Math.hypot(p[0], p[1]) < 11 || STARTS.some(([sx, sz]) => Math.hypot(p[0] - sx, p[1] - sz) < 5))) continue;   // keep the feast and the start pads clear
     return p;
@@ -504,10 +529,14 @@ function routeGoal(st, x, z, d, dt) {
 }
 let layoutSeed = 1;
 const srand = () => { layoutSeed = (layoutSeed + 0x6d2b79f5) | 0; let t = Math.imul(layoutSeed ^ (layoutSeed >>> 15), 1 | layoutSeed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };   // the map is laid out the same every game
-function populate() {
+function populate(seed = (Math.random() * 2 ** 31) | 0) {
+  const rr0 = rand; rand = srand;                 // the whole world is laid out from the seed, so every player in a match builds the same one
+  try { populateSeeded(seed); } finally { rand = rr0; }
+}
+function populateSeeded(seed) {
   worldGroup.clear();
   while (ball.children.length > 1) ball.remove(ball.children[1]);
-  S.objects = []; S.attached = [];
+  S.objects = []; S.attached = []; S.byId = new Map(); S.nextId = 1;
   const solids = [];
   const free = (x, z, rad) => !solids.some((s) => Math.hypot(x - s.x, z - s.z) < rad + s.rad);
   function put(id, x, z, opt = {}) {
@@ -519,16 +548,18 @@ function populate() {
     group.position.set(x, groundAt(x, z), z);
     group.rotation.y = opt.rot ?? rand() * Math.PI * 2;
     worldGroup.add(group);
-    const o = { kind: e.kind, spec: e.spec, size, rad, group, bonus: opt.bonus ?? 1, on: false, fly: null, cool: 0, contrib: 0, ldist: 0, vis: size, lump: new V3(), spawnT: 0 };
+    const o = { id: opt.id ?? S.nextId, kind: e.kind, spec: e.spec, size, rad, group, bonus: opt.bonus ?? 1, on: false, fly: null, cool: 0, contrib: 0, ldist: 0, vis: size, lump: new V3(), spawnT: 0 };
+    S.nextId = Math.max(S.nextId, o.id) + 1; S.byId.set(o.id, o);
     if (e.kind === 'creature') group.rotation.order = 'YXZ';       // so a critter can tip forward whichever way it faces
     if (e.kind === 'creature') Object.assign(o, { ai: 'idle', timer: rand() * 3, home: [x, z], tx: x, tz: z, phase: rand() * 6.28, leader: null });
     else if (size >= 0.5 && !e.spec.flat) solids.push({ x, z, rad });
     S.objects.push(o);
+    if (NET.host && S.live) netSpawned(o, id, x, z, opt);
     return o;
   }
   const radOf = (id) => (SPECS[id] ? SPECS[id].size * (SPECS[id].spec.rad ?? 0.35) : 0);
   layoutSeed = 12345;
-  { const rr = rand; rand = srand; try { layout({
+  { layout({
     put, rand: srand, ground: groundAt, water: T.waterAt, biomeAt: (x, z) => biomeAt(x, z).id, sizeOf: (id) => (SPECS[id] ? SPECS[id].size : 0),
     row(id, x1, z1, x2, z2, n, opt) { for (let i = 0; i < n; i++) { const t = n > 1 ? i / (n - 1) : 0.5; put(id, x1 + (x2 - x1) * t, z1 + (z2 - z1) * t, opt); } },
     grid(id, x, z, cols, rows, dx, dz, opt) { for (let i = 0; i < cols; i++) for (let j = 0; j < rows; j++) put(id, x + i * dx, z + j * dz, opt); },
@@ -545,7 +576,8 @@ function populate() {
         if (free(px, pz, radOf(id) + 0.3)) { put(id, px, pz, opt); break; }
       }
     },
-  }); } finally { rand = rr; } }
+  }); }
+  layoutSeed = seed | 0;
 
   // Critters, by habitat. Rarity sets how many groups of each species; the smallest species, which a new ball can
   // roll up first, get more; the Green gets double so the opening scramble has plenty.
@@ -569,13 +601,15 @@ function populate() {
   // remember where everything started, so the final push can put back whatever has been rolled up
   S.initial = S.objects.map((o) => ({ o, id: o.spec.id, x: o.group.position.x, z: o.group.position.z, rot: o.group.rotation.y }));
   S.spawn = { put, herd };
-  S.titansOut = false;
+  S.titansOut = false; S.live = false;
+  { let cs = S.objects.length; for (const o of S.objects) cs = (cs * 31 + Math.round(o.group.position.x * 8) + Math.round(o.group.position.z * 8) * 7) | 0; S.layoutSum = cs; }
   buildUnlocks();
 }
 
 // ---------- input ----------
 const keys = {};
 addEventListener('keydown', (e) => {
+  if (e.target && e.target.tagName === 'INPUT') return;          // typing a room code
   keys[e.code] = true;
   if (e.repeat) return;
   if (e.code === 'KeyT') { S.tank = !S.tank; $('steer').textContent = S.tank ? 'tank' : 'simple'; toast('Steering: ' + (S.tank ? 'tank' : 'simple')); }
@@ -643,10 +677,10 @@ function pollPadButtons() {
   const now = pad ? pad.buttons.map((b) => b.pressed) : [];
   const hit = (i) => now[i] && !padPrev[i];
   if (hit(9)) togglePause();
-  if (S.state === 'menu') { if (hit(0)) start('timed'); else if (hit(2)) start('free'); }
+  if (S.state === 'menu') { if (NET.room) { /* in a lobby: use the buttons */ } else if (hit(0)) start('timed'); else if (hit(2)) start('free'); }
   else if (S.state === 'battle' && hit(3)) skipBattle();
   else if (S.state === 'intro' && hit(0)) S.introT = Math.max(S.introT, INTRO_LEN - 0.9);
-  else if (S.state === 'results' && hit(0)) start(S.mode);
+  else if (S.state === 'results' && hit(0)) $('btnAgain').click();
   padPrev = now;
 }
 
@@ -656,7 +690,7 @@ const fmtTime = (s) => Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).pad
 const typeChip = (t) => `<span class="type" style="background:${TYPE_COLORS[t] || '#888'}">${t}</span>`;
 const typeChips = (sp) => sp.types.map(typeChip).join('');
 let toastTimer = 0;
-function toast(msg) { const el = $('toast'); el.textContent = msg; el.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove('show'), 2200); }
+function toast(msg) { const el = $('toast'); el.textContent = loc(msg); el.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove('show'), 2200); }
 function showPick(html) { const el = $('pick'); el.innerHTML = html; el.classList.remove('show'); void el.offsetWidth; el.classList.add('show'); }
 function challengeProgress(c) { return (c.kind === 'type' ? S.counts.type[c.value] : S.counts.species[c.value]) || 0; }
 function armyPower(army) { let s = 0; for (const sp of army) s += sp._pw || (sp._pw = power(sp)); return s; }
@@ -675,7 +709,7 @@ function updateHud() {
   $('timer').textContent = S.mode === 'timed' ? fmtTime(Math.max(0, S.timeLeft)) : 'Free roam';
   let html = '';
   if (S.mode === 'timed') {                     // standings, biggest ball first
-    const rows = [{ tm: TEAMS[0], name: 'You', d: S.d, army: S.army, me: true }, ...rivals.map((R) => ({ tm: TEAMS[R.team], name: TEAMS[R.team].name, d: R.d, army: R.army }))].sort((a, b) => b.d - a.d);
+    const rows = allBalls().map((b) => ({ tm: TEAMS[b.team], name: seatLabel(b.team), d: b.d, army: b.army, me: b === S })).sort((a, b) => b.d - a.d);
     const big = Math.max(rows[0].d, 1);
     rows.forEach((r, i) => { html += `<div class="sb${r.me ? ' me' : ''}"><i class="rk">${i + 1}</i><b style="color:${r.tm.css}">${r.name}</b><span class="szbar"><u style="width:${(r.d / big * 100).toFixed(0)}%;background:${r.tm.css}"></u></span><em>${fmtSize(r.d)}</em><span class="cr">${r.army.length}</span></div>`; });
     html = '<div class="sbhead"><span>Standings</span><span>size</span><span>critters</span></div>' + html;
@@ -836,7 +870,7 @@ function aimArrow(Bq, c) {
   });
 }
 function clearFx() {
-  parts.length = 0; pMesh.count = 0; arrows.clear(); S.arrow = null; for (const id of [...markers.keys()]) unmark(id); fx.clear(); }
+  parts.length = 0; pMesh.count = 0; arrows.clear(); S.arrow = null; for (const id of [...markers.keys()]) unmark(id); fx.clear(); NET.fxRoots.clear(); NET.fxNodes.clear(); }
 
 // ---------- pickups and knocks ----------
 const tmpV = new V3(), tmpQ = new THREE.Quaternion(), tmpQ2 = new THREE.Quaternion(), UP = new V3(0, 1, 0), downLocal = new V3(), axis = new V3();
@@ -872,15 +906,16 @@ function attach(o) {
   stick(ball, o, S.x, S.y, S.z, S.d / 2);
   o.contrib = growthOf(S, o);
   S.vol3 += o.contrib; S.d = Math.cbrt(S.vol3);
-  S.objects.splice(S.objects.indexOf(o), 1);
-  S.attached.push(o); S.caught++;
+  { const i = S.objects.indexOf(o); if (i >= 0) S.objects.splice(i, 1); }
+  S.attached.push(o); S.caught++; o.by = S.team;
+  if (NET.host) netAll(['pk', S.team, o.id]);
   o.script = null; if (o.onPick) { const f = o.onPick; o.onPick = null; f(S, o); }
   sfxPickup(Math.min(1, o.size / (S.d * PICK_RATIO)));
   S.energy = Math.min(1, S.energy + ENERGY_PICK);
   if (o.kind === 'creature') {
     const sp = o.spec;
     S.attachedCritters++;
-    S.army.push(armySpec(o)); setTeamLook(o, 0);
+    S.army.push(armySpec(o)); setTeamLook(o, S.team);
     for (const t of sp.types) bump(S.counts.type, t, 1);
     bump(S.counts.species, sp.id, 1);
     const key = baseOf(sp).id;
@@ -908,12 +943,14 @@ function attach(o) {
 function hardHit(nx, nz, vmax, lose = 2) {
   if (S.hitCool > 0) return;
   S.hitCool = 3; S.shake = 0.3; sfxBump();          // three seconds' grace after a knock, so nothing can strip the ball bare
+  const sent = [];
   for (let i = 0; i < lose && S.attached.length; i++) {
     const o = S.attached.pop();
     worldGroup.attach(o.group);
     o.group.scale.setScalar(o.size);
     o.on = false; o.cool = 1.2;
     o.fly = { vx: (-nx + rand() - 0.5) * vmax * 0.8, vy: Math.sqrt(20 * S.d) + 0.5, vz: (-nz + rand() - 0.5) * vmax * 0.8 };
+    o.by = null; sent.push([o.id, o.fly.vx, o.fly.vy, o.fly.vz]);
     S.vol3 -= o.contrib; S.caught--;
     if (o.kind === 'creature') {
       S.attachedCritters--;
@@ -926,6 +963,7 @@ function hardHit(nx, nz, vmax, lose = 2) {
   }
   S.vol3 = Math.max(START_D ** 3, S.vol3);
   S.d = Math.cbrt(S.vol3);
+  if (sent.length) netAll(['dr', S.team, sent, 1]);
   seatAll();                                          // the ball shrank: re-seat what is left
 }
 // How far the ball's centre sits above the ground: its radius, or the tip of whichever
@@ -961,6 +999,7 @@ const armyDrop = (army, o) => { const k = army.lastIndexOf(o.armySpec || o.spec)
 // A critter's attack: it rears back for a moment, then lunges at the ball. A hit throws the ball clear and, for a second,
 // lets it pass through critters, so a ball boxed in by several of them always gets out.
 function startLunge(o, Bq) {
+  if (NET.client) { if (Bq === S && o.spec.move !== 'still') NET.lunges.add(o.id); return; }      // the host runs the critters: ask it
   if (o.ai === 'lunge' || o.ai === 'retreat' || o.script || o.spec.move === 'still') return;
   o.ai = 'lunge'; o.lt = 0; o.struck = false; o.lunB = Bq;
   cry(o.spec, 0.04);
@@ -974,13 +1013,16 @@ function strike(Bq, o, nx, nz) {                  // (nx, nz) points from the cr
     S.vx = nx * vm * 1.8; S.vz = nz * vm * 1.8; S.charge = 0;
     if (o.size > S.d) hardHit(-nx, -nz, vm, 1);           // only a critter taller than the ball knocks anything off; smaller ones just shove
     else { S.shake = 0.15; sfxBump(); }
+  } else if (Bq.remote) {                            // another player's ball: their machine moves it, so send the shove
+    Bq.vx = nx * vm * 1.8; Bq.vz = nz * vm * 1.8; Bq.imp.ghost = 1.1; Bq.imp.chg0 = 1;
+    if (o.size > Bq.d) rivalKnock(Bq, -nx, -nz, 1); else Bq.imp.bump = 1;
   } else {
     Bq.wander = 1.2; Bq.wh = Math.atan2(nx, nz); Bq.heading = Bq.wh; Bq.v = vm * 1.3; Bq.wind = 0;
     if (o.size > Bq.d) rivalKnock(Bq, -nx, -nz, 1);
   }
 }
 const pickRatio = (Bq) => PICK_RATIO + (Bq.ratioBonus || 0);
-const ballName = (Bq) => (Bq === S ? 'You' : TEAMS[Bq.team].name);
+const ballName = (Bq) => `${TOK}N${Bq.team}${TOK}`;        // read as "You" or the team's name by whoever sees it (loc)
 function give(Bq, o) { if (o.on || !S.objects.includes(o)) return; if (Bq === S) attach(o); else rivalAttach(Bq, o); }
 function knock(Bq, nx, nz, n) { n = Math.max(1, Math.round(n * MODS.knock)); if (Bq === S) hardHit(nx, nz, topSpeed(S.d), n); else rivalKnock(Bq, nx, nz, n); }
 function growBall(Bq, vol) {
@@ -989,7 +1031,7 @@ function growBall(Bq, vol) {
 }
 // Takes the newest n things (critters only, if asked) off a ball and stands them on the ground beside it. Returns them.
 function takeFrom(Bq, n, crittersOnly) {
-  const out = [];
+  const out = [], sent = [];
   for (let i = Bq.attached.length - 1; i >= 0 && out.length < n; i--) {
     const o = Bq.attached[i];
     if (crittersOnly && o.kind !== 'creature') continue;
@@ -998,7 +1040,8 @@ function takeFrom(Bq, n, crittersOnly) {
     o.group.scale.setScalar(o.size); o.group.rotation.set(0, rand() * 6.28, 0);
     const a = rand() * 6.28, rr = Bq.d / 2 + o.size;
     o.group.position.set(Bq.x + Math.cos(a) * rr, groundAt(Bq.x + Math.cos(a) * rr, Bq.z + Math.sin(a) * rr), Bq.z + Math.sin(a) * rr);
-    o.on = false; o.cool = 1.5; o.fly = null;
+    o.on = false; o.cool = 1.5; o.fly = null; o.by = null;
+    sent.push([o.id, o.group.position.x, o.group.position.z, o.group.rotation.y]);
     Bq.vol3 -= o.contrib;
     if (Bq === S) S.caught--;
     if (o.kind === 'creature') {
@@ -1008,24 +1051,26 @@ function takeFrom(Bq, n, crittersOnly) {
     }
     S.objects.push(o); out.push(o);
   }
+  if (sent.length) netAll(['tk', Bq.team, sent]);
   growBall(Bq, 0);
   return out;
 }
-function removeThing(o) { const i = S.objects.indexOf(o); if (i >= 0) S.objects.splice(i, 1); worldGroup.remove(o.group); o.gone = true; }
+function removeThing(o) { const i = S.objects.indexOf(o); if (i >= 0) S.objects.splice(i, 1); worldGroup.remove(o.group); o.gone = true; S.byId.delete(o.id); netAll(['rm', o.id]); }
 const goldMat = new THREE.MeshLambertMaterial({ color: 0xffd23f, emissive: 0xd99a00, emissiveIntensity: 0.55 });
 // What events (events.js) are given to work with. See the top of events.js for how each is used.
 const H = {
-  THREE, S, T, MODS, PLACES, BIOMES, B, CREATURES, TITANS, SPECS, TEAMS, STARTS, BOUNDS, fx, P, G, mat, goldMat,
+  THREE, S, T, MODS, PLACES, BIOMES, B, CREATURES, TITANS, SPECS, TEAMS, STARTS, BOUNDS, P, G, mat, goldMat,
+  fx: { add(o) { fx.add(o); if (NET.host) NET.fxRoots.set(o, { key: NET.fxKey++, n: -1, sigs: [] }); }, remove(o) { fx.remove(o); const e = NET.fxRoots.get(o); if (e) { NET.fxRoots.delete(o); netAll(['fxr', e.key]); } } },
   rand: () => rand(), clamp, topSpeed, groundAt, waterAt: T.waterAt, biomeAt, sampleBiome: T.sampleBiome, critterSpot, habOf, baseOf,
-  balls: allBalls, isPlayer: (Bq) => Bq === S, ballName, teamOf: (Bq) => TEAMS[Bq.team], pickRatio,
+  balls: allBalls, isPlayer: (Bq) => Bq === S, isHuman: (Bq) => Bq === S || !!Bq.human, ballName, who: (Bq) => `${TOK}W${Bq.team}${TOK}`, teamOf: (Bq) => TEAMS[Bq.team], pickRatio,
   objects: () => S.objects, time: () => S.time, timeLeft: () => S.timeLeft,
   put: (id, x, z, opt = {}) => { const o = S.spawn.put(id, x, z, opt); if (o && opt.pop !== false) { o.spawnT = 0.9; o.group.scale.setScalar(0.001); } if (o && opt.gold && o.kind === 'creature') o.group.material = goldMat; return o; },
   herd: (sp, at, n, opt) => { const from = S.objects.length, lead = S.spawn.herd(sp, at, n, opt); materialize(from); return S.objects.slice(from); },
   remove: removeThing, give, knock, grow: growBall, takeFrom,
-  fling: (o, vx, vy, vz) => { o.fly = { vx, vy, vz }; o.cool = 1; },
-  toast, announce, shake: (t = 0.3) => { S.shake = Math.max(S.shake, t); },
-  sfx: { tone, cry, bump: sfxBump, win: sfxWin },
-  mark, moveMark, unmark,
+  fling: (o, vx, vy, vz) => { o.fly = { vx, vy, vz }; o.cool = 1; const p = o.group.position; netAll(['fl', o.id, p.x, p.y, p.z, vx, vy, vz]); },
+  toast: (m) => { toast(m); netAll(['ts', m]); }, announce: (...a) => { announce(...a); netAll(['an', a]); }, shake: (t = 0.3) => { S.shake = Math.max(S.shake, t); },
+  sfx: { tone: (...a) => { tone(...a); netAll(['sx', 0, a]); }, cry: (sp, vol) => { cry(sp, vol); netAll(['sx', 1, [sp.id, vol]]); }, bump: sfxBump, win: sfxWin },
+  mark: (id, x, z, opt) => { netAll(['mk', id, x, z, opt || {}]); return mark(id, x, z, opt); }, moveMark: (id, x, z) => { moveMark(id, x, z); if (NET.host) NET.mmDirty.add(id); }, unmark: (id) => { unmark(id); netAll(['um', id]); },
   cpuGoto(x, z, seconds = 20, chance = 0.7) { for (const R of rivals) if (rand() < chance) R.ev = { x, z, until: S.time + seconds }; },
   cpuRelease() { for (const R of rivals) R.ev = null; },
   forecast: () => S.forecast,
@@ -1039,7 +1084,7 @@ const H = {
 // move: walk, hop, slither on land; swim stays in water; fly and float ignore the terrain; still never moves.
 // B is whichever ball is nearest: the player (S) or a CPU. Critters react to all of them alike.
 function updateCreature(o, dt, B) {
-  const vmax = topSpeed(B.d) * (B === S ? 1 : CPU_SPEED);
+  const vmax = topSpeed(B.d) * (B === S || B.human ? 1 : CPU_SPEED);
   const sp = o.spec, h = o.size, p = o.group.position;
   const bx = B.x - p.x, bz = B.z - p.z, dist = Math.hypot(bx, bz) || 1e-6;
   if (o.script) { o.script(o, dt, B); if (!o.gone && !o.on) { const air2 = sp.move === 'fly' || sp.move === 'float'; p.y = groundAt(p.x, p.z) + (air2 ? h * 0.3 : Math.abs(Math.sin(S.time * 9 + o.phase)) * h * 0.08); } return; }
@@ -1118,27 +1163,41 @@ function updateCreature(o, dt, B) {
 const rivals = [];
 function makeRivals() {
   for (const R of rivals) { scene.remove(R.ball); scene.remove(R.trainer); }
-  for (let i = 1; i < TEAMS.length; i++) $('tag' + i).style.display = 'none';
+  for (let i = 0; i < TEAMS.length; i++) $('tag' + i).style.display = 'none';
   rivals.length = 0;
   if (S.mode !== 'timed') return;
-  const starts = STARTS.slice(1), wedges = [0, 1, 2, 3, 4, 5, 6, 7].sort(() => rand() - 0.5);
-  for (let i = 1; i < TEAMS.length; i++) {
-    const [x, z] = starts[i - 1], ballG = new THREE.Group(), coreG = new THREE.Group();
+  const wedges = [0, 1, 2, 3, 4, 5, 6, 7].sort(() => rand() - 0.5);
+  for (let i = 0; i < TEAMS.length; i++) {
+    if (i === S.team) continue;
+    const [x, z] = STARTS[i], ballG = new THREE.Group(), coreG = new THREE.Group();
     P(coreG, 'sph', TEAMS[i].hex, [1, 1, 1], [0, 0, 0]);
     const ring = new THREE.Mesh(new THREE.TorusGeometry(1, 0.07, 6, 24), mat(0xffffff)); ring.rotation.x = Math.PI / 2; coreG.add(ring);
     ballG.add(coreG); scene.add(ballG);
     const figure = buildTrainer(TEAMS[i].hex); scene.add(figure);
-    rivals.push({ team: i, x, z, y: groundAt(x, z) + START_D / 2, d: START_D, vol3: START_D ** 3, heading: Math.atan2(-x, -z), v: 0, ball: ballG, core: coreG, trainer: figure,
+    const y = groundAt(x, z) + START_D / 2, heading = Math.atan2(-x, -z);
+    // remote: the ball is moved by another machine (a player's, as the host sees it; everybody's, as a client sees them)
+    const R = { team: i, x, z, y, d: START_D, vol3: START_D ** 3, heading, v: 0, ball: ballG, core: coreG, trainer: figure,
       attached: [], army: [], hitCool: 0, retarget: rand(), target: null, chasing: null, avoid: new Set(), wander: 0, wh: 0, lastX: x, lastZ: z, stuckT: 3,
-      wedge: wedges[i], dash: true, dashUntil: 14, boostT: 0, stallT: 0, ev: null, energy: 1, wind: 0 });
+      wedge: wedges[i], dash: true, dashUntil: 14, boostT: 0, stallT: 0, ev: null, energy: 1, wind: 0,
+      human: seatHuman(i), remote: NET.client || (NET.host && seatHuman(i)), nx: x, ny: y, nz: z, nh: heading, rvx: 0, rvz: 0, nb: 0, chg: 0, nAge: 0, ren: 1, imp: null, impCool: 0 };
+    if (R.remote && NET.host) {                     // the host cannot push another player's ball itself: writing its velocity or energy queues a message to them
+      const want = (r) => { const m = r.imp || (r.imp = {}); if (m.vx === undefined) { m.vx = r.rvx; m.vz = r.rvz; } return m; };
+      Object.defineProperty(R, 'vx', { configurable: true, get() { return this.rvx; }, set(v) { want(this).vx = v; } });
+      Object.defineProperty(R, 'vz', { configurable: true, get() { return this.rvz; }, set(v) { want(this).vz = v; } });
+      Object.defineProperty(R, 'energy', { configurable: true, get() { return this.ren; }, set(v) { (this.imp || (this.imp = {})).energy = v; } });
+    }
+    rivals.push(R);
   }
 }
+const rivalOf = (t) => rivals.find((R) => R.team === t);
+const ballOf = (t) => (t === S.team ? S : rivalOf(t));
 function rivalAttach(R, o) {
   stick(R.ball, o, R.x, R.y, R.z, R.d / 2);
   o.contrib = growthOf(R, o);
   R.vol3 += o.contrib; R.d = Math.cbrt(R.vol3);
-  S.objects.splice(S.objects.indexOf(o), 1);
-  R.attached.push(o); R.energy = Math.min(1, R.energy + ENERGY_PICK);
+  { const i = S.objects.indexOf(o); if (i >= 0) S.objects.splice(i, 1); }
+  R.attached.push(o); o.by = R.team; if (!R.remote) R.energy = Math.min(1, R.energy + ENERGY_PICK);
+  if (NET.host) netAll(['pk', R.team, o.id]);
   o.script = null; if (o.onPick) { const f = o.onPick; o.onPick = null; f(R, o); }
   if (o.kind === 'creature') { R.army.push(armySpec(o)); setTeamLook(o, R.team); }
   while (R.attached.length > MAX_ON_BALL) R.ball.remove(R.attached.shift().group);
@@ -1147,26 +1206,81 @@ function rivalAttach(R, o) {
 function rivalKnock(R, nx, nz, lose) {            // things fly off in direction (-nx,-nz)
   if (R.hitCool > 0) return;
   R.hitCool = 3;
-  const sp = topSpeed(R.d);
+  const sp = topSpeed(R.d), sent = [];
   for (let i = 0; i < lose && R.attached.length; i++) {
     const o = R.attached.pop();
     worldGroup.attach(o.group);
     o.group.scale.setScalar(o.size);
     o.on = false; o.cool = 1.2;
     o.fly = { vx: (-nx + rand() - 0.5) * sp * 0.8, vy: Math.sqrt(20 * R.d) + 0.5, vz: (-nz + rand() - 0.5) * sp * 0.8 };
+    o.by = null; sent.push([o.id, o.fly.vx, o.fly.vy, o.fly.vz]);
     R.vol3 -= o.contrib;
     if (o.kind === 'creature') { armyDrop(R.army, o); setTeamLook(o, null); o.ai = 'idle'; o.timer = 1.5; }
     S.objects.push(o);
   }
   R.vol3 = Math.max(START_D ** 3, R.vol3); R.d = Math.cbrt(R.vol3);
+  if (sent.length) netAll(['dr', R.team, sent, 1]);
   seatOn(R.attached, R.d / 2);
 }
+// Roll up, or be stopped by, whatever a rival's ball touches. (Another player's ball rolls things up on its own machine
+// and asks the host, see `claim`; here it only bumps things.)
+function rivalContacts(R) {
+  const r = R.d / 2;
+  for (let i = S.objects.length - 1; i >= 0; i--) {
+    const o = S.objects[i];
+    if (o.fly) continue;
+    const p = o.group.position, ox = p.x - R.x, oz = p.z - R.z, dist = Math.hypot(ox, oz), reach = R.d / 2 + o.rad;
+    if (dist >= reach || R.y - r > p.y + o.size || R.y + r < p.y) continue;
+    if (!o.noPick && o.size <= R.d * pickRatio(R)) { if (o.cool <= 0 && !R.remote) rivalAttach(R, o); continue; }
+    if (o.spec.flat) continue;
+    if (o.onBump && o.cool <= 0) o.onBump(R, o);
+    if (o.kind === 'creature' && R.ghostT > 0) continue;       // just thrown clear by a lunge: passes through critters for a moment
+    if (!R.remote) { R.x -= ox / (dist || 1) * (reach - dist); R.z -= oz / (dist || 1) * (reach - dist); }
+    if (o.kind === 'creature' && o.ai === 'charge') startLunge(o, R);
+  }
+}
+function rivalRender(R, dt) {
+  const r = R.d / 2, hx = Math.sin(R.heading), hz = Math.cos(R.heading);
+  const vx = R.remote ? R.rvx : hx * R.v, vz = R.remote ? R.rvz : hz * R.v, sp = Math.hypot(vx, vz);
+  if (sp > 1e-4) { rollAxis.set(vz / sp, 0, -vx / sp); tmpQ.setFromAxisAngle(rollAxis, sp * dt / r); R.ball.quaternion.premultiply(tmpQ); }
+  R.ball.position.set(R.x, R.y, R.z);
+  const th = trainerHeight(R.d), fx2 = R.x - hx * (r + th * 0.32), fz = R.z - hz * (r + th * 0.32);
+  let fy = groundAt(fx2, fz); if (Math.abs(fy - (R.y - r)) > Math.max(r, th * 0.4)) fy = R.y - r;
+  R.trainer.scale.setScalar(th); R.trainer.position.set(fx2, fy, fz); R.trainer.rotation.y = R.heading;
+  poseTrainer(R.trainer, S.time + R.team, sp > 0.25);
+  R.core.scale.setScalar(r);
+}
+// A ball that another machine is steering: glide to where it was last reported, carried on by its speed in between.
+function puppetRival(R, dt) {
+  R.nAge += dt; R.impCool = Math.max(0, R.impCool - dt);
+  if (R.nAge < 0.4) { R.nx += R.rvx * dt; R.nz += R.rvz * dt; }
+  const k2 = 1 - Math.exp(-14 * dt);
+  if (Math.hypot(R.nx - R.x, R.nz - R.z) > 40) { R.x = R.nx; R.z = R.nz; R.y = R.ny; }
+  R.x += (R.nx - R.x) * k2; R.z += (R.nz - R.z) * k2; R.y += (R.ny - R.y) * k2;
+  let dh = R.nh - R.heading; while (dh > Math.PI) dh -= 2 * Math.PI; while (dh < -Math.PI) dh += 2 * Math.PI;
+  R.heading += dh * k2;
+  R.v = Math.hypot(R.rvx, R.rvz); R.boostT = R.nb ? 0.2 : 0;
+  aimArrow(R, R.chg);
+  if (R.chg > 0) { chargeFx(R, R.chg, dt); rollAxis.set(Math.cos(R.heading), 0, -Math.sin(R.heading)); tmpQ.setFromAxisAngle(rollAxis, (6 + 22 * R.chg) * dt); R.ball.quaternion.premultiply(tmpQ); }
+  else if (R.nb) trailFx(R, dt);
+  if (NET.host) rivalContacts(R);
+  rivalRender(R, dt);
+}
+const velOf = (b) => (b === S ? [S.vx, S.vz] : b.remote ? [b.rvx, b.rvz] : [Math.sin(b.heading) * b.v, Math.cos(b.heading) * b.v]);
+function rebound(b, ux, uz, closing, vx, vz) {       // after a bump: (ux, uz) points away from the other ball
+  if (b === S) { S.vx += ux * closing * 1.2; S.vz += uz * closing * 1.2; }
+  else if (b.remote) { if (b.impCool <= 0) { b.impCool = 0.25; b.vx = vx + ux * closing * 1.2; b.vz = vz + uz * closing * 1.2; b.imp.bump = 1; } }
+  else { b.v *= -0.4; b.wander = 1; b.wh = Math.atan2(ux, uz); }
+}
 function updateRivals(dt, frozen) {
+  const humans = allBalls().filter((b) => b === S || b.human);
+  const humanD = Math.exp(humans.reduce((n, b) => n + Math.log(b.d), 0) / humans.length);      // CPUs pace themselves against the players (the middle of their sizes)
   for (const R of rivals) {
     R.hitCool = Math.max(0, R.hitCool - dt); R.ghostT = Math.max(0, (R.ghostT || 0) - dt);
     R.stallT = Math.max(0, R.stallT - dt); R.boostT = Math.max(0, R.boostT - dt);
+    if (R.remote) { puppetRival(R, dt); continue; }
     if (!frozen) R.energy = Math.min(1, R.energy + dt / ENERGY_FILL * MODS.energy);
-    const band = clamp(1.04 - DIFF.band * Math.log2(R.d / S.d), DIFF.floor, 1.08);     // a CPU well ahead of the player eases off; one behind hurries
+    const band = clamp(1.04 - DIFF.band * Math.log2(R.d / humanD), DIFF.floor, 1.08);     // a CPU well ahead of the player eases off; one behind hurries
     const r = R.d / 2, vmax = frozen || R.stallT > 0 ? 0 : topSpeed(R.d) * MODS.speed * CPU_SPEED * band * (R.boostT > 0 ? dashMult(R.d) * 0.95 : R.wind > 0 ? CHARGE_CRAWL : 1), g0 = groundAt(R.x, R.z);
     // choose what to chase: the nearest thing it can roll up on its own level, preferring critters
     R.retarget -= dt;
@@ -1210,53 +1324,29 @@ function updateRivals(dt, frozen) {
     R.stuckT -= dt;
     if (R.stuckT <= 0) { R.stuckT = 3; if (Math.hypot(R.x - R.lastX, R.z - R.lastZ) < R.d * 0.5 + 0.3) { if (R.chasing) R.avoid.add(R.chasing); R.wander = 3; R.wh = rand() * 6.28; } R.lastX = R.x; R.lastZ = R.z; }   // stuck: give up on that thing for good
     R.y += (groundAt(R.x, R.z) + r - R.y) * Math.min(1, 10 * dt);
-    // roll up, or be stopped by, whatever it touches
-    for (let i = S.objects.length - 1; i >= 0; i--) {
-      const o = S.objects[i];
-      if (o.fly) continue;
-      const p = o.group.position, ox = p.x - R.x, oz = p.z - R.z, dist = Math.hypot(ox, oz), reach = R.d / 2 + o.rad;
-      if (dist >= reach || R.y - r > p.y + o.size || R.y + r < p.y) continue;
-      if (!o.noPick && o.size <= R.d * pickRatio(R)) { if (o.cool <= 0) rivalAttach(R, o); continue; }
-      if (o.spec.flat) continue;
-      if (o.onBump && o.cool <= 0) o.onBump(R, o);
-      if (o.kind === 'creature' && R.ghostT > 0) continue;       // just thrown clear by a lunge: passes through critters for a moment
-      R.x -= ox / (dist || 1) * (reach - dist); R.z -= oz / (dist || 1) * (reach - dist);
-      if (o.kind === 'creature' && o.ai === 'charge') startLunge(o, R);
-    }
-    if (Math.abs(R.v) > 1e-4) {
-      rollAxis.set(hz * Math.sign(R.v), 0, -hx * Math.sign(R.v));
-      tmpQ.setFromAxisAngle(rollAxis, Math.abs(R.v) * dt / (R.d / 2));
-      R.ball.quaternion.premultiply(tmpQ);
-    }
-    R.ball.position.set(R.x, R.y, R.z);
-    const th = trainerHeight(R.d), fx = R.x - hx * (r + th * 0.32), fz = R.z - hz * (r + th * 0.32);
-    let fy = groundAt(fx, fz); if (Math.abs(fy - (R.y - r)) > Math.max(r, th * 0.4)) fy = R.y - r;
-    R.trainer.scale.setScalar(th); R.trainer.position.set(fx, fy, fz); R.trainer.rotation.y = R.heading;
-    poseTrainer(R.trainer, S.time + R.team, Math.abs(R.v) > 0.25);
-    R.core.scale.setScalar(R.d / 2);
+    rivalContacts(R);
+    rivalRender(R, dt);
   }
+  if (NET.client) return;                               // the host decides who bumped whom
   // bumps: balls bounce apart, and whichever carries less momentum drops a couple of things for anyone to grab
-  const all = [null, ...rivals];                        // null = the player
+  const all = allBalls();
   for (let a = 0; a < all.length; a++) for (let b = a + 1; b < all.length; b++) {
-    const A = all[a], Bv = all[b];
-    const ax = A ? A.x : S.x, az = A ? A.z : S.z, ay = A ? A.y : S.y, ad = A ? A.d : S.d;
-    const dx = Bv.x - ax, dz = Bv.z - az, dist = Math.hypot(dx, dz) || 0.001, reach = (ad + Bv.d) / 2;
-    if (dist >= reach || Math.abs(Bv.y - ay) > reach) continue;
-    const nx = dx / dist, nz = dz / dist, push = (reach - dist) / 2;
-    const avx = A ? Math.sin(A.heading) * A.v : S.vx, avz = A ? Math.cos(A.heading) * A.v : S.vz;
-    const bvx = Math.sin(Bv.heading) * Bv.v, bvz = Math.cos(Bv.heading) * Bv.v;
+    const A = all[a], Bv = all[b], far = A.remote || Bv.remote ? 1.07 : 1;       // a player's own machine keeps their ball out of the others, so allow a little slack
+    const dx = Bv.x - A.x, dz = Bv.z - A.z, dist = Math.hypot(dx, dz) || 0.001, reach = (A.d + Bv.d) / 2;
+    if (dist >= reach * far || Math.abs(Bv.y - A.y) > reach) continue;
+    const nx = dx / dist, nz = dz / dist, push = Math.max(0, reach - dist) / 2;
+    const [avx, avz] = velOf(A), [bvx, bvz] = velOf(Bv);
     const closing = (avx - bvx) * nx + (avz - bvz) * nz;
     // shove them apart, but never through a wall or up a step either could not climb on its own
-    const shove = (x, z, d, sx, sz) => { const k = Math.min(push, d * 0.15); return groundAt(x + sx * k, z + sz * k) - groundAt(x, z) <= d * 0.2 ? [x + sx * k, z + sz * k] : [x, z]; };
-    if (A) { [A.x, A.z] = shove(A.x, A.z, A.d, -nx, -nz); } else { [S.x, S.z] = shove(S.x, S.z, S.d, -nx, -nz); }
-    [Bv.x, Bv.z] = shove(Bv.x, Bv.z, Bv.d, nx, nz);
+    const shove = (x, z, d, sx, sz) => { const k2 = Math.min(push, d * 0.15); return groundAt(x + sx * k2, z + sz * k2) - groundAt(x, z) <= d * 0.2 ? [x + sx * k2, z + sz * k2] : [x, z]; };
+    if (!A.remote) [A.x, A.z] = shove(A.x, A.z, A.d, -nx, -nz);
+    if (!Bv.remote) [Bv.x, Bv.z] = shove(Bv.x, Bv.z, Bv.d, nx, nz);
     if (closing < 0.5) continue;
-    const ma = ad ** 3 * (Math.hypot(avx, avz) + 0.5), mb = Bv.d ** 3 * (Math.abs(Bv.v) + 0.5);
-    const hitter = ma >= mb ? (A || S) : Bv;                                   // a ball in mid-burst knocks twice as much loose
-    knock(ma >= mb ? Bv : (A || S), ma >= mb ? -nx : nx, ma >= mb ? -nz : nz, KNOCK_LOSS * (hitter.boostT > 0 ? 2 : 1));
-    if (!A || Bv === S) { S.shake = 0.2; sfxBump(); }
-    if (A) { A.v *= -0.4; A.wander = 1; A.wh = Math.atan2(-nx, -nz); } else { S.vx -= nx * closing * 1.2; S.vz -= nz * closing * 1.2; }
-    Bv.v *= -0.4; Bv.wander = 1; Bv.wh = Math.atan2(nx, nz);
+    const ma = A.d ** 3 * (Math.hypot(avx, avz) + 0.5), mb = Bv.d ** 3 * (Math.hypot(bvx, bvz) + 0.5);
+    const hitter = ma >= mb ? A : Bv;                                          // a ball in mid-burst knocks twice as much loose
+    knock(ma >= mb ? Bv : A, ma >= mb ? -nx : nx, ma >= mb ? -nz : nz, KNOCK_LOSS * (hitter.boostT > 0 ? 2 : 1));
+    if (A === S || Bv === S) { S.shake = 0.2; sfxBump(); }
+    rebound(A, -nx, -nz, closing, avx, avz); rebound(Bv, nx, nz, closing, bvx, bvz);
   }
 }
 
@@ -1284,18 +1374,24 @@ function updateTags() {
 // ---------- after the round: the wheel picks an arena, then the armies and the four balls fight in it (arena.js) ----------
 let ARENA = null, battle = null, wheel = null, battleHold = 0;
 import('./arena.js').then((m) => { ARENA = m; }).catch((e) => console.warn('arena.js did not load; using the plain battle', e));
-const winnerText = (w) => (w < 0 ? 'Nobody is left standing' : w === 0 ? 'You win!' : `${TEAMS[w].name} team wins!`);
-const battleTeams = () => TEAMS.map((tm, i) => Object.assign({}, tm, { army: (i === 0 ? S.army : rivals[i - 1] ? rivals[i - 1].army : []).slice(), ballD: i === 0 ? S.d : rivals[i - 1] ? rivals[i - 1].d : START_D, human: i === 0 }));
+const winnerText = (w) => (w < 0 ? 'Nobody is left standing' : w === S.team ? 'You win!' : `${TEAMS[w].name} team wins!`);
+// human: steered by a player (the fight treats it so on every machine); me: this player's own team (for "You" and the arrow)
+const battleTeams = () => TEAMS.map((tm, i) => { const b = ballOf(i); return Object.assign({}, tm, { army: (b ? b.army : []).slice(), ballD: b ? b.d : START_D, human: seatHuman(i), me: i === S.team }); });
+// In multiplayer every machine must start the fight from exactly the same armies, so the host sends them and everyone
+// (the host included) builds the teams from that.
+const packTeams = (teams) => teams.map((tm) => ({ d: tm.ballD, h: tm.human ? 1 : 0, a: tm.army.map((sp) => [sp.id, sp.giant ? sp.height : 0]) }));
+const unpackTeams = (packed) => TEAMS.map((tm, i) => Object.assign({}, tm, { ballD: packed[i].d, human: !!packed[i].h, me: i === S.team,
+  army: packed[i].a.filter(([id]) => SPECS[id]).map(([id, h]) => { const sp = SPECS[id].spec; return h ? Object.assign({}, sp, { height: h, base: baseOf(sp), giant: true, _pw: 0 }) : sp; }) }));
 function buildBallFor(k) {
   const g = new THREE.Group();
   P(g, 'sph', TEAMS[k].hex, [1, 1, 1], [0, 0, 0]);
-  for (const rot of k === 0 ? [[0, 0, 0], [Math.PI / 2, 0, 0], [0, 0, Math.PI / 2]] : [[Math.PI / 2, 0, 0]]) { const ring = new THREE.Mesh(new THREE.TorusGeometry(1, 0.07, 6, 24), mat(k === 0 ? 0xffd23f : 0xffffff)); ring.rotation.set(rot[0], rot[1], rot[2]); g.add(ring); }
+  for (const rot of k === S.team ? [[0, 0, 0], [Math.PI / 2, 0, 0], [0, 0, Math.PI / 2]] : [[Math.PI / 2, 0, 0]]) { const ring = new THREE.Mesh(new THREE.TorusGeometry(1, 0.07, 6, 24), mat(k === S.team ? 0xffd23f : 0xffffff)); ring.rotation.set(rot[0], rot[1], rot[2]); g.add(ring); }
   return g;
 }
 // The arena is decided when the round starts (so the oracle can hint at it); the wheel only reveals it.
 function pickArenas() {
   S.forecast = null;
-  if (!ARENA) return;
+  if (!ARENA || NET.client) return;
   const list = ARENA.ARENAS, pick = Math.floor(rand() * list.length);
   S.forecast = { arenas: list, pick, arena: list[pick] };
 }
@@ -1307,6 +1403,7 @@ const ORACLE = { id: 'oracle', name: "Oracle's Whisper", quiet: true, duration: 
   } };
 function timeUp() {
   if (S.state === 'timeup') return;
+  netAll(['tu']); S.menuOpen = false; show(null);
   endEvent(); clearFx(); music.stop();
   MODS.knock = 1; MODS.fog = 1; MODS.energy = 1; MODS.speed = 1; MODS.lure = false; H.setIce(false); S.skyOverride = null;
   for (const R of rivals) R.ev = null;
@@ -1319,28 +1416,35 @@ function timeUp() {
 function tickTimeUp(dt) {
   S.tuT += dt;
   update(dt);
-  if (S.tuT > 2.6) startWheel();
+  if (S.tuT > 2.6 && !NET.client) startWheel();        // (a client waits for the host's armies)
 }
-function startWheel() {
+function startWheel(net = null) {            // net: the armies and the arena the host sent (multiplayer clients)
   $('count').className = '';
-  const teams = battleTeams();
-  if (!teams.some((t) => t.army.length)) { S.battleTeams = teams; S.battleResult = { winner: -1, mvp: null }; S.battleStatus = teams.map(() => ({ alive: 0, all: 0, hp: 0 })); finish(); return; }
+  let teams;
+  if (NET.client) { teams = unpackTeams(net.teams); if (ARENA) S.forecast = { arenas: ARENA.ARENAS, pick: net.pick, arena: ARENA.ARENAS[net.pick] }; }
+  else if (NET.host) { const packed = packTeams(battleTeams()); teams = unpackTeams(packed); netAll(['wh', { teams: packed, pick: S.forecast ? S.forecast.pick : 0 }]); }
+  else teams = battleTeams();
+  S.battleTeams = teams;
+  NET.aSteps = []; NET.aEnd = null; NET.aAcc = 0; NET.aSent = ''; NET.aLatest = []; NET.arenaIn = []; NET.battleSeed = 0;
+  if (!teams.some((t) => t.army.length)) { S.battleResult = { winner: -1, mvp: null }; S.battleStatus = teams.map(() => ({ alive: 0, all: 0, hp: 0 })); finish(); return; }
   if (!ARENA || !S.forecast) { startBattle(null); return; }
   S.state = 'wheel'; show('battle');
   wheel = ARENA.createWheel({ arenas: S.forecast.arenas, pickIndex: S.forecast.pick, teams, sfx: { tone, cry } });
 }
 function tickWheel(dt) {
   wheel.step(dt);
-  if (wheel.done) { const arena = wheel.arena || S.forecast.arena; wheel.destroy(); wheel = null; startBattle(arena); }
+  if (wheel.done && (!NET.client || NET.battleSeed)) { const arena = wheel.arena || S.forecast.arena; wheel.destroy(); wheel = null; startBattle(arena); }   // (a client starts when the host does)
 }
 function startBattle(arena) {
-  const teams = battleTeams();
+  const teams = NET.on ? S.battleTeams : battleTeams();
+  if (NET.host) { NET.battleSeed = 1 + ((Math.random() * 2 ** 30) | 0); netAll(['ba', NET.battleSeed]); }
   S.battleTeams = teams; S.battleResult = null; S.battleStatus = null; S.battleArena = arena;
   S.state = 'battle';
   show('battle');
   const buildMesh = (spec, k) => { const m = buildCreature(spec); m.material = teamMats[k]; return m; };
   if (ARENA && arena) {
-    battle = ARENA.createBattle({ arena, teams, buildMesh, buildBall: buildBallFor, buildTrainer: (k) => buildTrainer(TEAMS[k].hex), poseTrainer, input: readStick, sfx: { tone, cry } });
+    battle = ARENA.createBattle({ arena, teams, buildMesh, buildBall: buildBallFor, buildTrainer: (k) => buildTrainer(TEAMS[k].hex), poseTrainer, sfx: { tone, cry },
+      input: NET.on ? (k) => NET.arenaIn[k] : readStick, rand: NET.on ? seeded(NET.battleSeed) : undefined, noSkip: NET.on });
     battle.modern = true;
     if (battle.resize) battle.resize(innerWidth / innerHeight);
   } else {
@@ -1351,29 +1455,30 @@ function startBattle(arena) {
   battleHold = 0;
 }
 function tickBattle(dt) {
+  if (NET.on && battle.modern) { tickBattleNet(dt); return; }
   battle.step(dt);
   if (battle.modern) { if (battle.finished) endBattle(); return; }
   const st = battle.status();
-  $('battlebars').innerHTML = S.battleTeams.map((tm, k) => `<div class="bb"><span class="dot" style="background:${tm.css}"></span><b>${k === 0 ? 'You' : tm.name}</b><div class="hpbar"><i style="width:${(st[k].hp * 100).toFixed(0)}%;background:${tm.css}"></i></div><span>${st[k].alive}/${st[k].all}</span></div>`).join('');
+  $('battlebars').innerHTML = S.battleTeams.map((tm, k) => `<div class="bb"><span class="dot" style="background:${tm.css}"></span><b>${seatLabel(k)}</b><div class="hpbar"><i style="width:${(st[k].hp * 100).toFixed(0)}%;background:${tm.css}"></i></div><span>${st[k].alive}/${st[k].all}</span></div>`).join('');
   $('battlebanner').textContent = battle.intro > 0 ? `Battle in ${Math.ceil(battle.intro)}…` : battle.finished ? winnerText(battle.result().winner) : '';
   if (battle.finished) { battleHold += dt; if (battleHold > 3.5) endBattle(); }
 }
-function endBattle() {
+function endBattle(given = null) {            // given: the host's result (multiplayer clients show that, whatever their own copy says)
   if (!battle) return;
-  S.battleResult = battle.result(); S.battleStatus = battle.status();
+  S.battleResult = given ? given[0] : battle.result(); S.battleStatus = given ? given[1] : battle.status();
   if (battle.destroy) battle.destroy();
   battle = null;
   $('battleui').style.display = 'none';
   finish();
 }
-function skipBattle() { if (battle) { battle.skip(); endBattle(); } return S.battleResult; }
+function skipBattle() { if (battle && !NET.on) { battle.skip(); endBattle(); } return S.battleResult; }
 S.skipBattle = skipBattle;
 function battleRows() {
   const res = S.battleResult, st = S.battleStatus;
   if (!res || !st) return '';
   let h = S.battleArena ? `<tr><td>Arena</td><td>${S.battleArena.name} (favours ${S.battleArena.types.join(', ')})</td></tr>` : '';
-  h += S.battleTeams.map((tm, k) => `<tr><td><span class="dot" style="background:${tm.css}"></span> ${k === 0 ? 'You' : tm.name + ' (CPU)'}${res.winner === k ? ' ★' : ''}</td><td>${st[k].all} fought, ${st[k].alive} left standing${st[k].scooped ? `, ball scooped ${st[k].scooped}` : ''}</td></tr>`).join('');
-  if (res.mvp) h += `<tr><td>Top fighter</td><td>${res.mvp.name} (${res.mvp.team === 0 ? 'yours' : TEAMS[res.mvp.team].name}), ${res.mvp.kills} knock-outs</td></tr>`;
+  h += S.battleTeams.map((tm, k) => `<tr><td><span class="dot" style="background:${tm.css}"></span> ${k === S.team ? 'You' : tm.name + (tm.human ? '' : ' (CPU)')}${res.winner === k ? ' ★' : ''}</td><td>${st[k].all} fought, ${st[k].alive} left standing${st[k].scooped ? `, ball scooped ${st[k].scooped}` : ''}</td></tr>`).join('');
+  if (res.mvp) h += `<tr><td>Top fighter</td><td>${res.mvp.name} (${res.mvp.team === S.team ? 'yours' : TEAMS[res.mvp.team].name}), ${res.mvp.kills} knock-outs</td></tr>`;
   if (res.timedOut) h += '<tr><td colspan="2">Decided on remaining health after the time limit.</td></tr>';
   return h;
 }
@@ -1426,19 +1531,23 @@ function refillMap() {
 // ---------- the round: phases, the clock's announcements and events ----------
 function announce(title, sub = '', color = '#ffe169', kicker = '') {
   const el = $('banner');
-  el.innerHTML = `${kicker ? `<div class="kick">${kicker}</div>` : ''}<div class="ttl" style="background:${color}">${title}</div>${sub ? `<div class="sub2">${sub}</div>` : ''}`;
+  el.innerHTML = loc(`${kicker ? `<div class="kick">${kicker}</div>` : ''}<div class="ttl" style="background:${color}">${title}</div>${sub ? `<div class="sub2">${sub}</div>` : ''}`);
   el.classList.remove('show'); void el.offsetWidth; el.classList.add('show');
 }
 function showCount(txt, cls = '') { const el = $('count'); el.textContent = txt; el.className = cls; void el.offsetWidth; el.className = cls + ' show'; }
 function enterPhase(ph) {
   const P2 = PHASES[ph];
   let sub = P2.sub;
-  if (ph === 1 || ph === 2) spawnWave();
-  if (ph === 1) for (const b of allBalls()) if (b.d < 1) {            // nobody is left stuck in the Green: a ball still under 1 m gets a leg up
+  if (NET.client) {                              // the host adds the critters; this machine only marks the moment
+    if (ph === 1 || ph === 2) [392, 523, 659].forEach((f, i) => tone(f, f * 1.5, 0.2, 'sine', 0.12, i * 0.09));
+    if (ph === 3) { [98, 98, 131, 98].forEach((f, i) => tone(f, f * 0.98, 0.5, 'sawtooth', 0.2, i * 0.42)); $('timer').classList.add('hot'); }
+  }
+  else if (ph === 1 || ph === 2) spawnWave();
+  if (ph === 1 && !NET.client) for (const b of allBalls()) if (b.d < 1) {            // nobody is left stuck in the Green: a ball still under 1 m gets a leg up
     growBall(b, 1 - b.vol3);
     if (b === S) { sub = 'You got a leg up to 1 m: climb out of the Green! ' + sub; toast('Late bloomer: boosted to 1 m'); }
   }
-  if (ph === 3) { spawnTitans(); refillMap(); $('timer').classList.add('hot'); }
+  if (ph === 3 && !NET.client) { spawnTitans(); refillMap(); $('timer').classList.add('hot'); }
   if (ph > 0) { announce(P2.name.toUpperCase(), sub, ph === 3 ? '#ff8a6a' : '#ffe169', `Phase ${ph + 1} of ${PHASES.length}`); [523, 659, 784, 1047].forEach((f, i) => tone(f, f, 0.2, 'triangle', 0.16, i * 0.1)); }
   music.setPhase(ph);
   updatePhaseBar(true);
@@ -1493,14 +1602,15 @@ function tickEvents(dt) {
   const ev = S.ev;
   if (ev) {
     ev.t += dt;
-    try { if (ev.def.tick) ev.def.tick(H, ev, dt); } catch (e) { console.error('event tick failed', ev.def.id, e); ev.done = true; }
+    try { if (ev.def.tick && !ev.net) ev.def.tick(H, ev, dt); } catch (e) { console.error('event tick failed', ev.def.id, e); ev.done = true; }
     const left = ev.def.duration - ev.t;
     const pct = clamp(left / ev.def.duration * 100, 0, 100);
     if (Math.abs(pct - (ev.pct ?? 200)) > 0.6) { ev.pct = pct; $('evring').style.background = `conic-gradient(${ev.color} ${pct.toFixed(1)}%, rgba(43,37,64,.25) 0)`; }
     $('evchip').classList.toggle('ending', left < 5);
-    if (left <= 0 || ev.done) endEvent();
+    if ((left <= 0 || ev.done) && !ev.net) endEvent();       // (a client's copy ends when the host says so)
     return;
   }
+  if (NET.client) return;
   if (S.evTimes.length && S.timeLeft <= S.evTimes[0] && S.timeLeft > 20) {
     S.evTimes.shift();
     S.evCount++;
@@ -1516,8 +1626,13 @@ function startEvent(def) {
   if (!def.quiet) { for (let i = 0; i < 3; i++) tone(620, 930, 0.22, 'sawtooth', 0.13, i * 0.26); }
   else tone(880, 1320, 0.5, 'sine', 0.1);
   try { def.start(H, ev); } catch (e) { console.error('event start failed', def.id, e); S.ev = null; return; }
-  const name = ev.title || def.name, tag = ev.tag ?? EVENT_TAGS[def.id] ?? '', icon = eventIcon(def.id);
-  const card = $('evcard');
+  const name = ev.title || def.name, tag = ev.tag ?? EVENT_TAGS[def.id] ?? '';
+  netAll(['ev', def.id, name, tag, color, def.duration, def.quiet ? 1 : 0]);
+  showEvent(def.id, name, tag, color);
+}
+function showEvent(id, name, tag, color) {     // the card that pops up, and the chip under the clock
+  const icon = eventIcon(id), card = $('evcard');
+  name = loc(name); tag = loc(tag);
   card.innerHTML = `<div class="ico" style="background:${color}">${icon}</div><b>${name}</b>${tag ? `<span>${tag}</span>` : ''}`;
   card.classList.remove('show'); void card.offsetWidth; card.classList.add('show');
   $('evico').innerHTML = icon; $('evico').style.background = color; $('evname').textContent = name; $('evtag').innerHTML = tag; $('evdist').innerHTML = '';
@@ -1527,7 +1642,8 @@ function endEvent() {
   const ev = S.ev;
   if (!ev) return;
   S.ev = null;
-  try { if (ev.def.end) ev.def.end(H, ev); } catch (e) { console.error('event end failed', ev.def.id, e); }
+  if (!ev.net) netAll(['eve']);
+  try { if (ev.def.end && !ev.net) ev.def.end(H, ev); } catch (e) { console.error('event end failed', ev.def.id, e); }
   $('evchip').style.display = 'none';
 }
 S.fireEvent = (id) => { const def = EVENTS.find((e) => e.id === id); if (def) startEvent(def); return !!def; };   // debug: start an event now
@@ -1543,7 +1659,7 @@ function tickMatch(dt) {
     else if (sec === 30) { toast('30 seconds left!'); tone(660, 660, 0.3, 'square', 0.1); }
     else if (sec === 60) toast('One minute left!');
   }
-  for (const b of allBalls()) b.ratioBonus = 0;        // events that widen a ball's reach set this again every frame
+  if (!NET.client) for (const b of allBalls()) b.ratioBonus = 0;        // events that widen a ball's reach set this again every frame
   tickEvents(dt);
   updatePhaseBar();
 }
@@ -1608,6 +1724,485 @@ const music = (() => {
     },
   };
 })();
+
+// ---------- multiplayer ----------
+// The host's machine runs the world exactly as in single player; other players' balls are "remote" rivals there, moved by
+// what their machines report. A client runs its own ball's physics and draws everything else from what the host sends:
+//   reliable events   things rolled up (pk), dropped (dr, tk), added (sp), removed (rm), changed (pr), events and their
+//                     markers and effects, the phases of the round, and shoves to this player's ball (im);
+//   15 snapshots/sec  where every ball is and how big, the clock, and the critters near this player that have moved.
+// A client rolls things up at once on its own screen and asks the host (cl); the host agrees (pk) or refuses (dn).
+const r2 = (v) => Math.round(v * 100) / 100, r3 = (v) => Math.round(v * 1000) / 1000;
+const propBits = (o) => (o.noPick ? 2 : 0) | (o.group.material === goldMat ? 1 : 0);
+const propSig = (o) => o.size * 4 + propBits(o);
+
+function netBegin() {                            // a round is starting (called from start, after the map is built)
+  NET.q.clear(); NET.pending.clear(); NET.lunges.clear(); NET.ready = new Set(); NET.spawned = []; NET.fxRoots.clear(); NET.fxNodes.clear(); NET.mmDirty.clear();
+  NET.snapT = 0; NET.upT = 0; NET.modsSent = ''; NET.cdGo = false; NET.battleSeed = 0; NET.aEnd = null; NET.aSteps = [];
+  if (!NET.on) return;
+  if (NET.host) { for (const o of S.objects) o.nsig = propSig(o); S.live = true; }
+  else netHost(['rdy', S.layoutSum]);
+}
+// (host) something was added to the world after the start: tell everyone. The record is filled in when it is sent, so
+// whatever the spawner does to the new thing in the same frame (gold, held, popping in) goes with it.
+function netSpawned(o, specId, x, z) {
+  const rec = ['sp', o.id, specId, r2(x), r2(z), 0, 0, 0, o.bonus, 0, 0, 0];
+  NET.spawned.push([rec, o]); netAll(rec);
+}
+function netTick(dt) {
+  if (!NET.room) return;
+  if (NET.host) {
+    for (const R of rivals) if (R.imp) { const id = NET.peers[R.team]; if (id) netTo(id, ['im', R.imp]); R.imp = null; }
+    for (const [rec, o] of NET.spawned) { rec[5] = r2(o.group.rotation.y); rec[6] = o.size; rec[7] = o.rad; rec[9] = r2(o.spawnT); rec[10] = propBits(o); rec[11] = r2(o.cool); o.nsig = propSig(o); }
+    NET.spawned.length = 0;
+    const mods = JSON.stringify([MODS, S.skyOverride ?? null]);
+    if (mods !== NET.modsSent) { NET.modsSent = mods; netAll(['md', mods]); }
+    NET.snapT -= dt;
+    if (NET.snapT <= 0) { NET.snapT = 1 / 15; netSnapshot(); }
+  } else {
+    NET.upT -= dt;
+    if (NET.upT <= 0) { NET.upT = 1 / 20; netHost(['u', r2(S.x), r2(S.y), r2(S.z), r3(S.heading), r2(S.vx), r2(S.vz), S.boostT > 0 ? 1 : 0, r2(S.charge), r2(S.energy)]); }
+    if (NET.lunges.size) { netHost(['lg', [...NET.lunges]]); NET.lunges.clear(); }
+    for (const e of NET.fxNodes.values()) for (const o of e.nodes) if (o.userData.tp) o.position.lerp(o.userData.tp, Math.min(1, 12 * dt));
+  }
+  netFlush();
+}
+// (host) Which free things near this player's ball have moved since they were last told? The nearest and the most out
+// of date first, 48 at most.
+function critterDelta(R, slot) {
+  const cand = [], lim = 70 + R.d * 12, i = slot * 2;
+  for (const o of S.objects) {
+    if (o.fly) continue;
+    const p = o.group.position, s = o.sent || (o.sent = []);
+    if (s[i] === undefined) { s[i] = p.x; s[i + 1] = p.z; continue; }
+    const off = Math.abs(p.x - s[i]) + Math.abs(p.z - s[i + 1]);
+    if (off < 0.04) continue;
+    const d = Math.hypot(p.x - R.x, p.z - R.z);
+    if (d < lim + o.size * 4) cand.push([d / (1 + 4 * off), o]);       // the further out of date, the sooner it is sent
+  }
+  cand.sort((a, b) => a[0] - b[0]);
+  const out = [];
+  for (let n = 0; n < cand.length && n < 48; n++) { const o = cand[n][1], p = o.group.position; o.sent[i] = p.x; o.sent[i + 1] = p.z; out.push(o.id, Math.round(p.x * 20), Math.round(p.z * 20), Math.round((o.yaw || 0) * 50)); }
+  return out;
+}
+function netSnapshot() {
+  const balls = [];
+  for (let t = 0; t < TEAMS.length; t++) {
+    const b = ballOf(t), [vx, vz] = velOf(b);
+    const chg = b === S ? S.charge : b.remote ? b.chg : b.wind > 0 ? 0.65 * (1 - b.wind / (CHARGE_TIME * 0.65)) : 0;
+    balls.push(r2(b.x), r2(b.y), r2(b.z), r3(b.heading), r2(vx), r2(vz), b.d, b.boostT > 0 ? 1 : 0, r2(chg));
+  }
+  const pr = [];                                 // things whose size or state an event changed
+  for (const o of S.objects) { const sg = propSig(o); if (o.nsig === undefined) o.nsig = sg; else if (o.nsig !== sg) { o.nsig = sg; pr.push([o.id, o.size, o.rad, propBits(o)]); } }
+  if (pr.length) netAll(['pr', pr]);
+  const mm = [];
+  for (const id of NET.mmDirty) { const m = markers.get(id); if (m) mm.push(id, r2(m.x), r2(m.z)); }
+  NET.mmDirty.clear();
+  const fxu = netFxScan();
+  for (let t = 0; t < TEAMS.length; t++) {
+    const id = NET.peers[t], R = id && rivalOf(t);
+    if (!R) continue;
+    const busy = NET.room.buffered(id) > 100000;         // a slow link: leave the critters out until it catches up
+    netTo(id, ['s', r2(S.timeLeft), balls, [R.vol3, R.ratioBonus || 0], busy ? [] : critterDelta(R, t), mm, fxu]);
+  }
+}
+// (client) the host's picture of the world
+function netSnap(m) {
+  const [, tl, balls, own, crit, mm, fxu] = m;
+  if (S.state === 'play') S.timeLeft += (tl - S.timeLeft) * 0.35;
+  for (let t = 0; t < TEAMS.length; t++) {
+    const R = t === S.team ? null : rivalOf(t), i = t * 9;
+    if (!R) continue;
+    R.nx = balls[i]; R.ny = balls[i + 1]; R.nz = balls[i + 2]; R.nh = balls[i + 3]; R.rvx = balls[i + 4]; R.rvz = balls[i + 5]; R.nb = balls[i + 7]; R.chg = balls[i + 8]; R.nAge = 0;
+    const d = balls[i + 6];
+    if (Math.abs(d - R.d) > 1e-6) { R.d = d; R.vol3 = d ** 3; seatOn(R.attached, d / 2); }
+  }
+  let v = own[0];                                // this ball's size: what the host has agreed, plus what it has not answered yet
+  for (const c of NET.pending.values()) v += c;
+  v = Math.max(START_D ** 3, v);
+  if (Math.abs(v - S.vol3) > 1e-9 * v) { S.vol3 = v; S.d = Math.cbrt(v); seatAll(); announceUnlocks(); }
+  S.ratioBonus = own[1];
+  for (let i = 0; i < crit.length; i += 4) { const o = S.byId.get(crit[i]); if (o && !o.on) { o.ntx = crit[i + 1] / 20; o.ntz = crit[i + 2] / 20; o.nyaw = crit[i + 3] / 50; } }
+  for (let i = 0; i < mm.length; i += 3) moveMark(mm[i], mm[i + 1], mm[i + 2]);
+  for (const [key, i, sig] of fxu) {
+    const e = NET.fxNodes.get(key), o = e && e.nodes[i];
+    if (!o) continue;
+    const a = sig.split(',');
+    (o.userData.tp || (o.userData.tp = new V3())).set(+a[0], +a[1], +a[2]);
+    o.quaternion.set(+a[3], +a[4], +a[5], +a[6]).normalize(); o.scale.set(+a[7], +a[8], +a[9]); o.visible = a[10] === '1';
+    if (o.isMesh && a.length > 12) { const mt = o.material; mt.color.setHex(+a[12]); mt.opacity = +a[13]; mt.transparent = a[14] === '1'; }
+  }
+}
+// (client) a critter or thing the host is moving: glide to where it was last said to be, and bob as it walks
+function puppetThing(o, dt, dist) {
+  const p = o.group.position, sp = o.spec, h = o.size;
+  let moving = false;
+  if (o.ntx !== undefined) {
+    const dx = o.ntx - p.x, dz2 = o.ntz - p.z, d = Math.hypot(dx, dz2);
+    if (d > 25) { p.x = o.ntx; p.z = o.ntz; }
+    else if (d > 0.005) { const k2 = Math.min(1, 10 * dt); p.x += dx * k2; p.z += dz2 * k2; moving = d > 0.04; }
+    else o.ntx = undefined;
+  }
+  if (o.kind !== 'creature') { if (moving) p.y = groundAt(p.x, p.z); return; }
+  if (!moving && dist > 150 + S.d * 12) return;
+  const air = sp.move === 'fly' || sp.move === 'float', wob = S.time * (sp.move === 'hop' ? 9 : 7) + o.phase;
+  let lift = 0;
+  if (sp.move === 'fly') lift = h * (0.5 + 0.1 * Math.sin(S.time * 3 + o.phase));
+  else if (sp.move === 'float') lift = h * (0.18 + 0.07 * Math.sin(S.time * 2 + o.phase));
+  else if (sp.move === 'swim') lift = T.waterAt(p.x, p.z) === 2 ? Math.max(0, SEA_LEVEL - h * 0.55 - groundAt(p.x, p.z)) : 0;
+  else if (moving) lift = Math.abs(Math.sin(wob)) * h * (sp.move === 'hop' ? 0.22 : sp.move === 'slither' ? 0 : 0.06);
+  p.y = groundAt(p.x, p.z) + lift;
+  if (o.nyaw !== undefined) o.group.rotation.set(0, o.nyaw + (moving && sp.move === 'slither' ? Math.sin(wob) * 0.35 : 0), moving && !air ? Math.sin(wob) * 0.09 : 0);
+}
+// Takes a thing off whichever ball it is on and puts it back in the world (where it goes next is the caller's business).
+function unstick(Bq, o) {
+  if (Bq) { const i = Bq.attached.indexOf(o); if (i >= 0) Bq.attached.splice(i, 1); }
+  if (o.group.parent && o.group.parent !== worldGroup) worldGroup.attach(o.group);
+  else if (!o.group.parent) { worldGroup.add(o.group); if (Bq) o.group.position.set(Bq.x, Bq.y, Bq.z); }
+  o.group.scale.setScalar(o.size); o.group.visible = true;
+  if (o.on && Bq === S) {
+    S.vol3 -= o.contrib; S.caught--; NET.pending.delete(o.id);
+    if (o.kind === 'creature') { S.attachedCritters--; armyDrop(S.army, o); for (const t of o.spec.types) bump(S.counts.type, t, -1); bump(S.counts.species, o.spec.id, -1); }
+  } else if (o.on && Bq && o.kind === 'creature') armyDrop(Bq.army, o);
+  if (o.kind === 'creature') setTeamLook(o, null);
+  o.on = false; o.by = null;
+  if (!o.gone && !S.objects.includes(o)) S.objects.push(o);
+}
+const holderOf = (o) => (o.on && o.by !== null && o.by !== undefined ? ballOf(o.by) : null);
+// (client) rolls a thing up here and now, and asks the host to agree
+function claim(o) {
+  const p = o.group.position;
+  o.wpos = [p.x, p.y, p.z, o.group.rotation.y];
+  attach(o); NET.pending.set(o.id, o.contrib); netHost(['cl', o.id]);
+}
+function netPick(team, id) {                     // (client) the host says this ball has rolled this thing up
+  const o = S.byId.get(id), Bq = ballOf(team);
+  if (!o || o.gone || !Bq) return;
+  if (team === S.team) NET.pending.delete(id);
+  if (o.on && o.by === team) return;             // already there: it was this player's own claim, now agreed
+  if (o.on) { const from = holderOf(o); unstick(from, o); if (from === S) seatAll(); }
+  o.fly = null;
+  if (!S.objects.includes(o)) S.objects.push(o);
+  if (Bq === S) attach(o); else rivalAttach(Bq, o);
+}
+function netDeny(id) {                           // (client) the host refused a claim: somebody else got there first
+  const o = S.byId.get(id);
+  NET.pending.delete(id);
+  if (!o || !o.on || o.by !== S.team) return;
+  unstick(S, o);
+  if (o.wpos) { o.group.position.set(o.wpos[0], o.wpos[1], o.wpos[2]); o.group.rotation.set(0, o.wpos[3], 0); }
+  o.cool = 0.5;
+  S.vol3 = Math.max(START_D ** 3, S.vol3); S.d = Math.cbrt(S.vol3); seatAll();
+}
+function netDrop(team, list, hit) {              // (client) things knocked off a ball, flying
+  const Bq = ballOf(team);
+  if (!Bq) return;
+  for (const [id, vx, vy, vz] of list) { const o = S.byId.get(id); if (!o || o.gone) continue; unstick(holderOf(o) || Bq, o); o.fly = { vx, vy, vz }; o.cool = 1.2; }
+  if (Bq === S) { if (hit) { S.hitCool = 3; S.shake = 0.3; sfxBump(); } S.vol3 = Math.max(START_D ** 3, S.vol3); S.d = Math.cbrt(S.vol3); seatAll(); }
+  else seatOn(Bq.attached, Bq.d / 2);
+}
+function netTake(team, list) {                   // (client) things taken off a ball and stood beside it
+  const Bq = ballOf(team);
+  if (!Bq) return;
+  for (const [id, x, z, rot] of list) { const o = S.byId.get(id); if (!o || o.gone) continue; unstick(holderOf(o) || Bq, o); o.fly = null; o.cool = 1.5; o.group.position.set(x, groundAt(x, z), z); o.group.rotation.set(0, rot, 0); o.ntx = undefined; }
+  if (Bq === S) { S.vol3 = Math.max(START_D ** 3, S.vol3); S.d = Math.cbrt(S.vol3); seatAll(); } else seatOn(Bq.attached, Bq.d / 2);
+}
+
+// Event effects (a twister, a supply ship, falling crates...) are built by events.js straight out of meshes, on the host.
+// Rather than teach every event to describe itself, the host sends each effect's meshes once and then whatever moves.
+const fxMat = (m) => [m.type, m.color ? m.color.getHex() : 0xffffff, r2(m.opacity), m.transparent ? 1 : 0, m.side, m.depthWrite ? 1 : 0, m.fog ? 1 : 0, m.emissive ? m.emissive.getHex() : 0, m.emissiveIntensity ?? 0, m.vertexColors ? 1 : 0];
+const fxFlat = (o, out = []) => { out.push(o); for (const c of o.children) fxFlat(c, out); return out; };
+const fxSig = (o) => `${r2(o.position.x)},${r2(o.position.y)},${r2(o.position.z)},${r3(o.quaternion.x)},${r3(o.quaternion.y)},${r3(o.quaternion.z)},${r3(o.quaternion.w)},${r3(o.scale.x)},${r3(o.scale.y)},${r3(o.scale.z)},${o.visible ? 1 : 0}${o.isMesh ? ',' + fxMat(o.material).slice(0, 4).join() : ''}`;
+function fxSer(o) {
+  const n = { p: o.position.toArray().map(r3), q: o.quaternion.toArray().map(r3), s: o.scale.toArray().map(r3), v: o.visible ? 1 : 0, c: o.children.map(fxSer) };
+  if (o.isMesh) {
+    let g = null;
+    for (const k2 in G) if (G[k2] === o.geometry) g = k2;
+    n.g = g || { p: Array.from(o.geometry.attributes.position.array, r3), i: o.geometry.index ? Array.from(o.geometry.index.array) : null };
+    n.m = fxMat(o.material); n.ro = o.renderOrder;
+  }
+  return n;
+}
+function netFxScan() {                           // (host) new effects in full; for the rest, only the parts that changed
+  const upd = [];
+  for (const [root, e] of NET.fxRoots) {
+    const nodes = fxFlat(root);
+    if (e.n !== nodes.length) { e.n = nodes.length; e.sigs = nodes.map(fxSig); netAll(['fxa', e.key, fxSer(root)]); continue; }
+    for (let i = 0; i < nodes.length; i++) { const sg = fxSig(nodes[i]); if (sg !== e.sigs[i]) { e.sigs[i] = sg; upd.push([e.key, i, sg]); } }
+  }
+  return upd;
+}
+function fxBuild(n) {                            // (client)
+  let o;
+  if (n.g) {
+    let geo = typeof n.g === 'string' ? G[n.g] : null;
+    if (!geo) { geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(n.g.p, 3)); if (n.g.i) geo.setIndex(n.g.i); geo.computeVertexNormals(); geo.userData.net = true; }
+    const a = n.m, M = THREE[a[0]] || THREE.MeshBasicMaterial;
+    const mt = new M({ color: a[1], opacity: a[2], transparent: !!a[3], side: a[4], depthWrite: !!a[5], fog: !!a[6], vertexColors: !!a[9] });
+    if (mt.emissive) { mt.emissive.setHex(a[7]); mt.emissiveIntensity = a[8]; }
+    o = new THREE.Mesh(geo, mt); o.renderOrder = n.ro || 0;
+  } else o = new THREE.Group();
+  o.position.fromArray(n.p); o.quaternion.fromArray(n.q).normalize(); o.scale.fromArray(n.s); o.visible = !!n.v;
+  for (const c of n.c) o.add(fxBuild(c));
+  return o;
+}
+function fxDrop(key) {
+  const e = NET.fxNodes.get(key);
+  if (!e) return;
+  fx.remove(e.root); NET.fxNodes.delete(key);
+  for (const o of e.nodes) if (o.isMesh) { o.material.dispose(); if (o.geometry.userData.net) o.geometry.dispose(); }
+}
+
+// ---- messages ----
+function clientMsg(m) {
+  const k2 = m[0];
+  if (k2 === 'full') { leaveRoom('That room is full'); return; }
+  if (k2 === 'lob') { LOB.kinds = m[1]; LOB.seat = m[2]; LOB.diff = m[3]; LOB.auto = m[4] ?? null; LOB.autoAt = performance.now(); if (!NET.on) { renderLobby(); if (S.state === 'menu') menuView('mvLobby'); } return; }
+  if (k2 === 'go') { beginMatch(m[1], m[2]); return; }
+  if (!NET.on) return;
+  switch (k2) {
+    case 's': netSnap(m); break;
+    case 'cd': NET.cdGo = true; if (S.state === 'intro') S.introT = Math.max(S.introT, INTRO_LEN); break;
+    case 'pk': netPick(m[1], m[2]); break;
+    case 'dn': netDeny(m[1]); break;
+    case 'dr': netDrop(m[1], m[2], m[3]); break;
+    case 'tk': netTake(m[1], m[2]); break;
+    case 'sp': {
+      const [, id, specId, x, z, rot, size, rad, bonus, spawnT, bits, cool] = m, e = SPECS[specId];
+      if (!e || S.byId.has(id)) break;
+      const o = S.spawn.put(specId, x, z, { id, rot, bonus, scale: size / e.size, rad });
+      if (!o) break;
+      o.cool = cool; o.noPick = !!(bits & 2);
+      if ((bits & 1) && o.kind === 'creature') o.group.material = goldMat;
+      if (spawnT > 0) { o.spawnT = spawnT; o.group.scale.setScalar(0.001); }
+      break;
+    }
+    case 'rm': { const o = S.byId.get(m[1]); if (o) { if (o.on) { const from = holderOf(o); unstick(from, o); if (from === S) seatAll(); } removeThing(o); } break; }
+    case 'pr': for (const [id, size, rad, bits] of m[1]) {
+      const o = S.byId.get(id);
+      if (!o) continue;
+      o.size = size; o.rad = rad; o.vis = size; o.armySpec = null; o.noPick = !!(bits & 2);
+      if (!o.on) { o.group.scale.setScalar(size); if (o.kind === 'creature') o.group.material = bits & 1 ? goldMat : critterMaterial; }
+    } break;
+    case 'fl': { const o = S.byId.get(m[1]); if (o && !o.on) { o.group.position.set(m[2], m[3], m[4]); o.fly = { vx: m[5], vy: m[6], vz: m[7] }; o.cool = 1; } break; }
+    case 'im': {
+      const p = m[1];
+      if (p.vx !== undefined) { S.vx = p.vx; S.vz = p.vz; }
+      if (p.energy !== undefined) S.energy = p.energy;
+      if (p.ghost) S.ghostT = p.ghost;
+      if (p.chg0) S.charge = 0;
+      if (p.bump) { S.shake = 0.2; sfxBump(); }
+      break;
+    }
+    case 'ev':
+      S.ev = { def: { id: m[1], duration: m[5] }, t: 0, done: false, data: {}, color: m[4], net: true };
+      if (!m[6]) { for (let i = 0; i < 3; i++) tone(620, 930, 0.22, 'sawtooth', 0.13, i * 0.26); } else tone(880, 1320, 0.5, 'sine', 0.1);
+      showEvent(m[1], m[2], m[3], m[4]);
+      break;
+    case 'eve': endEvent(); break;
+    case 'ts': toast(m[1]); break;
+    case 'an': announce(...m[1]); break;
+    case 'sx': if (m[1] === 0) tone(...m[2]); else if (SPECS[m[2][0]]) cry(SPECS[m[2][0]].spec, m[2][1]); break;
+    case 'mk': mark(m[1], m[2], m[3], m[4]); break;
+    case 'um': unmark(m[1]); break;
+    case 'md': { const [mods, sky] = JSON.parse(m[1]); Object.assign(MODS, mods); H.setIce(mods.iced); S.skyOverride = sky; break; }
+    case 'fxa': fxDrop(m[1]); { const root = fxBuild(m[2]); fx.add(root); NET.fxNodes.set(m[1], { root, nodes: fxFlat(root) }); } break;
+    case 'fxr': fxDrop(m[1]); break;
+    case 'tu': timeUp(); break;
+    case 'wh': if (S.state === 'play') timeUp(); startWheel(m[1]); break;
+    case 'ba': NET.battleSeed = m[1]; if (wheel) { wheel.destroy(); wheel = null; startBattle(S.forecast.arena); } break;
+    case 'as': for (const row of m[1]) NET.aSteps.push(row); break;
+    case 'ae': NET.aEnd = [m[1], m[2]]; break;
+    case 'left': { NET.seats[m[1]] = 'cpu'; const R = rivalOf(m[1]); if (R) R.human = false; toast(`${TEAMS[m[1]].name} left the game`); break; }
+  }
+}
+function hostMsg(id, m) {
+  if (!NET.on) return;
+  const seat = NET.peers.indexOf(id), R = seat > 0 ? rivalOf(seat) : null;
+  if (!R) return;
+  switch (m[0]) {
+    case 'rdy':
+      NET.ready.add(id);
+      if (m[1] !== S.layoutSum) { console.warn('a player built a different map', seat, m[1], S.layoutSum); toast(`${TEAMS[seat].name}'s map does not match: they may see things out of place`); }
+      break;
+    case 'u':
+      R.nx = clamp(+m[1] || 0, BOUNDS.x1, BOUNDS.x2); R.ny = +m[2] || 0; R.nz = clamp(+m[3] || 0, BOUNDS.z1, BOUNDS.z2); R.nh = +m[4] || 0;
+      R.rvx = +m[5] || 0; R.rvz = +m[6] || 0; R.nb = m[7] ? 1 : 0; R.chg = +m[8] || 0; R.ren = +m[9] || 0; R.nAge = 0;
+      break;
+    case 'cl': {                                 // they rolled something up: first come, first served
+      const o = S.byId.get(m[1]);
+      if (o && !o.on && !o.gone && !o.noPick && S.state === 'play' && o.size <= R.d * pickRatio(R) * 1.25 && S.objects.includes(o)) { o.fly = null; rivalAttach(R, o); }
+      else netTo(id, ['dn', m[1]]);
+      break;
+    }
+    case 'lg': for (const oid of m[1]) { const o = S.byId.get(oid); if (o && !o.on && !o.gone && Math.hypot(o.group.position.x - R.x, o.group.position.z - R.z) < R.d * 2 + o.size * 3) startLunge(o, R); } break;
+    case 'ai': NET.aLatest[seat] = [clamp(Math.round(+m[1] || 0), -100, 100), clamp(Math.round(+m[2] || 0), -100, 100), m[3] ? 1 : 0]; break;
+  }
+}
+
+// ---- the arena fight ----
+// The fight is not sent thing by thing. Every machine runs the same fight from the same armies and the same dice, in
+// steps of 1/60 s; the host decides when each step happens and what every player's stick was doing in it, and sends
+// that. The others replay the steps as they arrive (a player's own steering comes back with the rest, a moment late).
+const ASTEP = 1 / 60;
+const stickBits = () => { const st = readStick(); return [Math.round(clamp(st.x, -1, 1) * 100), Math.round(clamp(st.z, -1, 1) * 100), st.dash ? 1 : 0]; };
+function arenaStep(row) {
+  for (let t = 0; t < TEAMS.length; t++) NET.arenaIn[t] = { x: row[t * 3] / 100, z: row[t * 3 + 1] / 100, dash: !!row[t * 3 + 2] };
+  battle.step(ASTEP);
+}
+function tickBattleNet(dt) {
+  if (NET.host) {
+    NET.aAcc = Math.min(0.25, NET.aAcc + dt);
+    const out = [];
+    while (NET.aAcc >= ASTEP && !battle.finished) {
+      NET.aAcc -= ASTEP;
+      NET.aLatest[S.team] = stickBits();
+      const row = [];
+      for (let t = 0; t < TEAMS.length; t++) { const st = NET.aLatest[t] || [0, 0, 0]; row.push(st[0], st[1], st[2]); }
+      out.push(row); arenaStep(row);
+    }
+    if (out.length) netAll(['as', out]);
+    if (battle.finished) { const end = [battle.result(), battle.status()]; netAll(['ae', end[0], end[1]]); endBattle(end); }
+  } else {
+    const st = stickBits(), key = st.join();
+    if (key !== NET.aSent) { NET.aSent = key; netHost(['ai', st[0], st[1], st[2]]); }
+    let n = Math.min(10, Math.max(1, Math.ceil((NET.aSteps.length - 2) / 2)));      // keep a couple of steps in hand; the further behind, the faster it catches up
+    while (n-- > 0 && NET.aSteps.length && !battle.finished) arenaStep(NET.aSteps.shift());
+    if (NET.aEnd && (battle.finished || !NET.aSteps.length)) {
+      if (battle.result().winner !== NET.aEnd[0].winner) console.warn("this copy of the fight ended differently from the host's", battle.result(), NET.aEnd[0]);
+      endBattle(NET.aEnd);
+    }
+  }
+}
+
+// ---- rooms and the lobby ----
+// A private room is its host's: they pick the CPU difficulty and press Start. A public room belongs to nobody in
+// particular (its host is whoever arrived first): it starts itself once two players are in, and nobody joins mid-round.
+const PUBLIC_WAIT = 20, PUBLIC_WAIT_FULL = 5, PUBLIC_RESULTS = 25;       // seconds: before a public game starts; once all four are in; on the results screen
+const lobbyHumans = () => LOB.kinds.filter((kind) => kind === 'human').length;
+const autoLeft = () => (LOB.auto === null ? null : Math.max(0, Math.ceil(LOB.auto - (performance.now() - LOB.autoAt) / 1000)));
+function lobbyText() {
+  const room = NET.room, host = room && room.host, n = lobbyHumans(), left = autoLeft();
+  if (room && room.public) return left !== null ? `${n} players. Starting in ${left}…` : 'Looking for other players…';
+  return host ? (n < 2 ? 'Share the code or the link. Empty seats are played by CPU teams.' : `${n} players are in.`) : `Waiting for the host to start. CPU teams: ${(DIFFS[LOB.diff] || DIFFS.normal).label}.`;
+}
+function renderLobby() {
+  const room = NET.room, host = room && room.host, pub = room && room.public;
+  $('roomTitle').firstChild.nodeValue = pub ? 'Public game' : 'Room';
+  $('roomCode').textContent = room && !pub ? room.code : ''; $('roomCode').style.display = pub ? 'none' : '';
+  $('btnCopy').style.display = pub ? 'none' : '';
+  $('seats').innerHTML = TEAMS.map((tm, i) => `<div class="seat${LOB.kinds[i] === 'human' ? ' in' : ''}"><i class="dot" style="background:${tm.css}"></i><b>${tm.name}</b><span>${i === LOB.seat ? 'You' : LOB.kinds[i] === 'human' ? 'Player' : 'CPU'}${i === 0 && !pub ? ' · host' : ''}</span></div>`).join('');
+  $('btnStartMp').style.display = host ? '' : 'none';
+  $('btnStartMp').textContent = pub ? 'Start now' : 'Start game';
+  $('lobbyDiff').style.display = host && !pub ? '' : 'none';
+  $('lobbyMsg').textContent = lobbyText();
+}
+function sendLobby() {
+  const room = NET.room;
+  if (!room || !room.host) return;
+  LOB.diff = room.public ? 'normal' : save.difficulty;
+  for (let t = 1; t < TEAMS.length; t++) if (LOB.peers[t]) room.send(LOB.peers[t], [['lob', LOB.kinds, t, LOB.diff, autoLeft()]]);
+}
+// (public host) The countdown to a public game: it runs while two or more players are waiting in the lobby.
+function lobbyAuto() {
+  const n = lobbyHumans(), was = LOB.auto;
+  if (n < 2) LOB.auto = null;
+  else { const left = autoLeft(), cap = n >= TEAMS.length ? PUBLIC_WAIT_FULL : PUBLIC_WAIT; LOB.auto = Math.min(left ?? cap, cap); LOB.autoAt = performance.now(); }
+  return was !== LOB.auto;
+}
+let lobbyShown = '';
+function lobbyTick() {                           // once a tick while in a room (also from the worker's timer, so a hidden tab keeps count)
+  const room = NET.room;
+  if (!room) return;
+  if (room.public && S.state === 'results') {    // nobody is left waiting on somebody else's results screen
+    S.resAt = S.resAt || performance.now();
+    if (performance.now() - S.resAt > PUBLIC_RESULTS * 1000) { toLobby(); return; }
+  }
+  if (NET.on || S.state !== 'menu') return;
+  if (room.public && room.host && autoLeft() === 0 && lobbyHumans() >= 2) { startMatch(); return; }
+  const txt = lobbyText();
+  if (txt !== lobbyShown) { lobbyShown = txt; $('lobbyMsg').textContent = txt; }
+}
+function bindRoom(room) {
+  NET.room = room; NET.q.clear();
+  room.accepting = () => !(room.public && NET.on);       // a public game under way takes nobody new: they are sent to another room
+  room.onMsg = (id, batch) => {
+    for (const m of Array.isArray(batch) && Array.isArray(batch[0]) ? batch : [batch]) {
+      try { if (room.host) hostMsg(id, m); else clientMsg(m); } catch (e) { console.error('multiplayer message failed', m && m[0], e); }
+    }
+  };
+  room.onJoin = (id) => {
+    const seat = LOB.kinds.indexOf('cpu');
+    if (seat < 1) return;
+    LOB.kinds[seat] = 'human'; LOB.peers[seat] = id;
+    if (room.public && !NET.on) lobbyAuto();
+    sendLobby(); if (!NET.on) renderLobby();
+  };
+  room.onLeave = (id) => {
+    const seat = LOB.peers.indexOf(id);
+    if (seat < 0) return;
+    LOB.kinds[seat] = 'cpu'; LOB.peers[seat] = null; NET.q.delete(id);
+    if (room.public && !NET.on) lobbyAuto();
+    sendLobby(); if (!NET.on) renderLobby();
+    if (NET.on && NET.peers[seat] === id) {        // mid-round: a CPU takes the ball over
+      NET.peers[seat] = null; NET.seats[seat] = 'cpu'; NET.aLatest[seat] = [0, 0, 0];
+      const R = rivalOf(seat);
+      if (R) { delete R.vx; delete R.vz; delete R.energy; Object.assign(R, { remote: false, human: false, v: 0, imp: null, wander: 0, energy: 1, dash: false }); }
+      toast(`${TEAMS[seat].name} left the game`); netAll(['left', seat]);
+    }
+  };
+  room.onClose = (reason) => { if (NET.room === room) { NET.room = null; dropToMenu(reason || 'Disconnected'); } };
+}
+async function hostRoom() {
+  if (NET.room || NET.joining) return;
+  NET.joining = true; $('netMsg').textContent = 'Opening a room…';
+  try { bindRoom(await openRoom({ host: true })); } catch (e) { $('netMsg').textContent = (e && e.message) || 'Could not open a room'; return; } finally { NET.joining = false; }
+  LOB.kinds = ['human', 'cpu', 'cpu', 'cpu']; LOB.peers = [null, null, null, null]; LOB.seat = 0; LOB.diff = save.difficulty; LOB.auto = null;
+  $('netMsg').textContent = '';
+  renderLobby(); menuView('mvLobby');
+}
+// Quick play: into a public game that is waiting for players, or the first one in a new one.
+async function quickPlay() {
+  if (NET.room || NET.joining) return;
+  NET.joining = true; $('netMsg').textContent = 'Looking for a game…';
+  let room;
+  try { room = await openPublicRoom(); bindRoom(room); } catch (e) { $('netMsg').textContent = (e && e.message) || 'Could not find a game'; return; } finally { NET.joining = false; }
+  $('netMsg').textContent = '';
+  if (room.host) { LOB.kinds = ['human', 'cpu', 'cpu', 'cpu']; LOB.peers = [null, null, null, null]; LOB.seat = 0; LOB.diff = 'normal'; LOB.auto = null; renderLobby(); menuView('mvLobby'); }
+  else $('netMsg').textContent = 'Found a game. Joining…';
+}
+async function joinRoom(code) {
+  code = cleanCode(code);
+  if (NET.room || NET.joining) return;
+  if (code.length !== 4) { $('netMsg').textContent = 'Enter the 4-letter room code'; return; }
+  NET.joining = true; $('netMsg').textContent = 'Joining…';
+  try { bindRoom(await openRoom({ host: false, code })); } catch (e) { $('netMsg').textContent = (e && e.message) || 'Could not join that room'; return; } finally { NET.joining = false; }
+  $('netMsg').textContent = 'Connected. Waiting for the host…';
+}
+function startMatch() {                          // (host) everybody in the lobby starts a round
+  const room = NET.room;
+  if (!room || !room.host || NET.on) return;
+  const cfg = { seed: (Math.random() * 2 ** 31) | 0, evTimes: EVENT_TIMES.map((t) => t + Math.round((Math.random() - 0.5) * 6)), kinds: LOB.kinds.slice(), diff: room.public ? 'normal' : save.difficulty };
+  NET.peers = LOB.peers.slice(); LOB.auto = null;
+  for (let t = 1; t < TEAMS.length; t++) if (NET.peers[t]) room.send(NET.peers[t], [['go', cfg, t]]);
+  beginMatch(cfg, 0);
+}
+function stopBattle() { if (battle) { if (battle.destroy) battle.destroy(); battle = null; } if (wheel) { wheel.destroy(); wheel = null; } $('battleui').style.display = 'none'; }
+function beginMatch(cfg, seat) {
+  stopBattle();
+  NET.on = true; NET.host = NET.room.host; NET.client = !NET.host; NET.seat = seat; NET.seats = cfg.kinds.slice();
+  if (NET.client) NET.peers = [null, null, null, null];
+  start('timed', cfg);
+}
+function toLobby() {
+  stopBattle(); toMenu(); menuView('mvLobby');
+  const room = NET.room;
+  if (room && room.public && room.host && lobbyAuto()) sendLobby();      // back from a round: the next one counts down
+  renderLobby();
+}
+function dropToMenu(msg) { stopBattle(); $('count').className = ''; toMenu(); menuView(msg ? 'mvMulti' : 'mvHome'); $('netMsg').textContent = msg || ''; }
+function leaveRoom(msg) { const room = NET.room; NET.room = null; if (room) room.close(); dropToMenu(msg); }
+S.net = NET; S.lob = LOB; S.netClaim = claim;      // debug hooks
 
 // ---------- main update ----------
 const rollAxis = new V3();
@@ -1719,7 +2314,8 @@ function update(dt) {
     }
     const ox = p.x - S.x, oz = p.z - S.z, dist = Math.hypot(ox, oz);
     o.group.visible = dist < o.size * 300 + S.d * 10 + 25;
-    if (o.kind === 'creature') {                 // it minds the nearest ball, whoever is pushing it
+    if (NET.client) { if (o.kind === 'creature' || o.ntx !== undefined) puppetThing(o, dt, dist); }      // the host moves the critters; here they glide to where it says
+    else if (o.kind === 'creature') {                 // it minds the nearest ball, whoever is pushing it
       let B = S, gap = dist - S.d;
       for (const R of rivals) { const g2 = Math.hypot(p.x - R.x, p.z - R.z) - R.d; if (g2 < gap) { B = R; gap = g2; } }
       if (gap < 60 + B.d * 11) updateCreature(o, dt, B);
@@ -1729,7 +2325,7 @@ function update(dt) {
     if (o.kind === 'creature' && dist < reach + S.d * 0.35 && (o.noPick || o.size > S.d * pickRatio(S)) && !(S.ghostT > 0)) (boxers || (boxers = [])).push(o);   // a critter too big to roll up, right beside the ball
     if (dist >= reach) continue;
     if (feet > p.y + o.size || S.y + r < p.y) continue;      // on a different level: passes over or under
-    if (!o.noPick && o.size <= S.d * pickRatio(S)) { if (o.cool <= 0) attach(o); continue; }
+    if (!o.noPick && o.size <= S.d * pickRatio(S)) { if (o.cool <= 0) { if (NET.client) claim(o); else attach(o); } continue; }
     if (o.spec.flat) continue;
     if (o.onBump && o.cool <= 0) o.onBump(S, o);
     if (o.kind === 'creature' && S.ghostT > 0) continue;        // just thrown clear by a lunge: passes through critters for a moment
@@ -1755,6 +2351,10 @@ function update(dt) {
   }
 
   updateRivals(dt, frozen);
+  if (NET.client) for (const R of rivals) {             // keep out of the other balls (the host decides what a bump knocks off)
+    const dx = S.x - R.x, dz = S.z - R.z, dist = Math.hypot(dx, dz) || 0.001, over = (S.d + R.d) / 2 - dist;
+    if (over > 0 && Math.abs(R.y - S.y) < (S.d + R.d) / 2) { const k2 = Math.min(over, S.d * 0.3); if (groundAt(S.x + dx / dist * k2, S.z + dz / dist * k2) - groundAt(S.x, S.z) <= S.d * 0.2) { S.x += dx / dist * k2; S.z += dz / dist * k2; } }
+  }
 
   // ball, trainer, camera
   r = S.d / 2;
@@ -1795,7 +2395,8 @@ function update(dt) {
   updateTags();
   updateSky(dt);
   if (S.mode === 'timed') { updateMini(dt); music.tick(); }
-  if (S.mode === 'timed' && !frozen) { S.timeLeft -= dt; tickMatch(dt); if (S.timeLeft <= 0 && S.state === 'play') timeUp(); }
+  if (S.mode === 'timed' && !frozen) { S.timeLeft -= dt; tickMatch(dt); if (S.timeLeft <= 0 && S.state === 'play' && !NET.client) timeUp(); }
+  if (NET.on) netTick(dt);
   updateHud();
 }
 
@@ -1839,23 +2440,36 @@ S.autoplay = (seconds, everySec = 30) => {
 };
 
 // ---------- flow ----------
-function show(id) { if (id !== null && document.pointerLockElement) document.exitPointerLock(); for (const o of ['menu', 'pause', 'results', 'dex']) $(o).classList.toggle('open', o === id); $('hud').style.display = id === null || id === 'pause' ? 'block' : 'none'; }
+function show(id) { if (id !== null && document.pointerLockElement) document.exitPointerLock(); for (const o of ['menu', 'pause', 'results', 'dex', 'help']) $(o).classList.toggle('open', o === id); $('hud').style.display = id === null || id === 'pause' ? 'block' : 'none'; }
 const INTRO_LEN = 5.4;
-function start(mode) {
+// Dress the player's ball, trainer and HUD panel in their team's colour.
+function dressPlayer() {
+  const tm = TEAMS[S.team];
+  core.children[0].material = mat(tm.hex);
+  scene.remove(trainer); trainer = buildTrainer(tm.hex); trainer.scale.setScalar(trainerHeight(START_D)); scene.add(trainer);
+  $('size').style.borderTopColor = tm.css;
+}
+// cfg: a multiplayer match, as the host set it up ({ seed, evTimes, kinds, diff }); null for single player.
+function start(mode, cfg = null) {
   audio();
+  if (!cfg) { NET.on = NET.host = NET.client = false; NET.seats = ['human', 'cpu', 'cpu', 'cpu']; }
+  S.team = cfg ? NET.seat : 0;
+  START = { x: STARTS[S.team][0], z: STARTS[S.team][1] };
+  dressPlayer();
   const gy = groundAt(START.x, START.z), timed = mode === 'timed';
   Object.assign(S, { state: timed ? 'intro' : 'play', mode, d: START_D, vol3: START_D ** 3, x: START.x, y: gy + START_D / 2, z: START.z, vx: 0, vy: 0, vz: 0, sup: START_D / 2, camY: gy,
     heading: Math.atan2(-START.x, -START.z), time: 0, timeLeft: LEVEL.seconds, reachedAt: null, hitCool: 0, shake: 0, caught: 0, attachedCritters: 0, counts: { type: {}, species: {} }, pitch: 0, zoom: 1, mdx: 0, runSeen: new Map(), runNew: new Set(), zone: '', army: [], autoGate: null,
-    phase: 0, lastSec: -1, boostT: 0, stallT: 0, energy: 1, charge: 0, boostK: 1.35, pen: [], anchor: null, ghostT: 0, boxT: 0, introT: 0, cdT: 0, cdStep: -1, cdHold: null, ev: null, evCount: 0, evUsed: new Set(), evTimes: EVENT_TIMES.map((t) => t + Math.round((rand() - 0.5) * 6)), skyOverride: null, fogK: 1, battleResult: null, battleArena: null, ratioBonus: 0 });
+    phase: 0, lastSec: -1, boostT: 0, stallT: 0, energy: 1, charge: 0, boostK: 1.35, pen: [], anchor: null, ghostT: 0, boxT: 0, introT: 0, cdT: 0, cdStep: -1, cdHold: null, ev: null, evCount: 0, evUsed: new Set(), evTimes: cfg ? cfg.evTimes.slice() : EVENT_TIMES.map((t) => t + Math.round((rand() - 0.5) * 6)), skyOverride: null, fogK: 1, battleResult: null, battleArena: null, ratioBonus: 0, menuOpen: false });
   MODS.knock = 1; MODS.fog = 1; MODS.energy = 1; MODS.speed = 1; MODS.lure = false; H.setIce(false);
-  DIFF = DIFFS[save.difficulty] || DIFFS.normal; CPU_SPEED = DIFF.speed;
+  DIFF = DIFFS[cfg ? cfg.diff : save.difficulty] || DIFFS.normal; CPU_SPEED = DIFF.speed;
   clearFx();
   $('timer').classList.remove('hot'); $('evchip').style.display = 'none'; $('count').className = '';
   for (const id of ['phasebar', 'mini']) $(id).style.display = timed ? '' : 'none';
   ball.quaternion.identity();
-  populate();
+  populate(cfg ? cfg.seed : undefined);
   makeRivals();
   pickArenas();
+  netBegin();
   const hx = Math.sin(S.heading), hz = Math.cos(S.heading);
   camera.position.set(START.x - hx * 1.6, gy + 0.8, START.z - hz * 1.6);
   show(null);
@@ -1873,7 +2487,9 @@ function tickIntro(dt) {
   camera.position.lerpVectors(introV, S.camGoal, e);
   introL.set(0, 1.5, 0).lerp(S.camLook, e);
   camera.lookAt(introL);
-  if (S.introT >= INTRO_LEN) { S.state = 'countdown'; S.cdT = 0; S.cdStep = -1; S.cdHold = null; $('lights').className = 'show'; for (const l of $('lights').children) l.className = ''; }
+  if (S.introT >= INTRO_LEN && NET.client && !NET.cdGo) return;                 // everyone counts down together, when the host says
+  if (S.introT >= INTRO_LEN && NET.host && NET.ready.size < NET.peers.filter(Boolean).length && S.introT < INTRO_LEN + 8) return;   // give the others a moment to build the map
+  if (S.introT >= INTRO_LEN) { netAll(['cd']); S.state = 'countdown'; S.cdT = 0; S.cdStep = -1; S.cdHold = null; $('lights').className = 'show'; for (const l of $('lights').children) l.className = ''; }
 }
 // The countdown. Hold forward as the 2 lands and keep holding for a rocket start; hold from before the 2 and the ball stalls.
 function boostQuality() { const h = S.cdHold; return h === null ? 0 : h < 1 ? -1 : h < 1.4 ? 2 : h < 2 ? 1 : 0; }
@@ -1903,12 +2519,18 @@ function go(q) {
   if (q === 2) { S.boostT = 2.3; S.vx = hx * v * 1.2; S.vz = hz * v * 1.2; toast('ROCKET START!'); tone(200, 1400, 0.5, 'sawtooth', 0.12); }
   else if (q === 1) { S.boostT = 1.1; S.vx = hx * v * 0.8; S.vz = hz * v * 0.8; toast('Boost start!'); tone(200, 900, 0.35, 'sawtooth', 0.1); }
   else if (q === -1) { S.stallT = 0.9; toast('Stalled! Too early'); tone(220, 60, 0.5, 'sawtooth', 0.14); }
-  for (const R of rivals) { const r = rand(); if (r < 0.28) R.boostT = 2.3; else if (r < 0.58) R.boostT = 1.1; else if (r < 0.7) R.stallT = 0.9; R.dashUntil = 14; }
+  for (const R of rivals) { if (R.remote) continue; const r = rand(); if (r < 0.28) R.boostT = 2.3; else if (r < 0.58) R.boostT = 1.1; else if (r < 0.7) R.stallT = 0.9; R.dashUntil = 14; }
   showArea('Race to the feast!');
 }
 function togglePause() {
-  if (S.state === 'play') { S.state = 'paused'; show('pause'); }
+  if (NET.on) {                                  // a multiplayer round cannot stop for one player: the menu opens over the running game
+    if (S.state !== 'play') return;
+    S.menuOpen = !S.menuOpen; show(S.menuOpen ? 'pause' : null);
+  }
+  else if (S.state === 'play') { S.state = 'paused'; show('pause'); }
   else if (S.state === 'paused') { S.state = 'play'; show(null); }
+  $('pauseTitle').textContent = NET.on ? 'Game menu' : 'Paused';
+  $('btnEnd').textContent = NET.on ? 'Leave game' : 'End run';
 }
 function finish() {
   endEvent(); clearFx(); music.stop();
@@ -1919,7 +2541,7 @@ function finish() {
     const w = S.battleResult ? S.battleResult.winner : -1;
     title = winnerText(w);
     rows = battleRows() + rows;
-    if (w === 0) { b.wins = (b.wins || 0) + 1; sfxWin(); }
+    if (w === S.team) { b.wins = (b.wins || 0) + 1; sfxWin(); }
     if (!b.timedSize || S.d > b.timedSize) b.timedSize = S.d;
     rows += `<tr><td>Best size</td><td>${fmtSize(b.timedSize)}</td></tr>`;
   } else {
@@ -1932,15 +2554,15 @@ function finish() {
   const seen = [...S.runSeen.keys()].map((id) => SPECS[id].spec).sort((a, b2) => a.dex - b2.dex);
   const lineup = seen.length ? `<div class="lineup">${seen.map((sp) => `<span class="${S.runNew.has(sp.id) ? 'isnew' : ''}" title="${sp.name}"><img src="${thumbs[sp.id] || ''}" alt="${sp.name}"></span>`).join('')}</div><p class="sub">${seen.length} species this run${S.runNew.size ? `, ${S.runNew.size} new to your dex (gold)` : ''}</p>` : '';
   $('resBody').innerHTML = `<table class="res">${rows}</table>${lineup}`;
+  $('btnAgain').textContent = NET.on ? 'Back to lobby' : 'Play again'; $('btnMenu').textContent = NET.on ? 'Leave' : 'Menu'; S.resAt = 0;
   show('results');
 }
 function toMenu() {
+  NET.on = NET.host = NET.client = false; S.menuOpen = false;
   S.state = 'menu'; S.phase = 0; S.skyOverride = null; music.stop(); clearFx(); skyNow.setHex(SKY); scene.background.setHex(SKY); scene.fog.color.setHex(SKY);
   const b = save.best, parts = [];
   if (b.wins) parts.push(b.wins + (b.wins === 1 ? ' battle won' : ' battles won'));
-  if (b.timedSize) parts.push('Best round size ' + fmtSize(b.timedSize));
-  if (b.timedTime) parts.push('fastest target ' + fmtTime(b.timedTime));
-  if (b.freeSize) parts.push('best free-roam size ' + fmtSize(b.freeSize));
+  if (b.timedSize) parts.push('best ball ' + fmtSize(b.timedSize));
   $('best').textContent = parts.join(' · ');
   show('menu');
 }
@@ -1986,16 +2608,38 @@ $('btnFree').onclick = () => start('free');
 $('btnDex').onclick = () => openDex(false);
 $('btnDexBack').onclick = toMenu;
 $('btnResume').onclick = togglePause;
-$('btnEnd').onclick = () => { if (S.mode === 'timed') { S.state = 'play'; show(null); timeUp(); } else finish(); };
-$('btnAgain').onclick = () => start(S.mode);
-$('btnMenu').onclick = toMenu;
+$('btnEnd').onclick = () => { if (NET.on) leaveRoom(); else if (S.mode === 'timed') { S.state = 'play'; show(null); timeUp(); } else finish(); };
+$('btnAgain').onclick = () => { if (NET.room) toLobby(); else start(S.mode); };
+$('btnMenu').onclick = () => { if (NET.room) leaveRoom(); else toMenu(); };
 for (const id of ['btnMute', 'btnMute2', 'hudMute']) $(id).onclick = () => setMuted(!save.muted);
-function setDifficulty(d) { save.difficulty = DIFFS[d] ? d : 'normal'; persist(); for (const k in DIFFS) $('diff_' + k).classList.toggle('on', k === save.difficulty); }
-for (const k in DIFFS) $('diff_' + k).onclick = () => setDifficulty(k);
+function setDifficulty(d) {
+  save.difficulty = DIFFS[d] ? d : 'normal'; persist();
+  for (const k2 in DIFFS) for (const pre of ['diff_', 'ldiff_']) $(pre + k2).classList.toggle('on', k2 === save.difficulty);
+  if (NET.room && NET.room.host) sendLobby();
+}
+for (const k2 in DIFFS) for (const pre of ['diff_', 'ldiff_']) $(pre + k2).onclick = () => setDifficulty(k2);
 setDifficulty(save.difficulty);
 setMuted(!!save.muted);
-$('levelname').textContent = `${LEVEL.name} — four teams, ${fmtTime(LEVEL.seconds)} to gather critters, then a wheel picks the arena and they fight`;
 $('btnSkip').onclick = skipBattle;
+// the title screen: a home view, and one each for single player, multiplayer and the room lobby
+function menuView(v) { for (const id of ['mvHome', 'mvSolo', 'mvMulti', 'mvLobby']) $(id).classList.toggle('on', id === v); $('menu').classList.toggle('inner', v !== 'mvHome'); }
+$('btnSolo').onclick = () => menuView('mvSolo');
+$('btnMulti').onclick = () => { $('netMsg').textContent = ''; menuView('mvMulti'); };
+for (const b of document.querySelectorAll('[data-back]')) b.onclick = () => menuView('mvHome');
+$('btnHelp').onclick = () => { S.state = 'dex'; show('help'); };
+$('btnHelpBack').onclick = toMenu;
+$('btnHost').onclick = () => hostRoom();
+$('btnQuick').onclick = () => quickPlay();
+$('btnJoin').onclick = () => joinRoom($('joinCode').value);
+$('joinCode').addEventListener('input', (e) => { e.target.value = cleanCode(e.target.value); });
+$('joinCode').addEventListener('keydown', (e) => { if (e.code === 'Enter') joinRoom($('joinCode').value); });
+$('btnStartMp').onclick = () => startMatch();
+$('btnLeave').onclick = () => leaveRoom();
+$('btnCopy').onclick = () => {
+  const u = new URL(location.href); u.searchParams.set('room', NET.room.code);
+  const done = () => { $('btnCopy').textContent = 'Link copied!'; setTimeout(() => { $('btnCopy').textContent = 'Copy invite link'; }, 1600); };
+  try { navigator.clipboard.writeText(u.href).then(done, () => prompt('Copy this link:', u.href)); } catch (e) { prompt('Copy this link:', u.href); }
+};
 
 function resize() {
   renderer.setSize(innerWidth, innerHeight, false);
@@ -2008,10 +2652,21 @@ resize();
 makeThumbs();
 populate();
 toMenu();
+menuView('mvHome');
+{ const code = cleanCode(new URLSearchParams(location.search).get('room')); if (code.length === 4) { $('joinCode').value = code; menuView('mvMulti'); joinRoom(code); } }   // opened from an invite link
 
 let last = performance.now(), menuSpin = 0;
-function frame(now) {
+function frame(now) { tick(now); requestAnimationFrame(frame); }
+// A hidden or covered tab gets few or no animation frames, which would freeze a multiplayer game for everyone else: a
+// worker's timer keeps this one ticking while it is in a room.
+try {
+  const w = new Worker(URL.createObjectURL(new Blob(['setInterval(() => postMessage(0), 33)'], { type: 'text/javascript' })));
+  const always = new URLSearchParams(location.search).has('keepalive');      // ?keepalive: also in single player (for testing in a hidden tab)
+  w.onmessage = () => { lobbyTick(); if ((NET.room || always) && S.state !== 'menu' && performance.now() - last > 90) tick(performance.now()); };      // no frame for a while: tick anyway
+} catch (e) { /* no workers: the game simply waits while hidden */ }
+function tick(now) {
   const dt = Math.min(0.05, (now - last) / 1000);
+  if (dt <= 0) return;
   last = now;
   pollPadButtons();
   tickDexPop(dt);
@@ -2031,7 +2686,8 @@ function frame(now) {
     scene.fog.near = 400; scene.fog.far = 1600;
     aimSun(0, 0, 0, 12);
   }
+  netFlush(); lobbyTick();
+  if (document.hidden) return;
   if (S.state === 'battle' && battle) renderer.render(battle.scene, battle.camera); else renderer.render(scene, camera);
-  requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
