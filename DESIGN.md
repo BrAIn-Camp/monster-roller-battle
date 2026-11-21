@@ -121,6 +121,11 @@ The first human playtest reached 24 m against CPUs at 8-13 m, pulling ahead in t
 
 ## 5. Events
 
+Every event has an icon and a tag of a few words (`EVENT_ICONS` and `EVENT_TAGS` in `main.js`). When one starts a card pops up
+for under three seconds: the icon in the event's colour, its name, the tag. For as long as it lasts a chip sits under the clock
+with the icon inside a ring that drains with the time left, the name, the tag, and an arrow with the distance to it; the chip
+pulses in the last five seconds. Event start times are kept clear of the phase banners.
+
 About five run per round, at the pips on the phase bar; the third is always the Oracle's Whisper. Fourteen more are in the pool
 and none repeats within a round. Every prize and hazard is sized from the balls as they are when the event starts, and a site is only
 chosen if the smaller balls can reach it.

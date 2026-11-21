@@ -67,7 +67,7 @@ const PHASES = [
   { from: 120, name: 'Frenzy',     sub: 'Two minutes left. More critters are appearing: build your team!', sky: 0xf6dca8 },
   { from: 45,  name: 'Titan Hour', short: 'Titans', sub: 'Titans walk the outer lands, and everything rolled up so far is back!', sky: 0xf7a985 },
 ];
-const EVENT_TIMES = [262, 218, 176, 134, 94, 58];   // seconds left at which an event begins (each a few seconds either way)
+const EVENT_TIMES = [262, 210, 172, 140, 98, 64];   // seconds left at which an event begins (each a few seconds either way)
 const KNOCK_LOSS = 3;     // things a ball drops when a heavier ball rams it
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 // What a thing adds to a ball's volume. Big balls get less out of each thing (half at BIG_D wide), which keeps a leader in reach.
@@ -740,11 +740,12 @@ function updateSeek(dt, hx, hz) {          // the habitat banner, and the pointe
   for (const m of markers.values()) { const d = Math.hypot(m.x - S.x, m.z - S.z); if (d < md) { md = d; mk = m; } }
   if (mk && S.state === 'play') {
     const dx = mk.x - S.x, dz2 = mk.z - S.z, rel = Math.atan2(dx * -hz + dz2 * hx, dx * hx + dz2 * hz);    // 0 = straight ahead, positive = to the right
-    el.style.display = 'block';
-    el.innerHTML = `<span class="arr" style="transform:rotate(${rel.toFixed(2)}rad);color:${mk.css}">↑</span> <b>${mk.label}</b> ${Math.round(md)} m`;
+    if (S.ev) { el.style.display = 'none'; $('evdist').innerHTML = `<span class="arr" style="transform:rotate(${rel.toFixed(2)}rad)">↑</span>${Math.round(md)} m`; }
+    else { el.style.display = 'block'; el.innerHTML = `<span class="arr" style="transform:rotate(${rel.toFixed(2)}rad);color:${mk.css}">↑</span> <b>${mk.label}</b> ${Math.round(md)} m`; }
   } else if (S.mode === 'timed' && S.state === 'play' && S.d < 0.9 && Math.hypot(S.x, S.z) < R_HUB + 4 && S.time > 6) {
     el.style.display = 'block'; el.innerHTML = 'Grow to <b>90 cm</b> to climb out of the Green';
   } else el.style.display = 'none';
+  if (!mk && S.ev && $('evdist').innerHTML) $('evdist').innerHTML = '';
 }
 
 // ---------- markers: a beam of light and a ring on the ground, a "!" on the minimap and an arrow in the HUD ----------
@@ -1301,7 +1302,7 @@ function pickArenas() {
 const ORACLE = { id: 'oracle', name: "Oracle's Whisper", quiet: true, duration: 10, color: '#c9a6ff', ok: () => !!S.forecast,
   start(H2, ev) {
     const f = S.forecast, truth = rand() < 0.8, others = f.arenas.filter((a) => a !== f.arena), a = truth ? f.arena : others[Math.floor(rand() * others.length)];
-    ev.sub = `"The final arena will favour <b>${a.types.join('</b>, <b>')}</b> critters..." &nbsp;(the oracle is right four times in five)`;
+    ev.tag = 'Arena favours ' + a.types.map((t) => `<i style="background:${TYPE_COLORS[t] || '#888'}">${t}</i>`).join(' ') + ' &nbsp;<small>(4 in 5)</small>';
     S.oracleSaid = a;
   } };
 function timeUp() {
@@ -1457,14 +1458,46 @@ function updateSky(dt) {
   skyNow.lerp(skyGoal, 1 - Math.exp(-0.8 * dt));
   scene.background.copy(skyNow); scene.fog.color.copy(skyNow);
 }
-// Events. One runs at a time; each is announced with a siren and a banner, shown on the minimap, and counted down in the HUD.
+// Events. One runs at a time. Each has an icon and a few words (below) so it can be read at a glance: a card pops up when it
+// starts, then a chip under the clock keeps the icon, the name, a ring that drains with the time left, and the way to it.
+// Icons are drawn in a 24 x 24 box: white strokes, with class "f" for filled shapes.
+const EVENT_ICONS = {
+  meteor: '<circle class="f" cx="15.5" cy="15.5" r="4.5"/><path d="M4 4l7 7M4 10l4 4M10 4l4 4"/>',
+  stampede: '<path d="M3 6l6 6-6 6M10 6l6 6-6 6M17 6l4 6-4 6"/>',
+  swarm: '<circle class="f" cx="12" cy="12" r="3.2"/><circle class="f" cx="5" cy="6" r="2"/><circle class="f" cx="19" cy="6" r="2"/><circle class="f" cx="5" cy="18" r="2"/><circle class="f" cx="19" cy="18" r="2"/>',
+  golden: '<path class="f" d="M12 2.5l2.9 6 6.6.9-4.8 4.6 1.2 6.5L12 17.4 6.1 20.5l1.2-6.5L2.5 9.4l6.6-.9z"/>',
+  supply: '<path class="f" d="M4.5 9.5a7.5 7.5 0 0 1 15 0z"/><path d="M5 10l5 6M19 10l-5 6"/><rect class="f" x="9" y="16" width="6" height="5.5" rx="1"/>',
+  magpie: '<path class="f" d="M2.5 8.5h19v4a4.5 4.5 0 0 1-4.5 4.5h-1.5L12 14l-3.5 3H7a4.5 4.5 0 0 1-4.5-4.5z"/><circle class="d" cx="8" cy="12" r="1.7"/><circle class="d" cx="16" cy="12" r="1.7"/>',
+  static: '<path class="f" d="M13.5 2L5 13.5h5.5L9.5 22 19 9.5h-5.5z"/>',
+  ring: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v9M7.5 12h9"/>',
+  fog: '<path class="f" d="M12 3a6 6 0 0 0-6 6v11l2.5-2 1.8 2 1.7-2 1.7 2 1.8-2L18 20V9a6 6 0 0 0-6-6z"/><circle class="d" cx="9.7" cy="10" r="1.4"/><circle class="d" cx="14.3" cy="10" r="1.4"/>',
+  cold: '<path d="M12 2.5v19M3.8 7.2l16.4 9.6M20.2 7.2L3.8 16.8M12 6l-2.5-2M12 6l2.5-2M12 18l-2.5 2M12 18l2.5 2"/>',
+  pinata: '<circle cx="12" cy="13" r="7.5"/><path d="M12 5.5l-2.5 4.5 4.5 3-3 4.5"/><path d="M8 4l-1-2M16 4l1-2"/>',
+  vault: '<path class="f" d="M3.5 11a8.5 6 0 0 1 17 0z"/><rect x="3.5" y="11" width="17" height="9" rx="1.5"/><path d="M12 13.5v3.5"/>',
+  dash: '<path d="M6 22V3"/><path class="f" d="M6 3.5h13l-3.2 4 3.2 4H6z"/>',
+  twister: '<path d="M3.5 5h17M6 9h12.5M8 13h9M10 17h5.5M11.5 21h2"/>',
+  overcharge: '<rect x="3" y="7" width="15.5" height="10" rx="2.2"/><path d="M21 10.5v3"/><path class="f" d="M11.8 8.2l-3.6 4.6h3l-.9 3 3.6-4.6h-3z"/>',
+  hyperspeed: '<path class="f" d="M2.5 5l8.5 7-8.5 7zM12.5 5l8.5 7-8.5 7z"/>',
+  giants: '<path d="M12 21V5M5.5 11.5L12 5l6.5 6.5"/><path d="M4 21.5h16"/>',
+  parade: '<path class="f" d="M5 3.5v8.5a7 7 0 0 0 14 0V3.5h-4.5v8.5a2.5 2.5 0 0 1-5 0V3.5z"/><path class="d" d="M5 7h4.5M14.5 7H19" style="stroke:#2b2540;stroke-width:1.6"/>',
+  oracle: '<path d="M1.8 12S5.8 5.5 12 5.5 22.2 12 22.2 12 18.2 18.5 12 18.5 1.8 12 1.8 12z"/><circle class="f" cx="12" cy="12" r="3.2"/>',
+};
+const EVENT_TAGS = {
+  meteor: 'Dodge, then grab the shards', stampede: 'Roll into the herd', swarm: 'They are swarming here', golden: 'Catch it!', supply: 'Chase the crates',
+  magpie: 'Ram the thief', static: 'Rams hit 3x harder', ring: 'Bigger pick-ups inside', fog: 'Ghosts are out', cold: 'The sea is frozen',
+  pinata: 'Ram it ten times', vault: 'First come, first served', dash: 'Race through the gates', twister: 'Keep clear of it',
+  overcharge: 'Dash refills 5x faster', hyperspeed: 'Everyone is 3x faster', giants: 'Critters are 2x size', parade: 'Critters come to you', oracle: '',
+};
+const eventIcon = (id) => `<svg viewBox="0 0 24 24">${EVENT_ICONS[id] || '<path d="M12 5v9M12 18v1"/>'}</svg>`;
 function tickEvents(dt) {
   const ev = S.ev;
   if (ev) {
     ev.t += dt;
     try { if (ev.def.tick) ev.def.tick(H, ev, dt); } catch (e) { console.error('event tick failed', ev.def.id, e); ev.done = true; }
     const left = ev.def.duration - ev.t;
-    $('evfill').style.width = clamp(left / ev.def.duration * 100, 0, 100).toFixed(1) + '%';
+    const pct = clamp(left / ev.def.duration * 100, 0, 100);
+    if (Math.abs(pct - (ev.pct ?? 200)) > 0.6) { ev.pct = pct; $('evring').style.background = `conic-gradient(${ev.color} ${pct.toFixed(1)}%, rgba(43,37,64,.25) 0)`; }
+    $('evchip').classList.toggle('ending', left < 5);
     if (left <= 0 || ev.done) endEvent();
     return;
   }
@@ -1478,13 +1511,17 @@ function tickEvents(dt) {
 function startEvent(def) {
   if (S.ev) endEvent();
   S.evUsed.add(def.id);
-  const ev = S.ev = { def, t: 0, done: false, data: {} };
   const color = def.color || '#ffe169';
+  const ev = S.ev = { def, t: 0, done: false, data: {}, color };
   if (!def.quiet) { for (let i = 0; i < 3; i++) tone(620, 930, 0.22, 'sawtooth', 0.13, i * 0.26); }
   else tone(880, 1320, 0.5, 'sine', 0.1);
   try { def.start(H, ev); } catch (e) { console.error('event start failed', def.id, e); S.ev = null; return; }
-  announce(ev.title || def.name, ev.sub || def.sub || '', color, def.quiet ? 'A whisper...' : 'EVENT!');
-  $('evchip').style.display = 'block'; $('evname').textContent = ev.title || def.name; $('evchip').style.borderColor = color; $('evfill').style.background = color;
+  const name = ev.title || def.name, tag = ev.tag ?? EVENT_TAGS[def.id] ?? '', icon = eventIcon(def.id);
+  const card = $('evcard');
+  card.innerHTML = `<div class="ico" style="background:${color}">${icon}</div><b>${name}</b>${tag ? `<span>${tag}</span>` : ''}`;
+  card.classList.remove('show'); void card.offsetWidth; card.classList.add('show');
+  $('evico').innerHTML = icon; $('evico').style.background = color; $('evname').textContent = name; $('evtag').innerHTML = tag; $('evdist').innerHTML = '';
+  $('evchip').classList.remove('ending'); $('evchip').style.display = 'flex';
 }
 function endEvent() {
   const ev = S.ev;
@@ -1763,7 +1800,7 @@ function update(dt) {
 }
 
 S.step = update; S.groundAt = groundAt; S.T = T;   // debug hooks
-S.rivals = rivals; S.H = H; S.markers = markers; S.timeUp = () => timeUp();
+S.rivals = rivals; S.H = H; S.markers = markers; S.eventIcons = () => [...EVENTS, ORACLE].map((e) => ({ id: e.id, name: e.name, color: e.color || '#ffe169', tag: EVENT_TAGS[e.id] || '', svg: eventIcon(e.id) })); S.timeUp = () => timeUp();
 S.render = () => { tickDexPop(0.016); if (S.state === 'battle' && battle) { battle.step(0.016); renderer.render(battle.scene, battle.camera); } else renderer.render(scene, camera); };   // draw one frame now (for background tabs)
 // Playtest helper: S.autoplay(seconds) rolls a simple bot through the level in fast-forward and returns a log.
 // It chases the nearest thing it can roll up on its own level, and wanders when stuck. Start a level first.
@@ -1809,7 +1846,7 @@ function start(mode) {
   const gy = groundAt(START.x, START.z), timed = mode === 'timed';
   Object.assign(S, { state: timed ? 'intro' : 'play', mode, d: START_D, vol3: START_D ** 3, x: START.x, y: gy + START_D / 2, z: START.z, vx: 0, vy: 0, vz: 0, sup: START_D / 2, camY: gy,
     heading: Math.atan2(-START.x, -START.z), time: 0, timeLeft: LEVEL.seconds, reachedAt: null, hitCool: 0, shake: 0, caught: 0, attachedCritters: 0, counts: { type: {}, species: {} }, pitch: 0, zoom: 1, mdx: 0, runSeen: new Map(), runNew: new Set(), zone: '', army: [], autoGate: null,
-    phase: 0, lastSec: -1, boostT: 0, stallT: 0, energy: 1, charge: 0, boostK: 1.35, pen: [], anchor: null, ghostT: 0, boxT: 0, introT: 0, cdT: 0, cdStep: -1, cdHold: null, ev: null, evCount: 0, evUsed: new Set(), evTimes: EVENT_TIMES.map((t) => t + Math.round((rand() - 0.5) * 8)), skyOverride: null, fogK: 1, battleResult: null, battleArena: null, ratioBonus: 0 });
+    phase: 0, lastSec: -1, boostT: 0, stallT: 0, energy: 1, charge: 0, boostK: 1.35, pen: [], anchor: null, ghostT: 0, boxT: 0, introT: 0, cdT: 0, cdStep: -1, cdHold: null, ev: null, evCount: 0, evUsed: new Set(), evTimes: EVENT_TIMES.map((t) => t + Math.round((rand() - 0.5) * 6)), skyOverride: null, fogK: 1, battleResult: null, battleArena: null, ratioBonus: 0 });
   MODS.knock = 1; MODS.fog = 1; MODS.energy = 1; MODS.speed = 1; MODS.lure = false; H.setIce(false);
   DIFF = DIFFS[save.difficulty] || DIFFS.normal; CPU_SPEED = DIFF.speed;
   clearFx();

@@ -27,7 +27,7 @@
   #energy.charging { animation: chg .12s infinite alternate; } @keyframes chg { from { transform: translateX(-1px); } to { transform: translateX(1px); } }
   .diffrow { margin: 6px 0 2px; font-size: 14px; font-weight: 700; } .diffrow button { font-size: 14px; padding: 5px 14px; margin: 3px; background: #fff; box-shadow: 0 3px 0 #2b2540; }
   .diffrow button.on { background: #ffe169; }
-  #seek { position: absolute; left: 50%; top: 124px; transform: translateX(-50%); font-size: 13px; font-weight: 700; white-space: nowrap; display: none; padding: 4px 12px; }
+  #seek { position: absolute; left: 50%; top: 102px; transform: translateX(-50%); font-size: 13px; font-weight: 700; white-space: nowrap; display: none; padding: 4px 12px; }
   #seek .arr { display: inline-block; font-size: 18px; font-weight: 900; }
   #seek .type { display: inline-block; padding: 0 8px; border-radius: 8px; color: #fff; font-size: 11px; }
   #timer { position: absolute; left: 50%; top: 16px; transform: translateX(-50%); font-size: 26px; font-weight: 800; min-width: 80px; text-align: center; }
@@ -82,8 +82,24 @@
   #phasebar .seg:nth-child(4) { border-right: 0; border-radius: 0 8px 8px 0; } #phasebar .seg:nth-child(4).on { background: #ff8a6a; color: #fff; }
   #phasepin { position: absolute; top: -6px; width: 4px; height: 32px; margin-left: -2px; background: #2b2540; border-radius: 2px; }
   #phasebar .pip { position: absolute; top: 22px; width: 8px; height: 8px; margin-left: -4px; background: #ff5a7a; border: 2px solid #2b2540; border-radius: 50%; }
-  #evchip { position: absolute; left: 50%; top: 96px; transform: translateX(-50%); font-size: 13px; font-weight: 800; padding: 3px 12px 5px; display: none; min-width: 180px; text-align: center; }
-  #evbar { height: 5px; background: #e6e2ee; border-radius: 3px; overflow: hidden; margin-top: 2px; } #evfill { height: 100%; width: 100%; }
+  /* events: a card when one starts, then a chip under the clock for as long as it lasts */
+  #evchip { position: absolute; left: 50%; top: 98px; transform: translateX(-50%); display: none; align-items: center; gap: 10px; padding: 4px 16px 4px 5px; background: rgba(255,250,240,.95); border: 3px solid #2b2540; border-radius: 30px; box-shadow: 0 4px 0 rgba(43,37,64,.35); white-space: nowrap; }
+  #evring { width: 46px; height: 46px; border-radius: 50%; padding: 4px; border: 2px solid #2b2540; background: #ccc; flex: none; }
+  #evico, #evcard .ico { border-radius: 50%; display: flex; align-items: center; justify-content: center; border: 2px solid #2b2540; }
+  #evico { width: 100%; height: 100%; box-sizing: border-box; } #evico svg { width: 24px; height: 24px; }
+  #evchip svg, #evcard svg { fill: none; stroke: #fff; stroke-width: 2.3; stroke-linecap: round; stroke-linejoin: round; filter: drop-shadow(0 1.5px 0 rgba(43,37,64,.55)); }
+  #evchip svg .f, #evcard svg .f { fill: #fff; stroke-width: 1.2; } #evchip svg .d, #evcard svg .d { fill: #2b2540; stroke: none; }
+  #evchip .evtxt { display: flex; flex-direction: column; line-height: 1.15; } #evname { font-size: 15px; font-weight: 800; } #evtag { font-size: 11px; font-weight: 700; opacity: .7; }
+  #evtag i, #evcard span i { font-style: normal; color: #fff; padding: 0 7px; border-radius: 7px; text-transform: capitalize; } #evtag small, #evcard small { opacity: .7; }
+  #evdist { font-size: 14px; font-weight: 800; padding-left: 10px; border-left: 2px solid rgba(43,37,64,.2); } #evdist:empty { display: none; }
+  #evdist .arr { display: inline-block; font-size: 17px; font-weight: 900; margin-right: 4px; }
+  #evchip.ending { animation: evend .45s infinite alternate; } @keyframes evend { from { transform: translateX(-50%) scale(1); } to { transform: translateX(-50%) scale(1.07); } }
+  #evcard { position: absolute; left: 50%; top: 24%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; opacity: 0; pointer-events: none; white-space: nowrap; }
+  #evcard .ico { width: 112px; height: 112px; border-width: 5px; box-shadow: 0 7px 0 rgba(43,37,64,.4); } #evcard .ico svg { width: 68px; height: 68px; stroke-width: 2; }
+  #evcard b { margin-top: 10px; font-size: 40px; font-weight: 800; color: #fff; letter-spacing: 1px; -webkit-text-stroke: 6px #2b2540; paint-order: stroke fill; }
+  #evcard span { margin-top: 2px; font-size: 18px; font-weight: 800; color: #2b2540; background: #fffaf0; border: 3px solid #2b2540; border-radius: 14px; padding: 1px 14px; }
+  #evcard.show { animation: evcard 2.8s cubic-bezier(.2,.9,.3,1); }
+  @keyframes evcard { 0% { opacity: 0; transform: translateX(-50%) scale(2.2); } 9% { opacity: 1; transform: translateX(-50%) scale(.94); } 14% { transform: translateX(-50%) scale(1); } 78% { opacity: 1; transform: translateX(-50%) scale(1); } 100% { opacity: 0; transform: translate(-50%, -150px) scale(.3); } }
   #banner { position: absolute; left: 50%; top: 21%; transform: translateX(-50%); text-align: center; opacity: 0; white-space: nowrap; }
   #banner .kick { font-size: 15px; font-weight: 800; color: #fff; letter-spacing: 3px; text-shadow: 0 2px 0 #2b2540; }
   #banner .ttl { display: inline-block; font-size: 40px; font-weight: 800; padding: 2px 26px; border: 4px solid #2b2540; border-radius: 18px; box-shadow: 0 6px 0 rgba(43,37,64,.4); letter-spacing: 2px; transform: rotate(-1.5deg); }
@@ -156,7 +172,8 @@
   <button id="hudMute" class="alt">Sound: on (M)</button>
   <div id="timer" class="pill">5:00</div>
   <div id="phasebar"></div>
-  <div id="evchip" class="pill"><span id="evname"></span><div id="evbar"><div id="evfill"></div></div></div>
+  <div id="evchip"><div id="evring"><div id="evico"></div></div><div class="evtxt"><span id="evname"></span><span id="evtag"></span></div><span id="evdist"></span></div>
+  <div id="evcard"></div>
   <div id="banner"></div>
   <canvas id="mini" width="170" height="170"></canvas>
   <div id="goals" class="pill"></div>
