@@ -1484,9 +1484,14 @@ const winnerText = (w) => (w < 0 ? 'Nobody is left standing' : w === S.team ? 'Y
 const battleTeams = () => TEAMS.map((tm, i) => { const b = ballOf(i); return Object.assign({}, tm, { army: (b ? b.army : []).slice(), ballD: b ? b.d : START_D, human: seatHuman(i), me: i === S.team }); });
 // In multiplayer every machine must start the fight from exactly the same armies, so the host sends them and everyone
 // (the host included) builds the teams from that.
-const packTeams = (teams) => teams.map((tm) => ({ d: tm.ballD, h: tm.human ? 1 : 0, a: tm.army.map((sp) => [sp.id, sp.giant ? sp.height : 0]) }));
+// (An army is sent as runs of the same critter: [species, giant height or 0, how many].)
+const packTeams = (teams) => teams.map((tm) => {
+  const a = [];
+  for (const sp of tm.army) { const h = sp.giant ? sp.height : 0, last = a[a.length - 1]; if (last && last[0] === sp.id && last[1] === h) last[2]++; else a.push([sp.id, h, 1]); }
+  return { d: tm.ballD, h: tm.human ? 1 : 0, a };
+});
 const unpackTeams = (packed) => TEAMS.map((tm, i) => Object.assign({}, tm, { ballD: packed[i].d, human: !!packed[i].h, me: i === S.team,
-  army: packed[i].a.filter(([id]) => SPECS[id]).map(([id, h]) => { const sp = SPECS[id].spec; return h ? Object.assign({}, sp, { height: h, base: baseOf(sp), giant: true, _pw: 0 }) : sp; }) }));
+  army: packed[i].a.filter(([id]) => SPECS[id]).flatMap(([id, h, n]) => { const sp = SPECS[id].spec, one = h ? Object.assign({}, sp, { height: h, base: baseOf(sp), giant: true, _pw: 0 }) : sp; return new Array(n || 1).fill(one); }) }));
 function buildBallFor(k) {
   const g = new THREE.Group();
   P(g, 'sph', TEAMS[k].hex, [1, 1, 1], [0, 0, 0]);
@@ -1512,7 +1517,7 @@ function timeUp() {
   endEvent(); clearFx(); music.stop();
   MODS.knock = 1; MODS.fog = 1; MODS.energy = 1; MODS.speed = 1; MODS.lure = false; H.setIce(false); S.skyOverride = null;
   for (const R of rivals) R.ev = null;
-  S.state = 'timeup'; S.tuT = 0; S.timeLeft = 0;
+  S.state = 'timeup'; S.tuT = 0; S.timeLeft = 0; S.tuSaid = false;
   if (document.pointerLockElement) document.exitPointerLock();
   showCount('TIME UP!', 'timeup');
   [1568, 1568, 1568].forEach((f, i) => tone(f, f * 0.97, i === 2 ? 0.7 : 0.16, 'square', 0.14, i * 0.22));
@@ -1522,6 +1527,7 @@ function tickTimeUp(dt) {
   S.tuT += dt;
   update(dt);
   if (S.tuT > 2.6 && !NET.client) startWheel();        // (a client waits for the host's armies)
+  if (NET.client && S.tuT > 8 && !S.tuSaid) { S.tuSaid = true; toast('Waiting for the host…'); }
 }
 function startWheel(net = null) {            // net: the armies and the arena the host sent (multiplayer clients)
   $('count').className = '';

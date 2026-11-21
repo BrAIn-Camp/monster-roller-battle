@@ -88,13 +88,36 @@ function peerRoom(peer, host, code, pub, hostConn) {
   };
   const wire = (conn, id) => {
     openFast(conn, id);
-    conn.on('data', (d) => { if (!room.closed) room.onMsg(id, d); });
+    const parts = new Map();                       // long messages arriving in pieces (see room.send)
+    conn.on('data', (d) => {
+      if (room.closed) return;
+      if (Array.isArray(d) && d[0] === '~') {
+        const [, key, k, total, text] = d, got = parts.get(key) || [];
+        got[k] = text; parts.set(key, got);
+        if (got.filter((x) => x !== undefined).length < total) return;
+        parts.delete(key);
+        try { d = JSON.parse(got.join('')); } catch (e) { console.warn('a long message arrived damaged', e); return; }
+      }
+      room.onMsg(id, d);
+    });
     conn.on('close', () => (host ? drop(id) : shut('The host left the game')));
-    conn.on('error', () => (host ? drop(id) : shut('Lost the connection to the host')));
+    conn.on('error', (e) => console.warn('connection error (the connection stays up unless it closes)', id, e && (e.type || e.message)));
   };
   room.close = () => { if (room.closed) return; room.closed = true; try { peer.destroy(); } catch (e) { /* gone */ } };
   room.buffered = (id) => { const c = conns.get(id); return c && c.dataChannel ? c.dataChannel.bufferedAmount : 0; };
-  room.send = (id, msg) => { const c = conns.get(id); if (c && c.open) { try { c.send(msg); } catch (e) { /* closing */ } } };
+  // PeerJS refuses a JSON message of 16,300 bytes or more, so a long one goes as numbered pieces and is put back together
+  // at the other end. (Pieces of 5,000 characters stay under the limit even if every character took three bytes.)
+  let longKey = 0;
+  room.send = (id, msg) => {
+    const c = conns.get(id);
+    if (!c || !c.open) return;
+    try {
+      const text = JSON.stringify(msg);
+      if (text.length < 5000) { c.send(msg); return; }
+      const key = ++longKey, total = Math.ceil(text.length / 5000);
+      for (let k = 0; k < total; k++) c.send(['~', key, k, total, text.slice(k * 5000, (k + 1) * 5000)]);
+    } catch (e) { console.warn('send failed', e); }
+  };
   room.sendFast = (id, msg) => {
     const ch = fasts.get(id);
     if (!ch || ch.readyState !== 'open') return false;
