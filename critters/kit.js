@@ -18,19 +18,28 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
-const dome = new THREE.SphereGeometry(0.5, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2);
-dome.scale(1, 2, 1); dome.translate(0, -0.5, 0);
-const BASE = {
-  sph: new THREE.SphereGeometry(0.5, 16, 12),
-  box: new THREE.BoxGeometry(1, 1, 1),
-  cyl: new THREE.CylinderGeometry(0.5, 0.5, 1, 14),
-  cone: new THREE.ConeGeometry(0.5, 1, 12),
-  taper: new THREE.CylinderGeometry(0.3, 0.5, 1, 14),
-  torus: new THREE.TorusGeometry(0.38, 0.12, 8, 18).rotateX(Math.PI / 2),
-  rock: new THREE.DodecahedronGeometry(0.5, 0),
-  hemi: dome,
-};
-for (const k in BASE) { const g = BASE[k].index ? BASE[k].toNonIndexed() : BASE[k]; g.deleteAttribute('uv'); BASE[k] = g; }
+// Two sets of the basic shapes. FINE is for a critter seen close up (the dex, the pop-up card). PLAIN is for the
+// thousands on the map, where each is a few centimetres on screen: about a third of the triangles, and eyes of 40
+// triangles instead of 350 each.
+function shapes(sw, sh, round, tube, ring) {
+  const dome = new THREE.SphereGeometry(0.5, sw, Math.max(3, sh >> 1), 0, Math.PI * 2, 0, Math.PI / 2);
+  dome.scale(1, 2, 1); dome.translate(0, -0.5, 0);
+  const set = {
+    sph: new THREE.SphereGeometry(0.5, sw, sh),
+    box: new THREE.BoxGeometry(1, 1, 1),
+    cyl: new THREE.CylinderGeometry(0.5, 0.5, 1, round),
+    cone: new THREE.ConeGeometry(0.5, 1, round),
+    taper: new THREE.CylinderGeometry(0.3, 0.5, 1, round),
+    torus: new THREE.TorusGeometry(0.38, 0.12, tube, ring).rotateX(Math.PI / 2),
+    rock: new THREE.DodecahedronGeometry(0.5, 0),
+    hemi: dome,
+    eye: new THREE.SphereGeometry(0.5, Math.max(6, sw >> 1), Math.max(4, sh >> 1)),
+  };
+  for (const k in set) { const g = set[k].index ? set[k].toNonIndexed() : set[k]; g.deleteAttribute('uv'); set[k] = g; }
+  return set;
+}
+const FINE = shapes(16, 12, 14, 8, 18), PLAIN = shapes(10, 7, 8, 5, 10);
+let BASE = PLAIN;
 
 const D = Math.PI / 180;
 const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), c = new THREE.Color();
@@ -50,13 +59,14 @@ function piece(shape, colour, size, pos, rot) {
   return g;
 }
 
-export function buildCritterGeometry(spec) {
+export function buildCritterGeometry(spec, fine = false) {
+  BASE = fine ? FINE : PLAIN;
   const out = [];
   for (const p of spec.parts) {
     if (p[0] === 'eye') {
       const r = p[1] * 2, [x, y, z] = p[2];
-      out.push(piece('sph', 0x15151f, [r, r, r], [x, y, z]), piece('sph', 0x15151f, [r, r, r], [-x, y, z]));
-      out.push(piece('sph', 0xffffff, [r * 0.35, r * 0.35, r * 0.35], [x + r * 0.15, y + r * 0.2, z + r * 0.36]), piece('sph', 0xffffff, [r * 0.35, r * 0.35, r * 0.35], [-x + r * 0.15, y + r * 0.2, z + r * 0.36]));
+      out.push(piece('eye', 0x15151f, [r, r, r], [x, y, z]), piece('eye', 0x15151f, [r, r, r], [-x, y, z]));
+      out.push(piece('eye', 0xffffff, [r * 0.35, r * 0.35, r * 0.35], [x + r * 0.15, y + r * 0.2, z + r * 0.36]), piece('eye', 0xffffff, [r * 0.35, r * 0.35, r * 0.35], [-x + r * 0.15, y + r * 0.2, z + r * 0.36]));
       continue;
     }
     const [shape, colour, size, pos, rot, mirror] = p;

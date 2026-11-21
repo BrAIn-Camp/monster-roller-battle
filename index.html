@@ -73,6 +73,7 @@
   .tag.edge { transform: translate(-50%, -50%); opacity: .92; }
   #toast { position: absolute; left: 50%; top: 162px; transform: translateX(-50%); font-size: 20px; font-weight: 800; background: #ffe169; opacity: 0; transition: opacity .3s; }
   #toast.show { opacity: 1; }
+  #netstats { position: fixed; left: 50%; bottom: 4px; transform: translateX(-50%); z-index: 5; display: none; padding: 3px 10px; font: 12px/1.35 Consolas, monospace; white-space: pre; text-align: center; color: #fff; background: rgba(43,37,64,.8); border-radius: 8px; pointer-events: none; }
   #netwarn { position: absolute; right: 16px; bottom: 52px; font-size: 13px; font-weight: 800; background: #ffb0a0; display: none; } #netwarn.show { display: block; }
   #timer.hot { background: #ff6a4a; color: #fff; animation: hot .5s infinite alternate; }
   @keyframes hot { from { transform: translateX(-50%) scale(1); } to { transform: translateX(-50%) scale(1.12); } }
@@ -211,6 +212,7 @@
   <div id="pick" class="pill"></div>
 </div>
 
+<div id="netstats"></div>
 <div id="speedlines"></div>
 <div id="count"></div>
 <div id="lights"><i></i><i></i><i></i></div>
@@ -227,7 +229,7 @@
     <div id="mvHome" class="mv on">
       <button id="btnSolo" class="big">Single player</button>
       <button id="btnMulti" class="big alt">Multiplayer</button>
-      <div class="minor"><button id="btnDex">Critter dex</button><button id="btnHelp">How to play</button><button id="btnMute">Sound: on (M)</button></div>
+      <div class="minor"><button id="btnDex">Critter dex</button><button id="btnHelp">How to play</button><button id="btnMute">Sound: on (M)</button><button id="btnGfx">Graphics: auto</button></div>
       <p id="best" class="sub"></p>
     </div>
 
@@ -276,7 +278,7 @@
       <b>Dash</b><span>hold <kbd>Shift</kbd> to wind up, let go to burst</span>
       <b>Rocket start</b><span>hold forward as the countdown's <b>2</b> lands</span>
       <b>Zoom</b><span>mouse wheel</span>
-      <b>Menu</b><span><kbd>Esc</kbd> &nbsp; mute <kbd>M</kbd> &nbsp; steering <kbd>T</kbd> (now: <span id="steer">simple</span>)</span>
+      <b>Menu</b><span><kbd>Esc</kbd> &nbsp; mute <kbd>M</kbd> &nbsp; steering <kbd>T</kbd> (now: <span id="steer">simple</span>) &nbsp; speed readout <kbd>F3</kbd></span>
       <b>Gamepad</b><span>left stick to roll, A or RT to dash, Start for the menu</span>
     </div>
     <button id="btnHelpBack">Back</button>
@@ -288,6 +290,7 @@
     <h2 id="pauseTitle">Paused</h2>
     <button id="btnResume">Resume</button>
     <button id="btnMute2" class="alt">Sound: on (M)</button>
+    <button id="btnGfx2" class="alt">Graphics: auto</button>
     <button id="btnEnd" class="alt">End run</button>
   </div>
 </div>

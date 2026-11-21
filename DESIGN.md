@@ -194,8 +194,8 @@ Up to four players, one of them hosting; CPU teams take the empty seats. See REA
 - `net.js` is the transport: a room with a four-letter code, every player connected to the host (WebRTC through PeerJS), one reliable ordered channel each.
 - The host runs the round exactly as in single player. Another player's ball is a rival marked `remote`: the host does not steer it, it glides to where that player's machine last reported it.
 - A client runs only its own ball's physics. Everything else is drawn from the host, over two channels on the same connection:
-  - the reliable one, for what was rolled up, dropped, added, removed or changed, for events, markers and effects, and (10 times a second) the nearby critters that have moved;
-  - the fast one (unordered, never re-sent), for where the balls are and the clock, 20 times a second each way. A copy that cannot leave at once is skipped, so this news is never late, only less frequent.
+  - the reliable one, for what was rolled up, dropped, added, removed or changed, for events, markers and effects, and (5 times a second, 24 at most) the nearby critters that have moved;
+  - the fast one (unordered, never re-sent), for where the balls are and the clock, 12 times a second each way, as whole numbers. A copy that cannot leave at once is skipped, so this news is never late, only less frequent.
 - The host sends no more than a player's link can carry: critter updates wait while that player's reliable channel has a backlog. The first version sent everything reliably at a fixed rate (about 15 KB/s per player); on a slow upload the backlog grew without limit, so positions and the clock fell seconds behind. A client that has not heard from the host for over a second shows a "connection is slow" notice.
 - Pick-ups are optimistic: the client sticks the thing on at once and asks; the host answers yes (to everyone) or no (and the client puts it back).
 - Rams, critter attacks and event shoves are decided by the host and sent to the player concerned as a new velocity.
@@ -203,4 +203,20 @@ Up to four players, one of them hosting; CPU teams take the empty seats. See REA
 - The arena fight is replayed, not streamed: same armies, same seeded dice, fixed 1/60 s steps, and the host sends every step's stick inputs. The host's result is the one shown.
 - Public games (Quick play) need no server of their own: there are six fixed room names (`pub1` to `pub6` in `net.js`). A player tries each in turn: joins the first that is waiting, or hosts the first that nobody holds. A public host refuses joiners while its round is on, starts by itself on a countdown (`PUBLIC_WAIT` in `main.js`), uses Normal CPUs, and everyone is returned from the results screen to the lobby after 25 seconds.
 - Not done: joining a round already under way, carrying on if the host leaves, relay servers for players behind strict firewalls, and player names.
+- Measured cost after the second pass: about 3.3 kB/s from the host to each player and 0.4 kB/s back.
+- F3 shows a readout: frame rate, graphics level, draw calls and, in multiplayer, data rates, ping, updates per second and the send backlog.
+
+## Graphics quality (added 20 November 2026)
+
+`QUALITY` in `main.js` has four levels (resolution cap, shadows, draw distance). On "auto" the game starts at the top and steps down one level whenever it averages under 30 frames a second for four seconds of play; it never steps back up by itself, and remembers where it settled. The Graphics button (title screen and pause menu) cycles auto and the four levels.
+
+## Drawing cost (measured and trimmed 20 November 2026)
+
+Measured in single player with a 3 m ball: 3,981 draw calls and 5.0 million triangles a frame (view plus shadow pass). After the changes below: 2,334 and 2.3 million.
+
+- Critters on the map use a plainer set of shapes (`PLAIN` in `critters/kit.js`): a median of about 1,350 triangles each instead of 4,800. The dex, the pop-up card and titans keep the detailed set (`FINE`).
+- Each imported model is baked into one mesh in the shared item material (`loadModel`), instead of one mesh per colour.
+- A thing is drawn out to 130 times its size (about half a degree on screen), not 300.
+- Only things near the ball and at least 7% of its width cast shadows; the shadow map is 1024 on the medium level.
+- Not done yet, in order of likely benefit: instancing (one draw call per shape rather than per thing), dropping the logarithmic depth buffer, splitting the terrain (493,000 triangles, drawn whole) into chunks. The terrain has to stay double-sided: its cliff faces are not wound consistently.
 

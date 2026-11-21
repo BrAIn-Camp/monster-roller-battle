@@ -185,9 +185,31 @@ function loadModel(path) {
       });
       m.updateMatrixWorld(true);
       const box = new THREE.Box3().setFromObject(m), size = box.getSize(new V3()), c = box.getCenter(new V3());
-      m.position.sub(new V3(c.x, box.min.y, c.z));
+      // A model comes as several meshes, one per colour: each would be drawn separately, for every copy on the map. Where
+      // the colours are plain (no textures), they are baked into one mesh, drawn once, in the same material as the generated things.
+      const meshes = [];
+      m.traverse((n) => { if (n.isMesh) meshes.push(n); });
+      const plain = meshes.length > 0 && meshes.every((n) => !Array.isArray(n.material) && !n.material.map && !n.isSkinnedMesh && n.geometry.attributes.position && n.geometry.attributes.normal);
+      let one = null;
+      if (plain) {
+        try {
+          const parts = meshes.map((n) => {
+            const pg = n.geometry.index ? n.geometry.toNonIndexed() : n.geometry.clone();
+            for (const a of Object.keys(pg.attributes)) if (a !== 'position' && a !== 'normal') pg.deleteAttribute(a);
+            pg.applyMatrix4(n.matrixWorld);
+            const col = n.material.color, arr = new Float32Array(pg.attributes.position.count * 3);
+            for (let i = 0; i < arr.length; i += 3) { arr[i] = col.r; arr[i + 1] = col.g; arr[i + 2] = col.b; }
+            pg.setAttribute('color', new THREE.BufferAttribute(arr, 3));
+            return pg;
+          });
+          const merged = mergeGeometries(parts);
+          if (merged) { one = new THREE.Mesh(merged, itemMat); one.castShadow = true; }
+        } catch (e) { one = null; }
+      }
+      const body = one || m;
+      body.position.sub(new V3(c.x, box.min.y, c.z));
       const wrap = new THREE.Group();
-      wrap.add(m);
+      wrap.add(body);
       wrap.scale.setScalar(1 / (Math.max(size.x, size.y, size.z) || 1));   // longest side = 1 unit
       res(wrap);
     }, undefined, rej)));
@@ -226,15 +248,15 @@ function buildItem(spec) {
   if (!path) return fallback;
   const g = new THREE.Group();
   g.add(fallback);
-  loadModel(path).then((wrap) => { g.clear(); g.add(wrap.clone(true)); }).catch((e) => console.warn('Could not load model for', spec.id, path, e));
+  loadModel(path).then((wrap) => { g.clear(); g.add(wrap.clone(true)); g.userData.fresh = true; }).catch((e) => console.warn('Could not load model for', spec.id, path, e));
   return g;
 }
 // Critters are generated in code from the parts lists in critters/*.js: one merged mesh per species.
 const critterGeo = new Map();
-function buildCreature(spec) {
-  const key = baseOf(spec).id;                 // a titan shares its species' mesh, just drawn bigger
+function buildCreature(spec, fine = false) {   // fine: the detailed shape, for close-ups (the dex and the pop-up card)
+  const key = baseOf(spec).id + (fine ? '|fine' : '');                 // a titan shares its species' mesh, just drawn bigger
   let geo = critterGeo.get(key);
-  if (!geo) { geo = buildCritterGeometry(spec); critterGeo.set(key, geo); }
+  if (!geo) { geo = buildCritterGeometry(spec, fine); critterGeo.set(key, geo); }
   const m = new THREE.Mesh(geo, critterMaterial);
   m.castShadow = true;
   return m;
@@ -245,7 +267,6 @@ function setTeamLook(o, team) { if (o.kind === 'creature') o.group.material = te
 // ---------- renderer, lights, sky ----------
 const canvas = $('c');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, logarithmicDepthBuffer: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 const SKY = 0x9ad8f5;
@@ -260,6 +281,24 @@ sun.shadow.mapSize.set(2048, 2048);
 sun.shadow.bias = -0.0004;
 scene.add(sun, sun.target);
 const SUN_DIR = new V3(0.45, 1, 0.35).normalize();
+// Graphics quality. On "auto" the game starts at the top and steps down whenever it cannot hold 30 frames a second
+// (it never steps back up by itself, so it does not flip-flop). res = share of the screen's own resolution (capped);
+// view = how far away things are still drawn, as a share of the usual distance.
+const QUALITY = [
+  { name: 'high',   res: 2,    shadows: true,  view: 1, map: 2048 },
+  { name: 'medium', res: 1,    shadows: true,  view: 0.9, map: 1024 },
+  { name: 'low',    res: 1,    shadows: false, view: 0.8 },
+  { name: 'lowest', res: 0.7,  shadows: false, view: 0.6 },
+];
+let QUAL = QUALITY[0], qualLevel = 0;
+function setQuality(level) {
+  qualLevel = clamp(level, 0, QUALITY.length - 1); QUAL = QUALITY[qualLevel];
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, QUAL.res));
+  sun.castShadow = QUAL.shadows;
+  if (QUAL.map && sun.shadow.mapSize.x !== QUAL.map) { sun.shadow.mapSize.set(QUAL.map, QUAL.map); if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; } }
+  if (typeof resize === 'function') resize();
+}
+
 function aimSun(x, y, z, d) {                 // the shadow box follows the ball and scales with it
   const W = d * 12 + 9, sc = sun.shadow.camera;
   sc.left = -W; sc.right = W; sc.top = W; sc.bottom = -W; sc.near = 1; sc.far = W * 6 + 80;
@@ -398,7 +437,7 @@ scene.add(trainer);
 
 // ---------- save data ----------
 const SAVE_KEY = 'critter-roller-save-v2';
-let save = { dex: {}, best: {}, muted: false, difficulty: 'normal' };
+let save = { dex: {}, best: {}, muted: false, difficulty: 'normal', gfx: 'auto', gfxAuto: 0 };      // gfx: 'auto' or a quality level's name; gfxAuto: the level auto last settled on
 try { save = Object.assign(save, JSON.parse(localStorage.getItem(SAVE_KEY) || '{}')); } catch (e) { /* storage unavailable */ }
 function persist() { try { localStorage.setItem(SAVE_KEY, JSON.stringify(save)); } catch (e) { /* storage unavailable */ } }
 
@@ -469,7 +508,7 @@ const NET = {
   on: false, host: false, client: false,     // on: a multiplayer match is running here; host / client: this machine's part in it
   seat: 0, seats: ['human', 'cpu', 'cpu', 'cpu'], peers: [null, null, null, null],   // this player's team; who has each team; (host) their connection
   q: new Map(), pending: new Map(), lunges: new Set(), ready: new Set(), spawned: [], fxRoots: new Map(), fxNodes: new Map(), mmDirty: new Set(),
-  snapT: 0, slowT: 0, upT: 0, modsSent: '', cdGo: false, fxKey: 1, seq: 0, seqIn: 0, answered: 0, heard: 0, lag: 0,
+  snapT: 0, slowT: 0, upT: 0, modsSent: '', cdGo: false, fxKey: 1, seq: 0, seqIn: 0, answered: 0, heard: 0, lag: 0, ping: -1, pingT: 0, stats: false, bIn: 0, bOut: 0, nIn: 0,
   arenaIn: [], aLatest: [], aSteps: [], aAcc: 0, aEnd: null, aSent: '', battleSeed: 1,
 };
 const LOB = { kinds: ['human', 'cpu', 'cpu', 'cpu'], peers: [null, null, null, null], seat: 0, diff: 'normal', auto: null, autoAt: 0 };   // the lobby, as last heard (auto: seconds until a public game starts itself, as of autoAt)
@@ -478,8 +517,8 @@ function netAll(m) { if (NET.on && NET.host && NET.room) for (const id of NET.pe
 function netHost(m) { if (NET.on && NET.client && NET.room) netTo('host', m); }
 // News that goes stale (where the balls are, the clock): sent the fast way, where a late copy is dropped rather than
 // queued. If the link cannot even keep up with the reliable channel, it is skipped altogether.
-function netFast(id, m) { const room = NET.room; if (room && !room.sendFast(id, m) && room.buffered(id) < 4000) netTo(id, m); }
-function netFlush() { if (!NET.room) return; for (const [id, q] of NET.q) if (q.length) { NET.room.send(id, q); NET.q.set(id, []); } }
+function netFast(id, m) { const room = NET.room; if (!room) return; if (NET.stats) NET.bOut += JSON.stringify(m).length; if (!room.sendFast(id, m) && room.buffered(id) < 3000) netTo(id, m); }
+function netFlush() { if (!NET.room) return; for (const [id, q] of NET.q) if (q.length) { if (NET.stats) NET.bOut += JSON.stringify(q).length; NET.room.send(id, q); NET.q.set(id, []); } }
 const seatHuman = (t) => (NET.on ? NET.seats[t] === 'human' : t === S.team);
 const seatLabel = (t) => (t === S.team ? 'You' : TEAMS[t].name);
 // Messages that name a ball are written with a token, so each player reads "You" for their own team.
@@ -546,7 +585,7 @@ function populateSeeded(seed) {
     const e = SPECS[id];
     if (!e) { console.warn('map.js uses an id that is not in roster.js:', id); return null; }
     const size = e.size * (opt.scale ?? 1), rad = opt.rad ?? size * (e.spec.rad ?? (e.kind === 'creature' ? 0.3 : 0.35));
-    const group = e.kind === 'creature' ? buildCreature(e.spec) : buildItem(e.spec);
+    const group = e.kind === 'creature' ? buildCreature(e.spec, !!e.spec.titan) : buildItem(e.spec);       // (titans fill the screen: they get the detailed shape)
     group.scale.setScalar(size);
     group.position.set(x, groundAt(x, z), z);
     group.rotation.y = opt.rot ?? rand() * Math.PI * 2;
@@ -732,7 +771,7 @@ popScene.add(new THREE.HemisphereLight(0xffffff, 0x8899aa, 2.2), popSpin);
 let popT = 0;
 function showDexPop(sp, isNew, count) {
   popSpin.clear();
-  const m = buildCreature(sp);
+  const m = buildCreature(sp, true);
   const b = m.geometry.boundingBox, c = b.getCenter(new V3()), s = b.getSize(new V3()).length();
   m.position.set(-c.x, -c.y, -c.z);
   popSpin.add(m);
@@ -1256,8 +1295,8 @@ function rivalRender(R, dt) {
 // A ball that another machine is steering: glide to where it was last reported, carried on by its speed in between.
 function puppetRival(R, dt) {
   R.nAge += dt; R.impCool = Math.max(0, R.impCool - dt);
-  if (R.nAge < 0.4) { R.nx += R.rvx * dt; R.nz += R.rvz * dt; }
-  const k2 = 1 - Math.exp(-14 * dt);
+  if (R.nAge < 0.5) { R.nx += R.rvx * dt; R.nz += R.rvz * dt; }
+  const k2 = 1 - Math.exp(-10 * dt);
   if (Math.hypot(R.nx - R.x, R.nz - R.z) > 40) { R.x = R.nx; R.z = R.nz; R.y = R.ny; }
   R.x += (R.nx - R.x) * k2; R.z += (R.nz - R.z) * k2; R.y += (R.ny - R.y) * k2;
   let dh = R.nh - R.heading; while (dh > Math.PI) dh -= 2 * Math.PI; while (dh < -Math.PI) dh += 2 * Math.PI;
@@ -1764,52 +1803,53 @@ function netTick(dt) {
     const mods = JSON.stringify([MODS, S.skyOverride ?? null]);
     if (mods !== NET.modsSent) { NET.modsSent = mods; netAll(['md', mods]); }
     NET.snapT -= dt; NET.slowT -= dt;
-    if (NET.snapT <= 0) { NET.snapT = 1 / 20; netBalls(); }
-    if (NET.slowT <= 0) { NET.slowT = 1 / 10; netWorld(); }
+    if (NET.snapT <= 0) { NET.snapT = 1 / 12; netBalls(); }
+    if (NET.slowT <= 0) { NET.slowT = 1 / 5; netWorld(); }
   } else {
-    NET.upT -= dt;
-    if (NET.upT <= 0) { NET.upT = 1 / 20; netFast('host', ['u', ++NET.seq, r2(S.x), r2(S.y), r2(S.z), r3(S.heading), r2(S.vx), r2(S.vz), S.boostT > 0 ? 1 : 0, r2(S.charge), r2(S.energy)]); }
+    NET.upT -= dt; NET.pingT -= dt;
+    if (NET.upT <= 0) { NET.upT = 1 / 12; netFast('host', ['u', ++NET.seq, Math.round(S.x * 10), Math.round(S.y * 10), Math.round(S.z * 10), Math.round((S.heading % (2 * Math.PI)) * 100), Math.round(S.vx * 10), Math.round(S.vz * 10), S.boostT > 0 ? 1 : 0, Math.round(S.charge * 10), Math.round(S.energy * 100)]); }
+    if (NET.pingT <= 0) { NET.pingT = 1; netFast('host', ['pg', Math.round(performance.now())]); }
     if (NET.lunges.size) { netHost(['lg', [...NET.lunges]]); NET.lunges.clear(); }
     for (const e of NET.fxNodes.values()) for (const o of e.nodes) if (o.userData.tp) o.position.lerp(o.userData.tp, Math.min(1, 12 * dt));
     const quiet = (performance.now() - NET.heard) / 1000;          // how long since the host was last heard from
-    NET.lag = quiet; $('netwarn').classList.toggle('show', quiet > 1.2 && S.state === 'play');
+    NET.lag = quiet; $('netwarn').classList.toggle('show', quiet > 1.5 && S.state === 'play');
   }
   netFlush();
 }
 // (host) Which free things near this player's ball have moved since they were last told? The nearest and the most out
-// of date first, 32 at most.
+// of date first, 24 at most. Each is three whole numbers: which thing, and where (in tenths of a metre).
 function critterDelta(R, slot) {
-  const cand = [], lim = 70 + R.d * 12, i = slot * 2;
+  const cand = [], lim = 50 + R.d * 9, i = slot * 2;
   for (const o of S.objects) {
     if (o.fly) continue;
     const p = o.group.position, s = o.sent || (o.sent = []);
     if (s[i] === undefined) { s[i] = p.x; s[i + 1] = p.z; continue; }
     const off = Math.abs(p.x - s[i]) + Math.abs(p.z - s[i + 1]);
-    if (off < 0.04) continue;
+    if (off < 0.15) continue;
     const d = Math.hypot(p.x - R.x, p.z - R.z);
     if (d < lim + o.size * 4) cand.push([d / (1 + 4 * off), o]);       // the further out of date, the sooner it is sent
   }
   cand.sort((a, b) => a[0] - b[0]);
   const out = [];
-  for (let n = 0; n < cand.length && n < 32; n++) { const o = cand[n][1], p = o.group.position; o.sent[i] = p.x; o.sent[i + 1] = p.z; out.push(o.id, Math.round(p.x * 20), Math.round(p.z * 20), Math.round((o.yaw || 0) * 50)); }
+  for (let n = 0; n < cand.length && n < 24; n++) { const o = cand[n][1], p = o.group.position; o.sent[i] = p.x; o.sent[i + 1] = p.z; out.push(o.id, Math.round(p.x * 10), Math.round(p.z * 10)); }
   return out;
 }
-// (host) 20 times a second, the fast way: where every ball is and the clock. Each copy stands alone, so a lost or
-// skipped one does not matter.
+// (host) 12 times a second, the fast way: where every ball is and the clock, as whole numbers to keep it small. Each
+// copy stands alone, so a lost or skipped one does not matter.
 function netBalls() {
   const balls = [];
   for (let t = 0; t < TEAMS.length; t++) {
     const b = ballOf(t), [vx, vz] = velOf(b);
     const chg = b === S ? S.charge : b.remote ? b.chg : b.wind > 0 ? 0.65 * (1 - b.wind / (CHARGE_TIME * 0.65)) : 0;
-    balls.push(r2(b.x), r2(b.y), r2(b.z), r2(b.heading % (2 * Math.PI)), r2(vx), r2(vz), b.d, b.boostT > 0 ? 1 : 0, r2(chg));
+    balls.push(Math.round(b.x * 10), Math.round(b.y * 10), Math.round(b.z * 10), Math.round((b.heading % (2 * Math.PI)) * 100), Math.round(vx * 10), Math.round(vz * 10), Math.round(b.d * 1000), b.boostT > 0 ? 1 : 0, Math.round(chg * 10));
   }
-  const seq = ++NET.seq, tl = r2(S.timeLeft);
+  const seq = ++NET.seq, tl = Math.round(S.timeLeft * 10);
   for (let t = 0; t < TEAMS.length; t++) {
     const id = NET.peers[t], R = id && rivalOf(t);
     if (R) netFast(id, ['b', seq, tl, balls, [R.vol3, R.ratioBonus || 0, R.claims || 0]]);
   }
 }
-// (host) 10 times a second, the reliable way: what events changed, and the critters that moved near each player. A player
+// (host) 5 times a second, the reliable way: what events changed, and the critters that moved near each player. A player
 // whose link is behind gets no critters until it has caught up (they are then simply sent later: nothing is lost).
 function netWorld() {
   const pr = [];                                 // things whose size or state an event changed
@@ -1822,7 +1862,7 @@ function netWorld() {
   if (mm.length || fxu.length) netAll(['fu', mm, fxu]);
   for (let t = 0; t < TEAMS.length; t++) {
     const id = NET.peers[t], R = id && rivalOf(t);
-    if (!R || NET.room.buffered(id) > 3000) continue;
+    if (!R || NET.room.buffered(id) > 1500) continue;
     const crit = critterDelta(R, t);
     if (crit.length) netTo(id, ['c', crit]);
   }
@@ -1832,12 +1872,13 @@ function netSnap(m) {
   const [, seq, tl, balls, own] = m;
   if (seq <= NET.seqIn) return;                  // an older copy that arrived late
   NET.seqIn = seq; NET.heard = performance.now();
-  if (S.state === 'play') S.timeLeft += (tl - S.timeLeft) * 0.35;
+  if (NET.stats) NET.nIn++;
+  if (S.state === 'play') S.timeLeft += (tl / 10 - S.timeLeft) * 0.35;
   for (let t = 0; t < TEAMS.length; t++) {
     const R = t === S.team ? null : rivalOf(t), i = t * 9;
     if (!R) continue;
-    R.nx = balls[i]; R.ny = balls[i + 1]; R.nz = balls[i + 2]; R.nh = balls[i + 3]; R.rvx = balls[i + 4]; R.rvz = balls[i + 5]; R.nb = balls[i + 7]; R.chg = balls[i + 8]; R.nAge = 0;
-    const d = balls[i + 6];
+    R.nx = balls[i] / 10; R.ny = balls[i + 1] / 10; R.nz = balls[i + 2] / 10; R.nh = balls[i + 3] / 100; R.rvx = balls[i + 4] / 10; R.rvz = balls[i + 5] / 10; R.nb = balls[i + 7]; R.chg = balls[i + 8] / 10; R.nAge = 0;
+    const d = balls[i + 6] / 1000;
     if (Math.abs(d - R.d) > 1e-6) { R.d = d; R.vol3 = d ** 3; seatOn(R.attached, d / 2); }
   }
   S.ratioBonus = own[1];
@@ -1865,7 +1906,7 @@ function puppetThing(o, dt, dist) {
   if (o.ntx !== undefined) {
     const dx = o.ntx - p.x, dz2 = o.ntz - p.z, d = Math.hypot(dx, dz2);
     if (d > 25) { p.x = o.ntx; p.z = o.ntz; }
-    else if (d > 0.005) { const k2 = Math.min(1, 10 * dt); p.x += dx * k2; p.z += dz2 * k2; moving = d > 0.04; }
+    else if (d > 0.005) { const k2 = Math.min(1, 5 * dt); p.x += dx * k2; p.z += dz2 * k2; moving = d > 0.06; if (d > 0.12) o.nyaw = Math.atan2(dx, dz2); }       // it faces the way it is going
     else o.ntx = undefined;
   }
   if (o.kind !== 'creature') { if (moving) p.y = groundAt(p.x, p.z); return; }
@@ -1986,7 +2027,8 @@ function clientMsg(m) {
   if (!NET.on) return;
   switch (k2) {
     case 'b': netSnap(m); break;
-    case 'c': { const crit = m[1]; for (let i = 0; i < crit.length; i += 4) { const o = S.byId.get(crit[i]); if (o && !o.on) { o.ntx = crit[i + 1] / 20; o.ntz = crit[i + 2] / 20; o.nyaw = crit[i + 3] / 50; } } break; }
+    case 'c': { const crit = m[1]; for (let i = 0; i < crit.length; i += 3) { const o = S.byId.get(crit[i]); if (o && !o.on) { o.ntx = crit[i + 1] / 10; o.ntz = crit[i + 2] / 10; } } break; }
+    case 'po': NET.ping = Math.round(performance.now()) - m[1]; break;
     case 'fu': netWorldIn(m[1], m[2]); break;
     case 'ok': NET.pending.delete(m[1]); NET.answered++; break;        // the host agreed to a claim
     case 'cd': NET.cdGo = true; if (S.state === 'intro') S.introT = Math.max(S.introT, INTRO_LEN); break;
@@ -2048,6 +2090,7 @@ function hostMsg(id, m) {
   const seat = NET.peers.indexOf(id), R = seat > 0 ? rivalOf(seat) : null;
   if (!R) return;
   switch (m[0]) {
+    case 'pg': netFast(id, ['po', m[1]]); break;
     case 'rdy':
       NET.ready.add(id);
       if (m[1] !== S.layoutSum) { console.warn('a player built a different map', seat, m[1], S.layoutSum); toast(`${TEAMS[seat].name}'s map does not match: they may see things out of place`); }
@@ -2055,14 +2098,16 @@ function hostMsg(id, m) {
     case 'u':
       if (m[1] <= (R.seqIn || 0)) break;         // an older report that arrived late
       R.seqIn = m[1];
-      R.nx = clamp(+m[2] || 0, BOUNDS.x1, BOUNDS.x2); R.ny = +m[3] || 0; R.nz = clamp(+m[4] || 0, BOUNDS.z1, BOUNDS.z2); R.nh = +m[5] || 0;
-      R.rvx = +m[6] || 0; R.rvz = +m[7] || 0; R.nb = m[8] ? 1 : 0; R.chg = +m[9] || 0; R.ren = +m[10] || 0; R.nAge = 0;
+      R.nx = clamp((+m[2] || 0) / 10, BOUNDS.x1, BOUNDS.x2); R.ny = (+m[3] || 0) / 10; R.nz = clamp((+m[4] || 0) / 10, BOUNDS.z1, BOUNDS.z2); R.nh = (+m[5] || 0) / 100;
+      R.rvx = (+m[6] || 0) / 10; R.rvz = (+m[7] || 0) / 10; R.nb = m[8] ? 1 : 0; R.chg = (+m[9] || 0) / 10; R.ren = (+m[10] || 0) / 100; R.nAge = 0;
       break;
     case 'cl': {                                 // they rolled something up: first come, first served
       const o = S.byId.get(m[1]);
       R.claims = (R.claims || 0) + 1;            // every claim gets exactly one answer: ok or dn
-      if (o && !o.on && !o.gone && !o.noPick && S.state === 'play' && o.size <= R.d * pickRatio(R) * 1.25 && S.objects.includes(o)) { o.fly = null; rivalAttach(R, o); netTo(id, ['ok', m[1]]); }
-      else netTo(id, ['dn', m[1]]);
+      let ok = false;
+      try { if (o && !o.on && !o.gone && !o.noPick && S.state === 'play' && o.size <= R.d * pickRatio(R) * 1.25 && S.objects.includes(o)) { o.fly = null; rivalAttach(R, o); ok = true; } }
+      catch (e) { console.error('claim failed', e); ok = !!(o && o.on && o.by === R.team); }
+      netTo(id, [ok ? 'ok' : 'dn', m[1]]);
       break;
     }
     case 'lg': for (const oid of m[1]) { const o = S.byId.get(oid); if (o && !o.on && !o.gone && Math.hypot(o.group.position.x - R.x, o.group.position.z - R.z) < R.d * 2 + o.size * 3) startLunge(o, R); } break;
@@ -2157,6 +2202,7 @@ function bindRoom(room) {
   NET.room = room; NET.q.clear();
   room.accepting = () => !(room.public && NET.on);       // a public game under way takes nobody new: they are sent to another room
   room.onMsg = (id, batch) => {
+    if (NET.stats) NET.bIn += JSON.stringify(batch).length;
     for (const m of Array.isArray(batch) && Array.isArray(batch[0]) ? batch : [batch]) {
       try { if (room.host) hostMsg(id, m); else clientMsg(m); } catch (e) { console.error('multiplayer message failed', m && m[0], e); }
     }
@@ -2233,6 +2279,7 @@ function toLobby() {
 function dropToMenu(msg) { stopBattle(); $('count').className = ''; toMenu(); menuView(msg ? 'mvMulti' : 'mvHome'); $('netMsg').textContent = msg || ''; }
 function leaveRoom(msg) { const room = NET.room; NET.room = null; if (room) room.close(); dropToMenu(msg); }
 S.net = NET; S.lob = LOB; S.netClaim = claim;      // debug hooks
+S.gfx = { renderer, scene, camera, worldGroup, sun, setQuality };      // debug hooks for measuring drawing cost
 
 // ---------- main update ----------
 const rollAxis = new V3();
@@ -2343,7 +2390,9 @@ function update(dt) {
       if (o.spawnT > 0.3) continue;
     }
     const ox = p.x - S.x, oz = p.z - S.z, dist = Math.hypot(ox, oz);
-    o.group.visible = dist < o.size * 300 + S.d * 10 + 25;
+    o.group.visible = dist < (o.size * 130 + S.d * 10 + 25) * QUAL.view;      // out to where it is about half a degree across
+    const casts = QUAL.shadows && o.size > S.d * 0.07 && dist < S.d * 14 + 12 + o.size;      // shadows only fall near the ball (see aimSun), and specks need none
+    if (o.casts !== casts || o.group.userData.fresh) { o.casts = casts; o.group.userData.fresh = false; o.group.traverse((n) => { if (n.isMesh) n.castShadow = casts; }); }
     if (NET.client) { if (o.kind === 'creature' || o.ntx !== undefined) puppetThing(o, dt, dist); }      // the host moves the critters; here they glide to where it says
     else if (o.kind === 'creature') {                 // it minds the nearest ball, whoever is pushing it
       let B = S, gap = dist - S.d;
@@ -2607,7 +2656,7 @@ function makeThumbs() {
   const dl = new THREE.DirectionalLight(0xffffff, 1.6); dl.position.set(2, 3, 4); sc.add(dl);
   const cam = new THREE.PerspectiveCamera(30, 1, 0.1, 30);
   for (const spec of CREATURES) {
-    const g = buildCreature(spec);
+    const g = buildCreature(spec, true);
     sc.add(g);
     const b = g.geometry.boundingBox, c = b.getCenter(new V3()), s = b.getSize(new V3()).length();
     cam.position.set(c.x + s * 0.95, c.y + s * 0.5, c.z + s * 1.65); cam.lookAt(c);
@@ -2642,6 +2691,7 @@ $('btnEnd').onclick = () => { if (NET.on) leaveRoom(); else if (S.mode === 'time
 $('btnAgain').onclick = () => { if (NET.room) toLobby(); else start(S.mode); };
 $('btnMenu').onclick = () => { if (NET.room) leaveRoom(); else toMenu(); };
 for (const id of ['btnMute', 'btnMute2', 'hudMute']) $(id).onclick = () => setMuted(!save.muted);
+for (const id of ['btnGfx', 'btnGfx2']) $(id).onclick = cycleGfx;
 function setDifficulty(d) {
   save.difficulty = DIFFS[d] ? d : 'normal'; persist();
   for (const k2 in DIFFS) for (const pre of ['diff_', 'ldiff_']) $(pre + k2).classList.toggle('on', k2 === save.difficulty);
@@ -2678,7 +2728,7 @@ function resize() {
   if (battle) { if (battle.resize) battle.resize(innerWidth / innerHeight); else { battle.camera.aspect = innerWidth / innerHeight; battle.camera.updateProjectionMatrix(); } }
 }
 addEventListener('resize', resize);
-resize();
+applyGfx();
 makeThumbs();
 populate();
 toMenu();
@@ -2686,13 +2736,47 @@ menuView('mvHome');
 { const code = cleanCode(new URLSearchParams(location.search).get('room')); if (code.length === 4) { $('joinCode').value = code; menuView('mvMulti'); joinRoom(code); } }   // opened from an invite link
 
 let last = performance.now(), menuSpin = 0;
-function frame(now) { tick(now); requestAnimationFrame(frame); }
+// Frame-rate watch (animation frames only): every two seconds of play, the average rate. Auto quality steps down below 30.
+const FPS = { n: 0, t0: performance.now(), now: 0, ms: 0, low: 0 };
+function watchFps(now) {
+  FPS.n++;
+  const span = now - FPS.t0;
+  if (span < 2000) return;
+  FPS.now = FPS.n * 1000 / span; FPS.ms = span / FPS.n; FPS.n = 0; FPS.t0 = now;
+  const playing = S.state === 'play' || S.state === 'battle';
+  if (!playing || document.hidden || span > 3000) { FPS.low = 0; return; }       // (a gap that long was a pause or a hidden tab, not a slow machine)
+  FPS.low = FPS.now < 30 ? FPS.low + 1 : 0;
+  if (save.gfx === 'auto' && FPS.low >= 2 && qualLevel < QUALITY.length - 1) { FPS.low = 0; setQuality(qualLevel + 1); save.gfxAuto = qualLevel; persist(); showGfx(); toast('Graphics lowered to keep the game smooth'); }
+}
+function showGfx() { for (const id of ['btnGfx', 'btnGfx2']) $(id).textContent = 'Graphics: ' + (save.gfx === 'auto' ? `auto (${QUAL.name})` : QUAL.name); }
+function cycleGfx() {
+  const names = ['auto', ...QUALITY.map((q) => q.name)];
+  save.gfx = names[(names.indexOf(save.gfx) + 1) % names.length]; if (save.gfx === 'auto') save.gfxAuto = 0;
+  persist(); applyGfx();
+}
+function applyGfx() { const k2 = QUALITY.findIndex((q) => q.name === save.gfx); setQuality(k2 >= 0 ? k2 : save.gfxAuto || 0); showGfx(); }
+// The readout (F3): frame rate, and in multiplayer how the connection is doing. For telling a slow machine from a slow link.
+let statsT = 0;
+function showStats(now) {
+  if (!NET.stats || now - statsT < 1000) return;
+  const secs = (now - statsT) / 1000; statsT = now;
+  let txt = `${FPS.now.toFixed(0)} fps (${FPS.ms.toFixed(0)} ms) · graphics ${QUAL.name} · ${renderer.info.render.calls} draws`;
+  if (NET.room) {
+    const back = NET.host ? Math.max(0, ...NET.peers.filter(Boolean).map((id) => NET.room.buffered(id))) : NET.room.buffered('host');
+    txt += `\n${NET.room.host ? 'host' : 'player'}${NET.room.public ? ' (public)' : ''} · ${NET.on ? `sent ${(NET.bOut / secs / 1000).toFixed(1)} kB/s · received ${(NET.bIn / secs / 1000).toFixed(1)} kB/s · waiting to send ${back} B` : 'in the lobby'}`;
+    if (NET.client) txt += `\nping ${NET.ping < 0 ? '?' : NET.ping + ' ms'} · ${(NET.nIn / secs).toFixed(0)} updates/s · last heard ${NET.lag.toFixed(1)} s ago · fast channel ${NET.room.fastState ? NET.room.fastState('host') : 'n/a'}`;
+  }
+  NET.bOut = NET.bIn = NET.nIn = 0;
+  $('netstats').textContent = txt;
+}
+addEventListener('keydown', (e) => { if (e.code === 'F3') { e.preventDefault(); NET.stats = !NET.stats; $('netstats').style.display = NET.stats ? 'block' : 'none'; statsT = 0; } });
+function frame(now) { watchFps(now); showStats(now); tick(now); requestAnimationFrame(frame); }
 // A hidden or covered tab gets few or no animation frames, which would freeze a multiplayer game for everyone else: a
 // worker's timer keeps this one ticking while it is in a room.
 try {
   const w = new Worker(URL.createObjectURL(new Blob(['setInterval(() => postMessage(0), 33)'], { type: 'text/javascript' })));
   const always = new URLSearchParams(location.search).has('keepalive');      // ?keepalive: also in single player (for testing in a hidden tab)
-  w.onmessage = () => { lobbyTick(); if ((NET.room || always) && S.state !== 'menu' && performance.now() - last > 90) tick(performance.now()); };      // no frame for a while: tick anyway
+  w.onmessage = () => { lobbyTick(); if ((NET.room || always) && S.state !== 'menu' && performance.now() - last > 250) tick(performance.now()); };      // no frame for a quarter of a second: tick anyway
 } catch (e) { /* no workers: the game simply waits while hidden */ }
 function tick(now) {
   const dt = Math.min(0.05, (now - last) / 1000);
