@@ -174,44 +174,35 @@ Object.assign(SHAPES, MAP_SHAPES);            // the habitats' own props (habita
 // ---------- item models (GLB files named in roster.js) ----------
 const gltfLoader = new GLTFLoader();
 const gltfCache = new Map();
+// Loads a model and bakes it into one geometry in the shared item material: its several meshes (one per colour) merged,
+// stood on y = 0, centred, and scaled so its longest side is 1. Resolves to null for a model that cannot be baked
+// (textured or skinned): the thing then keeps its generated shape.
 function loadModel(path) {
   if (!gltfCache.has(path)) {
     gltfCache.set(path, new Promise((res, rej) => gltfLoader.load(path, (gltf) => {
-      const m = gltf.scene;
-      m.traverse((n) => {
-        if (!n.isMesh) return;
-        n.castShadow = true;
-        for (const mm of Array.isArray(n.material) ? n.material : [n.material]) if ('metalness' in mm) { mm.metalness = 0; mm.roughness = Math.max(mm.roughness, 0.75); }
-      });
+      const m = gltf.scene, meshes = [];
       m.updateMatrixWorld(true);
-      const box = new THREE.Box3().setFromObject(m), size = box.getSize(new V3()), c = box.getCenter(new V3());
-      // A model comes as several meshes, one per colour: each would be drawn separately, for every copy on the map. Where
-      // the colours are plain (no textures), they are baked into one mesh, drawn once, in the same material as the generated things.
-      const meshes = [];
       m.traverse((n) => { if (n.isMesh) meshes.push(n); });
       const plain = meshes.length > 0 && meshes.every((n) => !Array.isArray(n.material) && !n.material.map && !n.isSkinnedMesh && n.geometry.attributes.position && n.geometry.attributes.normal);
-      let one = null;
-      if (plain) {
-        try {
-          const parts = meshes.map((n) => {
-            const pg = n.geometry.index ? n.geometry.toNonIndexed() : n.geometry.clone();
-            for (const a of Object.keys(pg.attributes)) if (a !== 'position' && a !== 'normal') pg.deleteAttribute(a);
-            pg.applyMatrix4(n.matrixWorld);
-            const col = n.material.color, arr = new Float32Array(pg.attributes.position.count * 3);
-            for (let i = 0; i < arr.length; i += 3) { arr[i] = col.r; arr[i + 1] = col.g; arr[i + 2] = col.b; }
-            pg.setAttribute('color', new THREE.BufferAttribute(arr, 3));
-            return pg;
-          });
-          const merged = mergeGeometries(parts);
-          if (merged) { one = new THREE.Mesh(merged, itemMat); one.castShadow = true; }
-        } catch (e) { one = null; }
-      }
-      const body = one || m;
-      body.position.sub(new V3(c.x, box.min.y, c.z));
-      const wrap = new THREE.Group();
-      wrap.add(body);
-      wrap.scale.setScalar(1 / (Math.max(size.x, size.y, size.z) || 1));   // longest side = 1 unit
-      res(wrap);
+      if (!plain) { console.warn('model kept as a generated shape (it has textures or bones):', path); res(null); return; }
+      try {
+        const parts = meshes.map((n) => {
+          const pg = n.geometry.index ? n.geometry.toNonIndexed() : n.geometry.clone();
+          for (const a of Object.keys(pg.attributes)) if (a !== 'position' && a !== 'normal') pg.deleteAttribute(a);
+          pg.applyMatrix4(n.matrixWorld);
+          const col = n.material.color, arr = new Float32Array(pg.attributes.position.count * 3);
+          for (let i = 0; i < arr.length; i += 3) { arr[i] = col.r; arr[i + 1] = col.g; arr[i + 2] = col.b; }
+          pg.setAttribute('color', new THREE.BufferAttribute(arr, 3));
+          return pg;
+        });
+        const geo = mergeGeometries(parts);
+        geo.computeBoundingBox();
+        const b = geo.boundingBox, k2 = 1 / (Math.max(b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z) || 1);
+        geo.translate(-(b.min.x + b.max.x) / 2, -b.min.y, -(b.min.z + b.max.z) / 2);
+        geo.scale(k2, k2, k2);
+        geo.computeBoundingBox(); geo.computeBoundingSphere();
+        res(geo);
+      } catch (e) { console.warn('model could not be baked:', path, e); res(null); }
     }, undefined, rej)));
   }
   return gltfCache.get(path);
@@ -240,16 +231,14 @@ function shapeGeometry(spec, color) {
   }
   return geo;
 }
+// A thing is always one mesh in the shared item material: its generated shape at first, its model's once that has loaded.
 function buildItem(spec) {
   const color = spec.colors[Math.floor(rand() * spec.colors.length)];
-  const fallback = new THREE.Mesh(shapeGeometry(spec, color), itemMat);
-  fallback.castShadow = true;
+  const mesh = new THREE.Mesh(shapeGeometry(spec, color), itemMat);
+  mesh.castShadow = true;
   const path = Array.isArray(spec.model) ? spec.model[Math.floor(rand() * spec.model.length)] : spec.model;
-  if (!path) return fallback;
-  const g = new THREE.Group();
-  g.add(fallback);
-  loadModel(path).then((wrap) => { g.clear(); g.add(wrap.clone(true)); g.userData.fresh = true; }).catch((e) => console.warn('Could not load model for', spec.id, path, e));
-  return g;
+  if (path) loadModel(path).then((geo) => { if (geo) mesh.geometry = geo; }).catch((e) => console.warn('Could not load model for', spec.id, path, e));
+  return mesh;
 }
 // Critters are generated in code from the parts lists in critters/*.js: one merged mesh per species.
 const critterGeo = new Map();
@@ -388,6 +377,62 @@ let seaMesh = null;
 const worldGroup = new THREE.Group();
 scene.add(worldGroup);
 
+// ---------- drawing the free things: one draw call per shape, not per thing ----------
+// Everything lying about the map (S.objects) keeps its own mesh for the game to move, scale and hide, but those meshes
+// are not drawn (worldGroup is invisible). Instead, every frame, each thing that is switched on and on screen has its
+// matrix copied into a batch: one InstancedMesh per shape and material, so 60 pebbles cost one draw call, not 60.
+// Things that cast a shadow go in a second batch of the same shape that does (they are few: only those near the ball).
+// A thing stuck on a ball is that ball's child and is drawn in the ordinary way.
+worldGroup.visible = false; worldGroup.matrixWorldAutoUpdate = false;
+const batchGroup = new THREE.Group(), batches = new Map();
+scene.add(batchGroup);
+const viewFrustum = new THREE.Frustum(), viewM = new THREE.Matrix4(), viewSphere = new THREE.Sphere();
+function batchFor(geo, material, casts) {
+  const key = geo.uuid + material.uuid + (casts ? 's' : '');
+  let b = batches.get(key);
+  if (!b) { b = { geo, material, casts, cap: 0, n: 0, mesh: null, arr: null }; batches.set(key, b); }
+  return b;
+}
+function growBatch(b) {
+  const cap = Math.max(8, b.cap * 2), old = b.mesh;
+  const m = new THREE.InstancedMesh(b.geo, b.material, cap);
+  m.frustumCulled = false; m.castShadow = b.casts; m.matrixAutoUpdate = false; m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  if (old) { m.instanceMatrix.array.set(old.instanceMatrix.array.subarray(0, b.n * 16)); batchGroup.remove(old); old.dispose(); }
+  batchGroup.add(m); b.mesh = m; b.cap = cap; b.arr = m.instanceMatrix.array;
+}
+const DRAW = { things: 0, batches: 0 };            // last frame's count, for the readout
+function drawWorld() {
+  camera.updateMatrixWorld();
+  viewFrustum.setFromProjectionMatrix(viewM.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+  for (const b of batches.values()) b.n = 0;
+  const inGame = S.state !== 'menu' && S.state !== 'dex';      // behind the menu everything is shown, from far above
+  let things = 0;
+  for (const o of S.objects) {
+    const g = o.group;
+    if (inGame && !g.visible) continue;
+    const geo = g.geometry, p = g.position, sc = g.scale.x, casts = inGame && !!o.casts;
+    // off screen: skip it. Shapes stand on their base, so the middle is straight above the thing's position; a
+    // shadow-caster counts as bigger, since its shadow may be in view when it is not.
+    let bs = geo.boundingSphere;
+    if (!bs) { geo.computeBoundingSphere(); bs = geo.boundingSphere; }
+    viewSphere.center.set(p.x, p.y + bs.center.y * sc, p.z); viewSphere.radius = (bs.radius + Math.hypot(bs.center.x, bs.center.z)) * sc * (casts ? 2.6 : 1.05);
+    if (!viewFrustum.intersectsSphere(viewSphere)) continue;
+    if (o.kind === 'creature' || o.fly || o.mx !== p.x || o.my !== p.y || o.mz !== p.z || o.ms !== sc) { g.updateMatrix(); o.mx = p.x; o.my = p.y; o.mz = p.z; o.ms = sc; }    // (things that have not moved keep their matrix)
+    let b = casts ? o.bS : o.bN;
+    if (!b || b.geo !== geo || b.material !== g.material) { b = batchFor(geo, g.material, casts); if (casts) o.bS = b; else o.bN = b; }
+    if (b.n >= b.cap) growBatch(b);
+    b.arr.set(g.matrix.elements, b.n * 16); b.n++; things++;
+  }
+  let used = 0;
+  for (const b of batches.values()) {
+    const m = b.mesh;
+    if (!m) continue;
+    m.count = b.n; m.visible = b.n > 0;
+    if (b.n) { used++; const a = m.instanceMatrix; if (a.clearUpdateRanges) { a.clearUpdateRanges(); a.addUpdateRange(0, b.n * 16); } a.needsUpdate = true; }
+  }
+  DRAW.things = things; DRAW.batches = used;
+}
+
 // The ball: an original striped orb.
 const ball = new THREE.Group();
 const core = new THREE.Group();
@@ -509,6 +554,7 @@ const NET = {
   seat: 0, seats: ['human', 'cpu', 'cpu', 'cpu'], peers: [null, null, null, null],   // this player's team; who has each team; (host) their connection
   q: new Map(), pending: new Map(), lunges: new Set(), ready: new Set(), spawned: [], fxRoots: new Map(), fxNodes: new Map(), mmDirty: new Set(),
   snapT: 0, slowT: 0, upT: 0, modsSent: '', cdGo: false, fxKey: 1, seq: 0, seqIn: 0, answered: 0, heard: 0, lag: 0, ping: -1, pingT: 0, stats: false, bIn: 0, bOut: 0, nIn: 0,
+  fxGeos: new Set(), fxGeoIn: new Map(), mute: false,
   arenaIn: [], aLatest: [], aSteps: [], aAcc: 0, aEnd: null, aSent: '', battleSeed: 1,
 };
 const LOB = { kinds: ['human', 'cpu', 'cpu', 'cpu'], peers: [null, null, null, null], seat: 0, diff: 'normal', auto: null, autoAt: 0 };   // the lobby, as last heard (auto: seconds until a public game starts itself, as of autoAt)
@@ -518,7 +564,24 @@ function netHost(m) { if (NET.on && NET.client && NET.room) netTo('host', m); }
 // News that goes stale (where the balls are, the clock): sent the fast way, where a late copy is dropped rather than
 // queued. If the link cannot even keep up with the reliable channel, it is skipped altogether.
 function netFast(id, m) { const room = NET.room; if (!room) return; if (NET.stats) NET.bOut += JSON.stringify(m).length; if (!room.sendFast(id, m) && room.buffered(id) < 3000) netTo(id, m); }
-function netFlush() { if (!NET.room) return; for (const [id, q] of NET.q) if (q.length) { if (NET.stats) NET.bOut += JSON.stringify(q).length; NET.room.send(id, q); NET.q.set(id, []); } }
+// Reliable messages go out in order, in packets of about a kilobyte, and only as fast as the link takes them: whatever
+// does not fit waits here for the next tick. (Sent as one lump, a wave of new critters or an event's effects made a
+// single huge message; on a slow link that blocked everything else for seconds, the ball positions included.)
+function netFlush() {
+  const room = NET.room;
+  if (!room) return;
+  for (const [id, q] of NET.q) {
+    let i = 0;
+    while (i < q.length && room.buffered(id) < 5000) {
+      const chunk = [];
+      let size = 0;
+      do { const m = q[i++]; chunk.push(m); size += m[0] === 'sp' ? 80 : JSON.stringify(m).length; } while (i < q.length && size < 1000);
+      if (NET.stats) NET.bOut += size;
+      room.send(id, chunk);
+    }
+    if (i) q.splice(0, i);
+  }
+}
 const seatHuman = (t) => (NET.on ? NET.seats[t] === 'human' : t === S.team);
 const seatLabel = (t) => (t === S.team ? 'You' : TEAMS[t].name);
 // Messages that name a ball are written with a token, so each player reads "You" for their own team.
@@ -596,7 +659,7 @@ function populateSeeded(seed) {
     if (e.kind === 'creature') Object.assign(o, { ai: 'idle', timer: rand() * 3, home: [x, z], tx: x, tz: z, phase: rand() * 6.28, leader: null });
     else if (size >= 0.5 && !e.spec.flat) solids.push({ x, z, rad });
     S.objects.push(o);
-    if (NET.host && S.live) netSpawned(o, id, x, z, opt);
+    if (NET.host && S.live && !NET.mute) netSpawned(o, id, x, z, opt);
     return o;
   }
   const radOf = (id) => (SPECS[id] ? SPECS[id].size * (SPECS[id].spec.rad ?? 0.35) : 0);
@@ -1559,13 +1622,16 @@ function spawnTitans() {
   [98, 98, 131, 98].forEach((f, i) => tone(f, f * 0.98, 0.5, 'sawtooth', 0.2, i * 0.42));
 }
 function refillMap() {
-  const here = new Set(S.objects), from = S.objects.length, balls = [S, ...rivals];
-  for (const e of S.initial) {
-    if (here.has(e.o)) continue;                                   // still out there
-    if (balls.some((b) => Math.hypot(b.x - e.x, b.z - e.z) < b.d)) continue;   // not underneath a ball
+  const here = new Set(S.objects), from = S.objects.length, balls = [S, ...rivals], back = [];
+  NET.mute = true;                                // (the other players are told which of the original things came back, by number: far smaller than describing each)
+  S.initial.forEach((e, k2) => {
+    if (here.has(e.o)) return;                                     // still out there
+    if (balls.some((b) => Math.hypot(b.x - e.x, b.z - e.z) < b.d)) return;   // not underneath a ball
     const o = S.spawn.put(e.id, e.x, e.z, { rot: e.rot });
-    if (o) e.o = o;
-  }
+    if (o) { e.o = o; o.nsig = propSig(o); back.push(k2, o.id); }
+  });
+  NET.mute = false;
+  for (let i = 0; i < back.length; i += 160) netAll(['rf', back.slice(i, i + 160)]);
   materialize(from);
   return S.objects.length - from;
 }
@@ -1783,6 +1849,8 @@ const propSig = (o) => o.size * 4 + propBits(o);
 function netBegin() {                            // a round is starting (called from start, after the map is built)
   NET.q.clear(); NET.pending.clear(); NET.lunges.clear(); NET.ready = new Set(); NET.spawned = []; NET.fxRoots.clear(); NET.fxNodes.clear(); NET.mmDirty.clear();
   NET.snapT = 0; NET.slowT = 0; NET.upT = 0; NET.modsSent = ''; NET.cdGo = false; NET.battleSeed = 0; NET.aEnd = null; NET.aSteps = [];
+  for (const geo of NET.fxGeoIn.values()) geo.dispose();
+  NET.fxGeos.clear(); NET.fxGeoIn.clear(); NET.mute = false;
   NET.seq = 0; NET.seqIn = 0; NET.answered = 0; NET.heard = performance.now(); NET.lag = 0; $('netwarn').classList.remove('show');
   if (!NET.on) return;
   if (NET.host) { for (const o of S.objects) o.nsig = propSig(o); S.live = true; }
@@ -1862,7 +1930,7 @@ function netWorld() {
   if (mm.length || fxu.length) netAll(['fu', mm, fxu]);
   for (let t = 0; t < TEAMS.length; t++) {
     const id = NET.peers[t], R = id && rivalOf(t);
-    if (!R || NET.room.buffered(id) > 1500) continue;
+    if (!R || NET.room.buffered(id) > 1500 || (NET.q.get(id) || []).length > 30) continue;
     const crit = critterDelta(R, t);
     if (crit.length) netTo(id, ['c', crit]);
   }
@@ -1983,7 +2051,9 @@ function fxSer(o) {
   if (o.isMesh) {
     let g = null;
     for (const k2 in G) if (G[k2] === o.geometry) g = k2;
-    n.g = g || { p: Array.from(o.geometry.attributes.position.array, r3), i: o.geometry.index ? Array.from(o.geometry.index.array) : null };
+    if (g) n.g = g;
+    else if (NET.fxGeos.has(o.geometry.uuid)) n.g = { u: o.geometry.uuid };            // already described this round
+    else { NET.fxGeos.add(o.geometry.uuid); n.g = { u: o.geometry.uuid, p: Array.from(o.geometry.attributes.position.array, r3), i: o.geometry.index ? Array.from(o.geometry.index.array) : null }; }
     n.m = fxMat(o.material); n.ro = o.renderOrder;
   }
   return n;
@@ -2001,7 +2071,9 @@ function fxBuild(n) {                            // (client)
   let o;
   if (n.g) {
     let geo = typeof n.g === 'string' ? G[n.g] : null;
-    if (!geo) { geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(n.g.p, 3)); if (n.g.i) geo.setIndex(n.g.i); geo.computeVertexNormals(); geo.userData.net = true; }
+    if (!geo) geo = NET.fxGeoIn.get(n.g.u);
+    if (!geo && n.g.p) { geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(n.g.p, 3)); if (n.g.i) geo.setIndex(n.g.i); geo.computeVertexNormals(); NET.fxGeoIn.set(n.g.u, geo); }
+    if (!geo) geo = G.box;
     const a = n.m, M = THREE[a[0]] || THREE.MeshBasicMaterial;
     const mt = new M({ color: a[1], opacity: a[2], transparent: !!a[3], side: a[4], depthWrite: !!a[5], fog: !!a[6], vertexColors: !!a[9] });
     if (mt.emissive) { mt.emissive.setHex(a[7]); mt.emissiveIntensity = a[8]; }
@@ -2015,7 +2087,7 @@ function fxDrop(key) {
   const e = NET.fxNodes.get(key);
   if (!e) return;
   fx.remove(e.root); NET.fxNodes.delete(key);
-  for (const o of e.nodes) if (o.isMesh) { o.material.dispose(); if (o.geometry.userData.net) o.geometry.dispose(); }
+  for (const o of e.nodes) if (o.isMesh) o.material.dispose();
 }
 
 // ---- messages ----
@@ -2046,6 +2118,12 @@ function clientMsg(m) {
       if (spawnT > 0) { o.spawnT = spawnT; o.group.scale.setScalar(0.001); }
       break;
     }
+    case 'rf': for (let i = 0; i < m[1].length; i += 2) {            // things from the start of the round that are back
+      const e = S.initial[m[1][i]];
+      if (!e || S.byId.has(m[1][i + 1])) continue;
+      const o = S.spawn.put(e.id, e.x, e.z, { rot: e.rot, id: m[1][i + 1] });
+      if (o) { e.o = o; o.spawnT = 0.9 + rand() * 0.6; o.group.scale.setScalar(0.001); }
+    } break;
     case 'rm': { const o = S.byId.get(m[1]); if (o) { if (o.on) { const from = holderOf(o); unstick(from, o); if (from === S) seatAll(); } removeThing(o); } break; }
     case 'pr': for (const [id, size, rad, bits] of m[1]) {
       const o = S.byId.get(id);
@@ -2279,7 +2357,7 @@ function toLobby() {
 function dropToMenu(msg) { stopBattle(); $('count').className = ''; toMenu(); menuView(msg ? 'mvMulti' : 'mvHome'); $('netMsg').textContent = msg || ''; }
 function leaveRoom(msg) { const room = NET.room; NET.room = null; if (room) room.close(); dropToMenu(msg); }
 S.net = NET; S.lob = LOB; S.netClaim = claim;      // debug hooks
-S.gfx = { renderer, scene, camera, worldGroup, sun, setQuality };      // debug hooks for measuring drawing cost
+S.gfx = { renderer, scene, camera, worldGroup, sun, setQuality, drawWorld, batches, DRAW };      // debug hooks for measuring drawing cost
 
 // ---------- main update ----------
 const rollAxis = new V3();
@@ -2391,8 +2469,8 @@ function update(dt) {
     }
     const ox = p.x - S.x, oz = p.z - S.z, dist = Math.hypot(ox, oz);
     o.group.visible = dist < (o.size * 130 + S.d * 10 + 25) * QUAL.view;      // out to where it is about half a degree across
-    const casts = QUAL.shadows && o.size > S.d * 0.07 && dist < S.d * 14 + 12 + o.size;      // shadows only fall near the ball (see aimSun), and specks need none
-    if (o.casts !== casts || o.group.userData.fresh) { o.casts = casts; o.group.userData.fresh = false; o.group.traverse((n) => { if (n.isMesh) n.castShadow = casts; }); }
+    const casts = QUAL.shadows && o.size > S.d * 0.07 && dist < S.d * 14 + 12 + o.size;      // shadows only fall near the ball (see aimSun), and specks need none: which batch it is drawn in (drawWorld)
+    o.casts = casts;
     if (NET.client) { if (o.kind === 'creature' || o.ntx !== undefined) puppetThing(o, dt, dist); }      // the host moves the critters; here they glide to where it says
     else if (o.kind === 'creature') {                 // it minds the nearest ball, whoever is pushing it
       let B = S, gap = dist - S.d;
@@ -2481,7 +2559,7 @@ function update(dt) {
 
 S.step = update; S.groundAt = groundAt; S.T = T;   // debug hooks
 S.rivals = rivals; S.H = H; S.markers = markers; S.eventIcons = () => [...EVENTS, ORACLE].map((e) => ({ id: e.id, name: e.name, color: e.color || '#ffe169', tag: EVENT_TAGS[e.id] || '', svg: eventIcon(e.id) })); S.timeUp = () => timeUp();
-S.render = () => { tickDexPop(0.016); if (S.state === 'battle' && battle) { battle.step(0.016); renderer.render(battle.scene, battle.camera); } else renderer.render(scene, camera); };   // draw one frame now (for background tabs)
+S.render = () => { tickDexPop(0.016); if (S.state === 'battle' && battle) { battle.step(0.016); renderer.render(battle.scene, battle.camera); } else { drawWorld(); renderer.render(scene, camera); } };   // draw one frame now (for background tabs)
 // Playtest helper: S.autoplay(seconds) rolls a simple bot through the level in fast-forward and returns a log.
 // It chases the nearest thing it can roll up on its own level, and wanders when stuck. Start a level first.
 S.autoplay = (seconds, everySec = 30) => {
@@ -2760,7 +2838,7 @@ let statsT = 0;
 function showStats(now) {
   if (!NET.stats || now - statsT < 1000) return;
   const secs = (now - statsT) / 1000; statsT = now;
-  let txt = `${FPS.now.toFixed(0)} fps (${FPS.ms.toFixed(0)} ms) · graphics ${QUAL.name} · ${renderer.info.render.calls} draws`;
+  let txt = `${FPS.now.toFixed(0)} fps (${FPS.ms.toFixed(0)} ms) · graphics ${QUAL.name} · ${renderer.info.render.calls} draws · ${DRAW.things} things in ${DRAW.batches} batches`;
   if (NET.room) {
     const back = NET.host ? Math.max(0, ...NET.peers.filter(Boolean).map((id) => NET.room.buffered(id))) : NET.room.buffered('host');
     txt += `\n${NET.room.host ? 'host' : 'player'}${NET.room.public ? ' (public)' : ''} · ${NET.on ? `sent ${(NET.bOut / secs / 1000).toFixed(1)} kB/s · received ${(NET.bIn / secs / 1000).toFixed(1)} kB/s · waiting to send ${back} B` : 'in the lobby'}`;
@@ -2802,6 +2880,6 @@ function tick(now) {
   }
   netFlush(); lobbyTick();
   if (document.hidden) return;
-  if (S.state === 'battle' && battle) renderer.render(battle.scene, battle.camera); else renderer.render(scene, camera);
+  if (S.state === 'battle' && battle) renderer.render(battle.scene, battle.camera); else { drawWorld(); renderer.render(scene, camera); }
 }
 requestAnimationFrame(frame);
