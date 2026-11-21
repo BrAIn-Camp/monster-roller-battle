@@ -193,7 +193,10 @@ Up to four players, one of them hosting; CPU teams take the empty seats. See REA
 
 - `net.js` is the transport: a room with a four-letter code, every player connected to the host (WebRTC through PeerJS), one reliable ordered channel each.
 - The host runs the round exactly as in single player. Another player's ball is a rival marked `remote`: the host does not steer it, it glides to where that player's machine last reported it.
-- A client runs only its own ball's physics. Everything else is drawn from the host: reliable messages for what was rolled up, dropped, added, removed or changed, for events, markers and effects; and 15 snapshots a second with the balls, the clock and the nearby critters that have moved.
+- A client runs only its own ball's physics. Everything else is drawn from the host, over two channels on the same connection:
+  - the reliable one, for what was rolled up, dropped, added, removed or changed, for events, markers and effects, and (10 times a second) the nearby critters that have moved;
+  - the fast one (unordered, never re-sent), for where the balls are and the clock, 20 times a second each way. A copy that cannot leave at once is skipped, so this news is never late, only less frequent.
+- The host sends no more than a player's link can carry: critter updates wait while that player's reliable channel has a backlog. The first version sent everything reliably at a fixed rate (about 15 KB/s per player); on a slow upload the backlog grew without limit, so positions and the clock fell seconds behind. A client that has not heard from the host for over a second shows a "connection is slow" notice.
 - Pick-ups are optimistic: the client sticks the thing on at once and asks; the host answers yes (to everyone) or no (and the client puts it back).
 - Rams, critter attacks and event shoves are decided by the host and sent to the player concerned as a new velocity.
 - The map is built from a seed the host sends, so every machine lays out the same world and things can be named by number. Each machine checks its layout against the host's.

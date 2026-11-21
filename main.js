@@ -469,13 +469,16 @@ const NET = {
   on: false, host: false, client: false,     // on: a multiplayer match is running here; host / client: this machine's part in it
   seat: 0, seats: ['human', 'cpu', 'cpu', 'cpu'], peers: [null, null, null, null],   // this player's team; who has each team; (host) their connection
   q: new Map(), pending: new Map(), lunges: new Set(), ready: new Set(), spawned: [], fxRoots: new Map(), fxNodes: new Map(), mmDirty: new Set(),
-  snapT: 0, upT: 0, modsSent: '', cdGo: false, fxKey: 1,
+  snapT: 0, slowT: 0, upT: 0, modsSent: '', cdGo: false, fxKey: 1, seq: 0, seqIn: 0, answered: 0, heard: 0, lag: 0,
   arenaIn: [], aLatest: [], aSteps: [], aAcc: 0, aEnd: null, aSent: '', battleSeed: 1,
 };
 const LOB = { kinds: ['human', 'cpu', 'cpu', 'cpu'], peers: [null, null, null, null], seat: 0, diff: 'normal', auto: null, autoAt: 0 };   // the lobby, as last heard (auto: seconds until a public game starts itself, as of autoAt)
 function netTo(id, m) { let q = NET.q.get(id); if (!q) NET.q.set(id, q = []); q.push(m); }
 function netAll(m) { if (NET.on && NET.host && NET.room) for (const id of NET.peers) if (id) netTo(id, m); }
 function netHost(m) { if (NET.on && NET.client && NET.room) netTo('host', m); }
+// News that goes stale (where the balls are, the clock): sent the fast way, where a late copy is dropped rather than
+// queued. If the link cannot even keep up with the reliable channel, it is skipped altogether.
+function netFast(id, m) { const room = NET.room; if (room && !room.sendFast(id, m) && room.buffered(id) < 4000) netTo(id, m); }
 function netFlush() { if (!NET.room) return; for (const [id, q] of NET.q) if (q.length) { NET.room.send(id, q); NET.q.set(id, []); } }
 const seatHuman = (t) => (NET.on ? NET.seats[t] === 'human' : t === S.team);
 const seatLabel = (t) => (t === S.team ? 'You' : TEAMS[t].name);
@@ -1730,7 +1733,9 @@ const music = (() => {
 // what their machines report. A client runs its own ball's physics and draws everything else from what the host sends:
 //   reliable events   things rolled up (pk), dropped (dr, tk), added (sp), removed (rm), changed (pr), events and their
 //                     markers and effects, the phases of the round, and shoves to this player's ball (im);
-//   15 snapshots/sec  where every ball is and how big, the clock, and the critters near this player that have moved.
+//   fast channel      20 times a second, where every ball is and how big, and the clock: never queued, never re-sent, so
+//                     it is always fresh (see netFast); the critters that moved near this player go reliably, 10 times a
+//                     second, and wait if that player's link is behind.
 // A client rolls things up at once on its own screen and asks the host (cl); the host agrees (pk) or refuses (dn).
 const r2 = (v) => Math.round(v * 100) / 100, r3 = (v) => Math.round(v * 1000) / 1000;
 const propBits = (o) => (o.noPick ? 2 : 0) | (o.group.material === goldMat ? 1 : 0);
@@ -1738,7 +1743,8 @@ const propSig = (o) => o.size * 4 + propBits(o);
 
 function netBegin() {                            // a round is starting (called from start, after the map is built)
   NET.q.clear(); NET.pending.clear(); NET.lunges.clear(); NET.ready = new Set(); NET.spawned = []; NET.fxRoots.clear(); NET.fxNodes.clear(); NET.mmDirty.clear();
-  NET.snapT = 0; NET.upT = 0; NET.modsSent = ''; NET.cdGo = false; NET.battleSeed = 0; NET.aEnd = null; NET.aSteps = [];
+  NET.snapT = 0; NET.slowT = 0; NET.upT = 0; NET.modsSent = ''; NET.cdGo = false; NET.battleSeed = 0; NET.aEnd = null; NET.aSteps = [];
+  NET.seq = 0; NET.seqIn = 0; NET.answered = 0; NET.heard = performance.now(); NET.lag = 0; $('netwarn').classList.remove('show');
   if (!NET.on) return;
   if (NET.host) { for (const o of S.objects) o.nsig = propSig(o); S.live = true; }
   else netHost(['rdy', S.layoutSum]);
@@ -1757,18 +1763,21 @@ function netTick(dt) {
     NET.spawned.length = 0;
     const mods = JSON.stringify([MODS, S.skyOverride ?? null]);
     if (mods !== NET.modsSent) { NET.modsSent = mods; netAll(['md', mods]); }
-    NET.snapT -= dt;
-    if (NET.snapT <= 0) { NET.snapT = 1 / 15; netSnapshot(); }
+    NET.snapT -= dt; NET.slowT -= dt;
+    if (NET.snapT <= 0) { NET.snapT = 1 / 20; netBalls(); }
+    if (NET.slowT <= 0) { NET.slowT = 1 / 10; netWorld(); }
   } else {
     NET.upT -= dt;
-    if (NET.upT <= 0) { NET.upT = 1 / 20; netHost(['u', r2(S.x), r2(S.y), r2(S.z), r3(S.heading), r2(S.vx), r2(S.vz), S.boostT > 0 ? 1 : 0, r2(S.charge), r2(S.energy)]); }
+    if (NET.upT <= 0) { NET.upT = 1 / 20; netFast('host', ['u', ++NET.seq, r2(S.x), r2(S.y), r2(S.z), r3(S.heading), r2(S.vx), r2(S.vz), S.boostT > 0 ? 1 : 0, r2(S.charge), r2(S.energy)]); }
     if (NET.lunges.size) { netHost(['lg', [...NET.lunges]]); NET.lunges.clear(); }
     for (const e of NET.fxNodes.values()) for (const o of e.nodes) if (o.userData.tp) o.position.lerp(o.userData.tp, Math.min(1, 12 * dt));
+    const quiet = (performance.now() - NET.heard) / 1000;          // how long since the host was last heard from
+    NET.lag = quiet; $('netwarn').classList.toggle('show', quiet > 1.2 && S.state === 'play');
   }
   netFlush();
 }
 // (host) Which free things near this player's ball have moved since they were last told? The nearest and the most out
-// of date first, 48 at most.
+// of date first, 32 at most.
 function critterDelta(R, slot) {
   const cand = [], lim = 70 + R.d * 12, i = slot * 2;
   for (const o of S.objects) {
@@ -1782,16 +1791,27 @@ function critterDelta(R, slot) {
   }
   cand.sort((a, b) => a[0] - b[0]);
   const out = [];
-  for (let n = 0; n < cand.length && n < 48; n++) { const o = cand[n][1], p = o.group.position; o.sent[i] = p.x; o.sent[i + 1] = p.z; out.push(o.id, Math.round(p.x * 20), Math.round(p.z * 20), Math.round((o.yaw || 0) * 50)); }
+  for (let n = 0; n < cand.length && n < 32; n++) { const o = cand[n][1], p = o.group.position; o.sent[i] = p.x; o.sent[i + 1] = p.z; out.push(o.id, Math.round(p.x * 20), Math.round(p.z * 20), Math.round((o.yaw || 0) * 50)); }
   return out;
 }
-function netSnapshot() {
+// (host) 20 times a second, the fast way: where every ball is and the clock. Each copy stands alone, so a lost or
+// skipped one does not matter.
+function netBalls() {
   const balls = [];
   for (let t = 0; t < TEAMS.length; t++) {
     const b = ballOf(t), [vx, vz] = velOf(b);
     const chg = b === S ? S.charge : b.remote ? b.chg : b.wind > 0 ? 0.65 * (1 - b.wind / (CHARGE_TIME * 0.65)) : 0;
-    balls.push(r2(b.x), r2(b.y), r2(b.z), r3(b.heading), r2(vx), r2(vz), b.d, b.boostT > 0 ? 1 : 0, r2(chg));
+    balls.push(r2(b.x), r2(b.y), r2(b.z), r2(b.heading % (2 * Math.PI)), r2(vx), r2(vz), b.d, b.boostT > 0 ? 1 : 0, r2(chg));
   }
+  const seq = ++NET.seq, tl = r2(S.timeLeft);
+  for (let t = 0; t < TEAMS.length; t++) {
+    const id = NET.peers[t], R = id && rivalOf(t);
+    if (R) netFast(id, ['b', seq, tl, balls, [R.vol3, R.ratioBonus || 0, R.claims || 0]]);
+  }
+}
+// (host) 10 times a second, the reliable way: what events changed, and the critters that moved near each player. A player
+// whose link is behind gets no critters until it has caught up (they are then simply sent later: nothing is lost).
+function netWorld() {
   const pr = [];                                 // things whose size or state an event changed
   for (const o of S.objects) { const sg = propSig(o); if (o.nsig === undefined) o.nsig = sg; else if (o.nsig !== sg) { o.nsig = sg; pr.push([o.id, o.size, o.rad, propBits(o)]); } }
   if (pr.length) netAll(['pr', pr]);
@@ -1799,16 +1819,19 @@ function netSnapshot() {
   for (const id of NET.mmDirty) { const m = markers.get(id); if (m) mm.push(id, r2(m.x), r2(m.z)); }
   NET.mmDirty.clear();
   const fxu = netFxScan();
+  if (mm.length || fxu.length) netAll(['fu', mm, fxu]);
   for (let t = 0; t < TEAMS.length; t++) {
     const id = NET.peers[t], R = id && rivalOf(t);
-    if (!R) continue;
-    const busy = NET.room.buffered(id) > 100000;         // a slow link: leave the critters out until it catches up
-    netTo(id, ['s', r2(S.timeLeft), balls, [R.vol3, R.ratioBonus || 0], busy ? [] : critterDelta(R, t), mm, fxu]);
+    if (!R || NET.room.buffered(id) > 3000) continue;
+    const crit = critterDelta(R, t);
+    if (crit.length) netTo(id, ['c', crit]);
   }
 }
-// (client) the host's picture of the world
+// (client) where the balls are and what the clock says
 function netSnap(m) {
-  const [, tl, balls, own, crit, mm, fxu] = m;
+  const [, seq, tl, balls, own] = m;
+  if (seq <= NET.seqIn) return;                  // an older copy that arrived late
+  NET.seqIn = seq; NET.heard = performance.now();
   if (S.state === 'play') S.timeLeft += (tl - S.timeLeft) * 0.35;
   for (let t = 0; t < TEAMS.length; t++) {
     const R = t === S.team ? null : rivalOf(t), i = t * 9;
@@ -1817,12 +1840,14 @@ function netSnap(m) {
     const d = balls[i + 6];
     if (Math.abs(d - R.d) > 1e-6) { R.d = d; R.vol3 = d ** 3; seatOn(R.attached, d / 2); }
   }
+  S.ratioBonus = own[1];
+  if (own[2] !== NET.answered) return;           // the host has answered claims this machine has not heard about yet (or the reverse): its size for us is out of step, wait for the next
   let v = own[0];                                // this ball's size: what the host has agreed, plus what it has not answered yet
   for (const c of NET.pending.values()) v += c;
   v = Math.max(START_D ** 3, v);
   if (Math.abs(v - S.vol3) > 1e-9 * v) { S.vol3 = v; S.d = Math.cbrt(v); seatAll(); announceUnlocks(); }
-  S.ratioBonus = own[1];
-  for (let i = 0; i < crit.length; i += 4) { const o = S.byId.get(crit[i]); if (o && !o.on) { o.ntx = crit[i + 1] / 20; o.ntz = crit[i + 2] / 20; o.nyaw = crit[i + 3] / 50; } }
+}
+function netWorldIn(mm, fxu) {                   // (client) markers and event effects that moved
   for (let i = 0; i < mm.length; i += 3) moveMark(mm[i], mm[i + 1], mm[i + 2]);
   for (const [key, i, sig] of fxu) {
     const e = NET.fxNodes.get(key), o = e && e.nodes[i];
@@ -1878,7 +1903,6 @@ function claim(o) {
 function netPick(team, id) {                     // (client) the host says this ball has rolled this thing up
   const o = S.byId.get(id), Bq = ballOf(team);
   if (!o || o.gone || !Bq) return;
-  if (team === S.team) NET.pending.delete(id);
   if (o.on && o.by === team) return;             // already there: it was this player's own claim, now agreed
   if (o.on) { const from = holderOf(o); unstick(from, o); if (from === S) seatAll(); }
   o.fly = null;
@@ -1887,7 +1911,7 @@ function netPick(team, id) {                     // (client) the host says this 
 }
 function netDeny(id) {                           // (client) the host refused a claim: somebody else got there first
   const o = S.byId.get(id);
-  NET.pending.delete(id);
+  NET.pending.delete(id); NET.answered++;
   if (!o || !o.on || o.by !== S.team) return;
   unstick(S, o);
   if (o.wpos) { o.group.position.set(o.wpos[0], o.wpos[1], o.wpos[2]); o.group.rotation.set(0, o.wpos[3], 0); }
@@ -1961,7 +1985,10 @@ function clientMsg(m) {
   if (k2 === 'go') { beginMatch(m[1], m[2]); return; }
   if (!NET.on) return;
   switch (k2) {
-    case 's': netSnap(m); break;
+    case 'b': netSnap(m); break;
+    case 'c': { const crit = m[1]; for (let i = 0; i < crit.length; i += 4) { const o = S.byId.get(crit[i]); if (o && !o.on) { o.ntx = crit[i + 1] / 20; o.ntz = crit[i + 2] / 20; o.nyaw = crit[i + 3] / 50; } } break; }
+    case 'fu': netWorldIn(m[1], m[2]); break;
+    case 'ok': NET.pending.delete(m[1]); NET.answered++; break;        // the host agreed to a claim
     case 'cd': NET.cdGo = true; if (S.state === 'intro') S.introT = Math.max(S.introT, INTRO_LEN); break;
     case 'pk': netPick(m[1], m[2]); break;
     case 'dn': netDeny(m[1]); break;
@@ -2026,12 +2053,15 @@ function hostMsg(id, m) {
       if (m[1] !== S.layoutSum) { console.warn('a player built a different map', seat, m[1], S.layoutSum); toast(`${TEAMS[seat].name}'s map does not match: they may see things out of place`); }
       break;
     case 'u':
-      R.nx = clamp(+m[1] || 0, BOUNDS.x1, BOUNDS.x2); R.ny = +m[2] || 0; R.nz = clamp(+m[3] || 0, BOUNDS.z1, BOUNDS.z2); R.nh = +m[4] || 0;
-      R.rvx = +m[5] || 0; R.rvz = +m[6] || 0; R.nb = m[7] ? 1 : 0; R.chg = +m[8] || 0; R.ren = +m[9] || 0; R.nAge = 0;
+      if (m[1] <= (R.seqIn || 0)) break;         // an older report that arrived late
+      R.seqIn = m[1];
+      R.nx = clamp(+m[2] || 0, BOUNDS.x1, BOUNDS.x2); R.ny = +m[3] || 0; R.nz = clamp(+m[4] || 0, BOUNDS.z1, BOUNDS.z2); R.nh = +m[5] || 0;
+      R.rvx = +m[6] || 0; R.rvz = +m[7] || 0; R.nb = m[8] ? 1 : 0; R.chg = +m[9] || 0; R.ren = +m[10] || 0; R.nAge = 0;
       break;
     case 'cl': {                                 // they rolled something up: first come, first served
       const o = S.byId.get(m[1]);
-      if (o && !o.on && !o.gone && !o.noPick && S.state === 'play' && o.size <= R.d * pickRatio(R) * 1.25 && S.objects.includes(o)) { o.fly = null; rivalAttach(R, o); }
+      R.claims = (R.claims || 0) + 1;            // every claim gets exactly one answer: ok or dn
+      if (o && !o.on && !o.gone && !o.noPick && S.state === 'play' && o.size <= R.d * pickRatio(R) * 1.25 && S.objects.includes(o)) { o.fly = null; rivalAttach(R, o); netTo(id, ['ok', m[1]]); }
       else netTo(id, ['dn', m[1]]);
       break;
     }

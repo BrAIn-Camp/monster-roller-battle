@@ -73,6 +73,7 @@
   .tag.edge { transform: translate(-50%, -50%); opacity: .92; }
   #toast { position: absolute; left: 50%; top: 162px; transform: translateX(-50%); font-size: 20px; font-weight: 800; background: #ffe169; opacity: 0; transition: opacity .3s; }
   #toast.show { opacity: 1; }
+  #netwarn { position: absolute; right: 16px; bottom: 52px; font-size: 13px; font-weight: 800; background: #ffb0a0; display: none; } #netwarn.show { display: block; }
   #timer.hot { background: #ff6a4a; color: #fff; animation: hot .5s infinite alternate; }
   @keyframes hot { from { transform: translateX(-50%) scale(1); } to { transform: translateX(-50%) scale(1.12); } }
   #phasebar { position: absolute; left: 50%; top: 64px; transform: translateX(-50%); width: min(420px, 60vw); height: 20px; display: flex; border: 3px solid #2b2540; border-radius: 11px; background: #fff; box-shadow: 0 3px 0 rgba(43,37,64,.35); }
@@ -206,6 +207,7 @@
   <div id="tag0" class="tag"></div><div id="tag1" class="tag"></div><div id="tag2" class="tag"></div><div id="tag3" class="tag"></div>
   <div id="area"></div>
   <div id="toast" class="pill"></div>
+  <div id="netwarn" class="pill">Connection is slow: other players may be out of date</div>
   <div id="pick" class="pill"></div>
 </div>
 

@@ -13,7 +13,10 @@
 //   room.send(peerId, msg) / room.broadcast(msg)           -> host to one / all players; a player always sends to the host
 //   room.onJoin(id) / room.onLeave(id) / room.onMsg(id, msg) / room.onClose(reason)   -> set these
 //   room.accepting = () => bool                            -> (host) may somebody join right now? default: yes
-//   room.buffered(id)                                      -> bytes still waiting to go out to that player (host)
+//   room.sendFast(id, msg)                                 -> the same, but for news that goes stale (where a ball is now): it is
+//                                                             never queued behind anything and never re-sent, so it arrives fresh or
+//                                                             not at all. Returns false if there is no such channel (use send).
+//   room.buffered(id)                                      -> bytes still waiting to go out to that player on the reliable channel
 //   room.close()
 //
 // Two transports: 'peer' (WebRTC through the public PeerJS broker: real play over the internet) and 'local'
@@ -71,10 +74,20 @@ const joinPeer = (peer, id, wait) => new Promise((res, rej) => {
   peer.on('error', onErr); conn.on('data', first);
 });
 function peerRoom(peer, host, code, pub, hostConn) {
-  const room = baseRoom(host, code, pub), conns = new Map();
-  const drop = (id) => { if (!conns.has(id)) return; conns.delete(id); room.peers = [...conns.keys()]; if (!room.closed) room.onLeave(id); };
+  const room = baseRoom(host, code, pub), conns = new Map(), fasts = new Map();
+  const drop = (id) => { if (!conns.has(id)) return; conns.delete(id); fasts.delete(id); room.peers = [...conns.keys()]; if (!room.closed) room.onLeave(id); };
   const shut = (reason) => { if (room.closed) return; room.closed = true; try { peer.destroy(); } catch (e) { /* gone */ } room.onClose(reason); };
+  // The fast channel: a second data channel on the same connection, unordered and with no re-sending. Both ends open it
+  // under the same number ("negotiated"), so nothing has to be agreed first.
+  const openFast = (conn, id) => {
+    try {
+      const ch = conn.peerConnection.createDataChannel('fast', { negotiated: true, id: 50, ordered: false, maxRetransmits: 0 });
+      ch.onmessage = (e) => { if (room.closed) return; let m; try { m = JSON.parse(e.data); } catch (e2) { return; } room.onMsg(id, [m]); };
+      fasts.set(id, ch);
+    } catch (e) { /* no fast channel: everything goes the reliable way */ }
+  };
   const wire = (conn, id) => {
+    openFast(conn, id);
     conn.on('data', (d) => { if (!room.closed) room.onMsg(id, d); });
     conn.on('close', () => (host ? drop(id) : shut('The host left the game')));
     conn.on('error', () => (host ? drop(id) : shut('Lost the connection to the host')));
@@ -82,6 +95,13 @@ function peerRoom(peer, host, code, pub, hostConn) {
   room.close = () => { if (room.closed) return; room.closed = true; try { peer.destroy(); } catch (e) { /* gone */ } };
   room.buffered = (id) => { const c = conns.get(id); return c && c.dataChannel ? c.dataChannel.bufferedAmount : 0; };
   room.send = (id, msg) => { const c = conns.get(id); if (c && c.open) { try { c.send(msg); } catch (e) { /* closing */ } } };
+  room.sendFast = (id, msg) => {
+    const ch = fasts.get(id);
+    if (!ch || ch.readyState !== 'open') return false;
+    if (ch.bufferedAmount < 1200) { try { ch.send(JSON.stringify(msg)); } catch (e) { /* closing */ } }      // the last one has not left yet: the link is busy, so skip this one
+    return true;
+  };
+  room.fastState = (id) => { const ch = fasts.get(id); return ch ? ch.readyState : 'none'; };       // for debugging
   room.broadcast = (msg) => { for (const id of conns.keys()) room.send(id, msg); };
   if (host) {
     peer.on('connection', (conn) => conn.on('open', () => {
@@ -130,6 +150,7 @@ async function openLocalRoom({ host, code, pub }) {
   const post = (to, kind, msg) => ch.postMessage({ from: me, to, kind, msg });
   room.buffered = () => 0;
   room.send = (id, msg) => post(id, 'msg', msg);
+  room.sendFast = (id, msg) => { post(id, 'msg', [msg]); return true; };
   room.broadcast = (msg) => { for (const id of known) post(id, 'msg', msg); };
   room.close = () => { if (room.closed) return; room.closed = true; post('*', 'bye'); ch.close(); };
   const joined = new Promise((res, rej) => {
