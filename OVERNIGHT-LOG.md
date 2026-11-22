@@ -54,6 +54,8 @@ built, the decisions taken without you, and every bug or rough edge found along 
 | 7 | (existing) The arena had no music at all: the round's tune stops at "TIME UP". | A fight tune from the same synth (waiting / fighting / sudden death). |
 | 8 | (existing) A hidden tab ran the whole game at a fifth of its speed. The worker that keeps a hidden tab ticking gave it one tick per quarter second, and a tick covers at most 50 ms. In multiplayer that slowed every player whenever the host's tab was hidden or covered. | The catch-up now runs as many 50 ms ticks as the gap needs (up to a second's worth). Measured: 10.0 game seconds per 10.0 real seconds in a hidden tab. |
 | 9 | (new) Stampede started a third of a second after its effect played, and was cancelled outright if it began on the edge line. | It starts at once, and only stops when it runs into an edge. |
+| 17 | (existing) The arena fight could not be paused: Esc did nothing there. | Esc pauses a single-player arena fight; the pause card's last button becomes "Skip to the result". |
+| 18 | (existing) Sounds are one oscillator each with nothing limiting their sum, so a busy moment could clip. | A limiter before the speakers; arena hit sounds are rationed to about 14 a second. Not checked by ear (this session cannot hear). |
 
 ### Found by an independent review
 

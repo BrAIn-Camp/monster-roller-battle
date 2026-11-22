@@ -2773,8 +2773,10 @@ function togglePause() {
   }
   else if (S.state === 'play') { S.state = 'paused'; show('pause'); }
   else if (S.state === 'paused') { S.state = 'play'; show(null); }
+  else if (S.state === 'battle' && battle && battle.modern) { S.state = 'battlepause'; S.skipHold = 0; show('pause'); $('hud').style.display = 'none'; }      // the arena fight can be paused too (single player); the round's own HUD stays away
+  else if (S.state === 'battlepause') { S.state = 'battle'; show('battle'); }
   $('pauseTitle').textContent = NET.on ? 'Game menu' : 'Paused';
-  $('btnEnd').textContent = NET.on ? 'Leave game' : 'End run';
+  $('btnEnd').textContent = NET.on ? 'Leave game' : S.state === 'battlepause' ? 'Skip to the result' : 'End run';
 }
 function finish() {
   endEvent(); clearFx(); music.stop();
@@ -2857,7 +2859,7 @@ $('btnFree').onclick = () => start('free');
 $('btnDex').onclick = () => openDex(false);
 $('btnDexBack').onclick = toMenu;
 $('btnResume').onclick = togglePause;
-$('btnEnd').onclick = () => { if (NET.on) leaveRoom(); else if (S.mode === 'timed') { S.state = 'play'; show(null); timeUp(); } else finish(); };
+$('btnEnd').onclick = () => { if (NET.on) leaveRoom(); else if (S.state === 'battlepause') { S.state = 'battle'; show('battle'); skipBattle(); } else if (S.mode === 'timed') { S.state = 'play'; show(null); timeUp(); } else finish(); };
 $('btnAgain').onclick = () => { if (NET.room) toLobby(); else start(S.mode); };
 $('btnMenu').onclick = () => { if (NET.room) leaveRoom(); else toMenu(); };
 for (const id of ['btnMute', 'btnMute2', 'hudMute']) $(id).onclick = () => setMuted(!save.muted);
@@ -2989,6 +2991,6 @@ function tick(now) {
   }
   netFlush(); lobbyTick();
   if (document.hidden) return;
-  if (S.state === 'battle' && battle) renderer.render(battle.scene, battle.camera); else { drawWorld(); renderer.render(scene, camera); }
+  if ((S.state === 'battle' || S.state === 'battlepause') && battle) renderer.render(battle.scene, battle.camera); else { drawWorld(); renderer.render(scene, camera); }
 }
 requestAnimationFrame(frame);
