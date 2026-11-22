@@ -365,19 +365,32 @@ export function makeStadiumActor(loaded) {
 export function makeArenaActor(dex, mesh, live) {
   const root = new THREE.Group();
   root.add(mesh);
-  let inst = null, dead = false;
+  let inst = null, dead = false, asked = null, own = null, base = null, baseK = 1;
   const A = {
     root, rigged: false,
-    play(name, o) { return inst ? inst.play(name, o) : 0; },
+    // (the model always arrives a moment after the actor is made, even when it was preloaded, so what was asked of
+    // it in that moment is remembered and played when it lands: a new fighter's entrance, a faint)
+    play(name, o) { asked = { name, o, at: performance.now() }; return inst ? inst.play(name, o) : 0; },
     update(dt) { if (inst) inst.update(dt); },
-    flash(k, color) { if (inst) inst.flash(k, color); },
-    dispose() { dead = true; if (inst) inst.dispose(); },
+    // A generated critter shares its team's material with every other one, so to glow alone it takes a copy the
+    // first time it is asked to. Its glow fades from the team's own tint towards the colour asked for.
+    flash(k, color = 0xffffff) {
+      if (inst) { inst.flash(k, color); return; }
+      if (!own) {
+        if (k <= 0 || !mesh.material || !mesh.material.emissive) return;
+        own = mesh.material = mesh.material.clone(); base = own.emissive.clone(); baseK = own.emissiveIntensity;
+      }
+      own.emissive.copy(base).lerp(tint.set(color), Math.min(1, k)); own.emissiveIntensity = baseK + (0.9 - baseK) * Math.min(1, k);
+    },
+    dispose() { dead = true; if (inst) inst.dispose(); if (own) own.dispose(); },
   };
   if (live) loadStadium(dex).then((l) => {
     if (!l || dead) return;
     inst = makeStadiumActor(l);
     root.remove(mesh); root.add(inst.root);
     A.rigged = true;
+    if (asked && asked.name !== 'idle' && ((asked.o && asked.o.hold) || performance.now() - asked.at < 700)) inst.play(asked.name, asked.o);
   });
   return A;
 }
+const tint = new THREE.Color();

@@ -3,6 +3,14 @@
 Branch `arena-overhaul`, one commit per piece of work, nothing pushed. This file is the running record: what was
 built, the decisions taken without you, and every bug or rough edge found along the way (fixed or not).
 
+## In short
+
+Every item on the worklist is built, committed and running in the browser, with the models and without, in single
+player and in a two-tab multiplayer room. The balance test was left to last as you asked and then used to tune.
+Two reviews by fresh agents found about fifteen real defects between them; all the definite ones are fixed.
+
+What I could not do is watch it move or hear it (see "Not verified"). Start with "What to try first" at the bottom.
+
 ## What was asked for
 
 1. Merging: three of a kind become the next stage; triples that cannot evolve become a starred version.
@@ -28,6 +36,11 @@ built, the decisions taken without you, and every bug or rough edge found along 
 | The camera closes in as the floor empties (it never turns, so steering does not change), and pushes in hard on the last knockout. | With 48 monsters the whole floor has to be in view; with 6 left they were ants. | the camera block at the end of `view()` in `arena-battle.js`, `CAM_CLOSE` |
 | Skipping the arena fight is now HOLD Enter (0.7 s), not a tap of Space. | Space is also the arena's dash key. One reflex tap threw the whole fight away. | `SKIP_HOLD` in `main.js` |
 | When a ball falls, whatever it had scooped scrambles back onto the floor. | Otherwise knocking a ball off would also delete your own scooped monsters. | `ballOut` in `arena-sim.js` |
+| "Super effective!" is drawn, not written: two red chevrons rise off the target and a ring bursts under it; a resisted hit drops one grey chevron. | You asked for animation over text where possible. | the `'hit'` case in `onEvent`, `arena-battle.js` |
+| A dash is shorter (1.8x speed for a third of a second, not 2x for 0.4 s), and the ring under your own ball turns red and beeps when the ball is half a second from running out of floor. | With no walls, the old dash covered 10 m before the ball could stop: a trap, when one fall ends your fight. | `DASH_MULT`, `DASH_TIME` in `arena-sim.js` |
+| Frost Rink is less slippery for balls and the Tidal Deck's wave pushes them less. | Both were tuned for an arena with walls. An idle ball was carried 9 m by one wave. | `makeHazard` in `arena-sim.js` |
+| The old arena card (name, favoured types, a paragraph about the hazard) is gone from the start of the fight. | The wheel's card already says it and the hazards telegraph themselves; it was three seconds of reading before the action. | |
+| A player whose ball has gone can still press dash to get their stand of spectators on its feet. It changes nothing in the fight. | Something to do while watching. | the bench block in `view()`, `arena-battle.js` |
 | A hazard's slow push (wave, sandstorm) cannot carry a monster off unless it is stunned or tumbling. Balls get no such grip. | Otherwise one gust dumped half an army into the void before anyone had done anything. | `shove` in `arena-sim.js` |
 
 ## How it is built now
@@ -79,34 +92,52 @@ uses only adding, multiplying, dividing and square roots (exact everywhere), wit
 cube root built from those. **Not verified across two different browsers**: that needs a Chrome player and a Firefox or
 Safari player in one room.
 
+### Found by a second review, of how the arena is wired into the game
+
+A third agent read only the changes to `main.js`, `index.html` and the model loader. It found the state handling, the
+music and the multiplayer gating clean, and five smaller things, all fixed:
+
+| # | What | Fix |
+|---|---|---|
+| 19 | A model always arrives a moment after its fighter is made (even preloaded), and anything asked of it in that moment was dropped: a newly merged monster never played its entrance. | The fighter remembers what was last asked and plays it when the model lands. |
+| 20 | In the stand-in build nothing glowed: no hit flash, no wind-up glow, no frozen tint. The glow was written for the models only. | A generated critter takes its own copy of the team material the first time it has to glow. |
+| 21 | My hidden-tab fix (bug 8) drew every catch-up tick. On a visible tab that hitched for a quarter second, up to twenty frames were drawn that nobody saw, which on a slow machine could keep the hitch going. | Only the last tick of a burst is drawn. |
+| 22 | The limiter (bug 18) was not neutral: a compressor node turns everything up to make good what it takes off the peaks, about 5 dB with my first settings. | Gentler settings and a gain after it that takes the make-up back. Still not checked by ear. |
+| 23 | Half-held Enter at the end of one fight could skip the next at once. | The hold is reset when a fight starts. |
+
 ## Checked
 
 - `node tools/arena-test/headless.mjs smoke`: every arena, positions finite on every step, the same seed gives the same
   fight twice, degenerate armies (none, one team only, 3 against 400), and 300 random armies through the merger with the
   bookkeeping checked (what goes into the roster adds up to what was brought).
-- Two browser tabs in a `?net=local` room: both played the arena fight from the host's steps and ended with the same
-  winner, time and top fighter. No "ended differently" warning on the client.
+- Two browser tabs in a `?net=local` room, twice (the second time after the maths change): both played the arena fight
+  from the host's steps and ended with the same winner, time and top fighter. No "ended differently" warning on the client.
 - The whole round in the browser, single player: wheel, merge intro, drop, fight, finish, results. No console errors.
-- Skipping during the intro and mid-fight, leaving mid-fight, three fights in a row, resizing the window.
+- Skipping during the intro and mid-fight, leaving mid-fight, three fights in a row, resizing the window, pausing.
+- A soak: one full fight in each of the eight arenas, with models and a titan a side, no errors and no timeouts.
 - The stand-in build (`?models=0` on the test page): generated critters fight with the same moves and effects.
 - Cost: about 4 ms a frame for the fight and its drawing with 48 animated models on the floor (test page, this machine).
 
-## Balance (headless, 800 fights, armies of 14 to 195 critters)
+## Balance (headless, 800 fights, armies of 14 to 195 critters, final numbers)
 
 | Measure | Result |
 |---|---|
 | Decided by knockout | 100% (none reached the 150 s safety net) |
 | Length | median 53 s; one in ten under 42 s, one in ten over 62 s |
 | First knockout | about 5 s in |
-| Knockouts that are ring-outs | 28% |
-| Signature moves per fight | about 80 (of which about 21 are rallies by the CPU balls) |
+| Knockouts that are ring-outs | 23% |
+| Signature moves per fight | about 80 (of which about 21 are rallies by the CPU balls); about a quarter are broken |
 | Balls lost per fight | 1.1 of 4 (CPU) |
-| The strongest army wins | 50% (2nd strongest 29%, 3rd 14%, 4th 7%) |
-| Wins by seat, identical armies | 24 / 28 / 24 / 23% over 600 fights |
-| Between arenas | 49 to 54 s, ring-outs 26 to 32% |
+| The strongest army wins | about 50% (2nd strongest 28%, 3rd 15%, 4th 8%) |
+| Wins by seat, identical armies | 25 / 26 / 27 / 23% over 3000 fights |
+| Between arenas | 49 to 54 s, ring-outs 21 to 32% |
 
-What was changed to get there: health x1.5 (fights were over in 40 s, before sudden death ever started), signature moves
-charge in 17 s rather than 11 (there were 120 a fight), and 2 s between a ball's rallies.
+What was changed to get there:
+- Health x1.5: fights were over in 40 s, before sudden death ever started.
+- Signature moves charge in 17 s rather than 11 (there were 120 a fight), and 2 s between a ball's rallies.
+- The moves against each other (`node tools/arena-test/headless.mjs 600 moves` prints the table). Tidal Surge was
+  causing half of all ring-outs by itself, so it carries less far; the single-target moves (Sky Uppercut, Shadow Strike,
+  Swarm Sting) were worth a third of an area move, so they hit harder.
 
 Run it yourself: `node tools/arena-test/headless.mjs 400`. Try a number without editing: `... tune=RAMP_AT:60,HP_SCALE:12`.
 

@@ -511,8 +511,13 @@ function audio() {
     ac = new AC(); master = ac.createGain(); master.gain.value = save.muted ? 0 : 1;
     // A limiter before the speakers: every sound is its own oscillator, and a dozen at once (an arena fight) added up
     // past full volume and crackled. Quiet passages go through untouched.
-    try { const lim = ac.createDynamicsCompressor(); lim.threshold.value = -10; lim.knee.value = 8; lim.ratio.value = 12; lim.attack.value = 0.003; lim.release.value = 0.12; master.connect(lim); lim.connect(ac.destination); }
-    catch (e) { master.connect(ac.destination); }
+    // (A compressor node turns everything up to make good what it takes off the peaks: about 1.6 dB with these
+    // settings. The gain after it takes that back, so nothing but the peaks is changed.)
+    try {
+      const lim = ac.createDynamicsCompressor(), trim = ac.createGain();
+      lim.threshold.value = -3; lim.knee.value = 3; lim.ratio.value = 12; lim.attack.value = 0.003; lim.release.value = 0.12; trim.gain.value = 0.83;
+      master.connect(lim); lim.connect(trim); trim.connect(ac.destination);
+    } catch (e) { master.connect(ac.destination); }
   }
   if (ac.state === 'suspended') ac.resume();
   return ac;
@@ -1592,7 +1597,7 @@ function tickWheel(dt) {
 function startBattle(arena) {
   const teams = NET.on ? S.battleTeams : battleTeams();
   if (NET.host) { NET.battleSeed = 1 + ((Math.random() * 2 ** 30) | 0); netAll(['ba', NET.battleSeed]); }
-  S.battleTeams = teams; S.battleResult = null; S.battleStatus = null; S.battleArena = arena;
+  S.battleTeams = teams; S.battleResult = null; S.battleStatus = null; S.battleArena = arena; S.skipHold = 0;
   S.state = 'battle';
   show('battle');
   const buildMesh = (spec, k) => { const m = buildCreature(spec); m.material = teamMats[k]; return m; };
@@ -2964,9 +2969,11 @@ try {
     const now = performance.now(), lag = now - last;
     if (lag <= 250) return;
     const n = Math.min(20, Math.ceil(lag / 50)), from = now - Math.min(lag, n * 50);
-    for (let i = 1; i <= n; i++) tick(from + (now - from) * i / n);
+    for (let i = 1; i <= n; i++) { catchingUp = i < n; tick(from + (now - from) * i / n); }      // (only the last of them is drawn)
+    catchingUp = false;
   };
 } catch (e) { /* no workers: the game simply waits while hidden */ }
+let catchingUp = false;                       // true for all but the last of a burst of catch-up ticks: those are not drawn
 function tick(now) {
   const dt = Math.min(0.05, (now - last) / 1000);
   if (dt <= 0) return;
@@ -2991,7 +2998,7 @@ function tick(now) {
     aimSun(0, 0, 0, 12);
   }
   netFlush(); lobbyTick();
-  if (document.hidden) return;
+  if (document.hidden || catchingUp) return;
   if ((S.state === 'battle' || S.state === 'battlepause') && battle) renderer.render(battle.scene, battle.camera); else { drawWorld(); renderer.render(scene, camera); }
 }
 requestAnimationFrame(frame);
