@@ -1524,6 +1524,18 @@ const packTeams = (teams) => teams.map((tm) => {
 const unpackTeams = (packed) => TEAMS.map((tm, i) => Object.assign({}, tm, { ballD: packed[i].d, human: !!packed[i].h, me: i === S.team,
   army: packed[i].a.filter(([id]) => SPECS[id]).flatMap(([id, h, n]) => { const sp = SPECS[id].spec, one = h ? Object.assign({}, sp, { height: h, base: baseOf(sp), giant: true, _pw: 0 }) : sp; return new Array(n || 1).fill(one); }) }));
 function buildBallFor(k) { return buildCaptureBall(k, k === S.team); }
+// Before the fight every army merges (arena-merge.js): three of a kind become the next stage of their line. It is
+// worked out as the wheel starts, from the armies and the arena alone, so every machine gets the same answer and
+// the local build can fetch the models it will need while the wheel spins.
+const specByDex = new Map(CREATURES.map((sp) => [sp.dex, sp])), specOf = (dex) => specByDex.get(dex);
+function planBattle(teams, arena) {
+  S.battlePlans = null;
+  if (!ARENA || !ARENA.planTeams || !arena) return;
+  const plans = ARENA.planTeams(teams, arena, specOf), dexes = new Set();
+  for (const p of plans) { for (const r of p.roster) dexes.add(baseOf(r.spec).dex); for (const m of p.merges) { dexes.add(baseOf(m.from).dex); dexes.add(baseOf(m.to).dex); } }
+  LOCAL.preload([...dexes]);
+  S.battlePlans = { arena, plans };
+}
 // The arena is decided when the round starts (so the oracle can hint at it); the wheel only reveals it.
 function pickArenas() {
   S.forecast = null;
@@ -1566,6 +1578,7 @@ function startWheel(net = null) {            // net: the armies and the arena th
   if (!teams.some((t) => t.army.length)) { S.battleResult = { winner: -1, mvp: null }; S.battleStatus = teams.map(() => ({ alive: 0, all: 0, hp: 0 })); finish(); return; }
   if (!ARENA || !S.forecast) { startBattle(null); return; }
   S.state = 'wheel'; show('battle');
+  planBattle(teams, S.forecast.arena);
   wheel = ARENA.createWheel({ arenas: S.forecast.arenas, pickIndex: S.forecast.pick, teams, sfx: { tone, cry } });
 }
 function tickWheel(dt) {
@@ -1580,7 +1593,10 @@ function startBattle(arena) {
   show('battle');
   const buildMesh = (spec, k) => { const m = buildCreature(spec); m.material = teamMats[k]; return m; };
   if (ARENA && arena) {
-    battle = ARENA.createBattle({ arena, teams, buildMesh, buildBall: buildBallFor, buildTrainer: (k) => buildTrainer(TEAMS[k].hex), poseTrainer, sfx: { tone, cry },
+    // a fighter is the generated critter in its team's colour, or (local build) its model once that has loaded
+    const buildActor = (spec, k) => LOCAL.arenaActor(baseOf(spec).dex, buildMesh(spec, k));
+    const plans = S.battlePlans && S.battlePlans.arena === arena ? S.battlePlans.plans : undefined;
+    battle = ARENA.createBattle({ arena, teams, specOf, plans, buildActor, buildBall: buildBallFor, buildTrainer: (k) => buildTrainer(TEAMS[k].hex), poseTrainer, sfx: { tone, cry },
       input: NET.on ? (k) => NET.arenaIn[k] : readStick, rand: NET.on ? seeded(NET.battleSeed) : undefined, noSkip: NET.on });
     battle.modern = true;
     if (battle.resize) battle.resize(innerWidth / innerHeight);
@@ -1614,7 +1630,7 @@ function battleRows() {
   const res = S.battleResult, st = S.battleStatus;
   if (!res || !st) return '';
   let h = S.battleArena ? `<tr><td>Arena</td><td>${S.battleArena.name} (favours ${S.battleArena.types.join(', ')})</td></tr>` : '';
-  h += S.battleTeams.map((tm, k) => `<tr><td><span class="dot" style="background:${tm.css}"></span> ${k === S.team ? 'You' : tm.name + (tm.human ? '' : ' (CPU)')}${res.winner === k ? ' ★' : ''}</td><td>${st[k].all} fought, ${st[k].alive} left standing${st[k].scooped ? `, ball scooped ${st[k].scooped}` : ''}</td></tr>`).join('');
+  h += S.battleTeams.map((tm, k) => `<tr><td><span class="dot" style="background:${tm.css}"></span> ${k === S.team ? 'You' : tm.name + (tm.human ? '' : ' (CPU)')}${res.winner === k ? ' ★' : ''}</td><td>${st[k].brought !== undefined ? `${st[k].brought} critter${st[k].brought === 1 ? '' : 's'}${st[k].merged < st[k].brought ? ` merged into ${st[k].merged}` : ''}, ${st[k].alive} left standing${st[k].ballOut ? ', ball lost' : ''}` : `${st[k].all} fought, ${st[k].alive} left standing`}</td></tr>`).join('');
   if (res.mvp) h += `<tr><td>Top fighter</td><td>${res.mvp.name} (${res.mvp.team === S.team ? 'yours' : TEAMS[res.mvp.team].name}), ${res.mvp.kills} knock-outs</td></tr>`;
   if (res.timedOut) h += '<tr><td colspan="2">Decided on remaining health after the time limit.</td></tr>';
   return h;

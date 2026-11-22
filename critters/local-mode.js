@@ -10,7 +10,7 @@
 // correct, because the folder it needs is gitignored and will not be there.
 //
 // What it changes, all of it:
-//   - critters are drawn as their extracted model instead of the generated mesh
+//   - critters are drawn as their extracted model instead of the generated mesh, in the world and in the arena
 //   - the dex card shows the model too
 //   - critters take their name from the extracted metadata
 //   - the ball is drawn with two coloured caps rather than the striped orb
@@ -18,7 +18,7 @@
 // None of it is part of the game's rules: it is presentation only, so a round plays
 // identically with the switch either way.
 import * as THREE from 'three';
-import { loadStadium, makeStadiumInstance, stadiumMeta } from './stadium.js';
+import { loadStadium, makeStadiumInstance, makeArenaActor, stadiumMeta } from './stadium.js';
 
 export const LOCAL_MODELS = true;
 
@@ -91,6 +91,12 @@ export function ballParts(k, own) {
 // Resolves to null when off, so the caller keeps the generated mesh it already drew.
 export function dexModel(dex) { return on ? loadStadium(dex) : Promise.resolve(null); }
 export function dexInstance(loaded) { return makeStadiumInstance(loaded); }
+
+// ---------------------------------------------------------------- the arena
+// A fighter for the arena fight: the generated mesh at first, the model in its place once loaded (or for good
+// when the switch is off). preload() is called while the wheel spins, so by the fight they are all there.
+export function arenaActor(dex, mesh) { return makeArenaActor(dex, mesh, on); }
+export function preload(dexes) { if (on) for (const d of dexes) loadStadium(d); }
 
 // ---------------------------------------------------------------- critters in the world
 // Generated critters are one merged mesh each and batch into a handful of instanced draws.

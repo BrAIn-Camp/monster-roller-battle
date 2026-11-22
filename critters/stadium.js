@@ -297,3 +297,84 @@ export function makeStadiumInstance(loaded, animName = 'idle') {
     dispose() { mixer.stopAllAction(); mixer.uncacheRoot(root); },
   };
 }
+
+// ---------------------------------------------------------------- the arena
+// A fighter: the same clone, with its clips on call and a material of its own so it can flash when hit.
+//   play(name, { dur, speed, hold })   'idle' loops; 'attack', 'special', 'faint' and 'entrance' play once and
+//                                      then fall back to idle (unless hold). dur stretches the clip to that long.
+//   flash(k, color)                    glow by k (0 to 1) in that colour
+// Returns how long the clip will take, so the caller can time things to it.
+export function makeStadiumActor(loaded) {
+  const { entry, clips } = loaded;
+  const root = cloneSkinned(loaded.root);
+  const mixer = new THREE.AnimationMixer(root);
+  const body = root.getObjectByName('body');
+  const skin = body ? (body.material = body.material.clone()) : null;
+  const find = (...names) => { for (const n of names) { const a = entry.anims.find((x) => x.name === n); if (a && clips[a.i]) return clips[a.i]; } return null; };
+  const CLIP = {
+    idle: find('idle'), attack: find('attack', 'attack_default'), special: find('attack_2', 'attack_3', 'attack_default', 'attack'),
+    faint: find('faint'), entrance: find('entrance'), hurt: find('flinch', 'reaction_182', 'reaction_172', 'reaction_170'),
+  };
+  let cur = null, fallBack = false;
+  function play(name, { dur = 0, speed = 1, hold = false, fade = 0.1 } = {}) {
+    const clip = CLIP[name] || CLIP.idle;
+    if (!clip) return 0;
+    const act = mixer.clipAction(clip), loop = name === 'idle';
+    act.reset();
+    act.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, Infinity);
+    act.clampWhenFinished = true;
+    act.timeScale = dur > 0 ? clip.duration / dur : speed;
+    act.enabled = true; act.setEffectiveWeight(1);
+    act.play();
+    if (cur && cur !== act) cur.crossFadeTo(act, fade, false);
+    cur = act; fallBack = !loop && !hold;
+    return clip.duration / act.timeScale;
+  }
+  mixer.addEventListener('finished', (e) => { if (e.action === cur && fallBack) play('idle', { fade: 0.2 }); });
+  play('idle');
+  if (cur) cur.time = Math.random() * cur.getClip().duration;      // so a row of the same species does not breathe in step
+
+  const FX_FPS = 12;
+  const fx = (entry.fx || []).map((f, i) => {
+    const m = root.getObjectByName('fx' + i);
+    if (!m || !f.frames.length) return null;
+    for (const png of f.frames) texFor(entry.slug, png);
+    m.material = m.material.clone();
+    return { mat: m.material, frames: f.frames, last: -1 };
+  }).filter(Boolean);
+  let t = 0;
+  return {
+    root, play,
+    has: (name) => !!CLIP[name],
+    update(dt) {
+      mixer.update(dt);
+      t += dt;
+      for (const f of fx) { const i = Math.floor(t * FX_FPS) % f.frames.length; if (i !== f.last) { f.last = i; f.mat.map = texFor(entry.slug, f.frames[i]); } }
+    },
+    flash(k, color = 0xffffff) { if (skin) skin.emissive.set(color).multiplyScalar(k); },
+    dispose() { mixer.stopAllAction(); mixer.uncacheRoot(root); if (skin) skin.dispose(); for (const f of fx) f.mat.dispose(); },
+  };
+}
+
+// What the arena is handed for every fighter, whether or not there is a model for it. `mesh` is the generated
+// critter, shown at once; if `live` and the species has a model, that takes its place as soon as it has loaded
+// (straight away when it was preloaded). The arena never needs to know which it is drawing.
+export function makeArenaActor(dex, mesh, live) {
+  const root = new THREE.Group();
+  root.add(mesh);
+  let inst = null, dead = false;
+  const A = {
+    root, rigged: false,
+    play(name, o) { return inst ? inst.play(name, o) : 0; },
+    update(dt) { if (inst) inst.update(dt); },
+    flash(k, color) { if (inst) inst.flash(k, color); },
+    dispose() { dead = true; if (inst) inst.dispose(); },
+  };
+  if (live) loadStadium(dex).then((l) => {
+    if (!l || dead) return;
+    inst = makeStadiumActor(l);
+    root.remove(mesh); root.add(inst.root);
+    A.rigged = true;
+  });
+  return A;
+}
