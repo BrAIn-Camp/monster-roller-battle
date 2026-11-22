@@ -46,7 +46,8 @@ const STYLE = `
 .ar-flag small{display:block;font-size:.72em;font-weight:700}
 .ar-pop{position:absolute;transform:translate(-50%,-50%);color:#fff;font-size:.95em;padding:.05em .6em;border-radius:.7em;border:2px solid #2b2540;white-space:nowrap;opacity:0;text-shadow:0 1px 0 rgba(0,0,0,.35)}
 .ar-pop.ar-on{animation:ar-rise 1.2s ease-out both}
-.ar-skip{position:absolute;right:1em;bottom:7.4em;font-size:.8em;background:#bfe7ff}
+.ar-skip{position:absolute;right:1em;bottom:7.4em;font-size:.8em;background:#bfe7ff;overflow:hidden;opacity:.85}
+.ar-skip i{position:absolute;left:0;bottom:0;height:.28em;width:0;background:#2b2540}
 .ar-team{width:12.5em}
 .ar-tname{white-space:nowrap}
 .ar-tally{display:flex;align-items:center;justify-content:center;gap:.45em;font-size:1.55em;margin:.1em 0 0}

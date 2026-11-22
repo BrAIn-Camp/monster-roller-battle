@@ -731,7 +731,7 @@ addEventListener('keydown', (e) => {
   if (e.code === 'KeyT') { S.tank = !S.tank; $('steer').textContent = S.tank ? 'tank' : 'simple'; toast('Steering: ' + (S.tank ? 'tank' : 'simple')); }
   if (e.code === 'Escape' || e.code === 'KeyP') togglePause();
   if (e.code === 'KeyM') setMuted(!save.muted);
-  if ((e.code === 'Space' || e.code === 'Enter') && S.state === 'battle') skipBattle();
+  if ((e.code === 'Space' || e.code === 'Enter') && S.state === 'battle' && battle && !battle.modern) skipBattle();     // (the arena fight is skipped by HOLDING Enter: Space is its dash)
   if ((e.code === 'Space' || e.code === 'Enter') && S.state === 'intro') S.introT = Math.max(S.introT, INTRO_LEN - 0.9);
   if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
 });
@@ -794,7 +794,7 @@ function pollPadButtons() {
   const hit = (i) => now[i] && !padPrev[i];
   if (hit(9)) togglePause();
   if (S.state === 'menu') { if (NET.room) { /* in a lobby: use the buttons */ } else if (hit(0)) start('timed'); else if (hit(2)) start('free'); }
-  else if (S.state === 'battle' && hit(3)) skipBattle();
+  else if (S.state === 'battle' && hit(3) && battle && !battle.modern) skipBattle();
   else if (S.state === 'intro' && hit(0)) S.introT = Math.max(S.introT, INTRO_LEN - 0.9);
   else if (S.state === 'results' && hit(0)) $('btnAgain').click();
   padPrev = now;
@@ -1609,6 +1609,13 @@ function startBattle(arena) {
 }
 function tickBattle(dt) {
   if (NET.on && battle.modern) { tickBattleNet(dt); return; }
+  if (battle.modern) {
+    // Skipping takes a held key (Enter, or Y on a pad), so a tap meant for the dash can never throw the fight away.
+    const pad = readPad(), want = k('Enter', 'NumpadEnter') || !!(pad && pad.buttons[3] && pad.buttons[3].pressed);
+    S.skipHold = want ? (S.skipHold || 0) + dt : 0;
+    if (battle.skipHold) battle.skipHold(S.skipHold / SKIP_HOLD);
+    if (S.skipHold >= SKIP_HOLD) { S.skipHold = 0; skipBattle(); return; }
+  }
   battle.step(dt);
   if (battle.modern) { if (battle.finished) endBattle(); return; }
   const st = battle.status();
@@ -1624,6 +1631,7 @@ function endBattle(given = null) {            // given: the host's result (multi
   $('battleui').style.display = 'none';
   finish();
 }
+const SKIP_HOLD = 0.7;                        // seconds Enter is held to skip the arena fight
 function skipBattle() { if (battle && !NET.on) { battle.skip(); endBattle(); } return S.battleResult; }
 S.skipBattle = skipBattle;
 function battleRows() {

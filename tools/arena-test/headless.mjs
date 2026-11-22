@@ -5,6 +5,7 @@
 //     smoke      a handful of fights with sanity checks on every step (positions finite, nothing stuck)
 //     merge      also compare each army merged against the same army unmerged
 //     verbose    one line per fight
+//     mirror     all four teams bring the same army: any difference in who wins is the seat, not the army
 //
 // The project's .js files are ES modules with no package.json beside them, so node will not import them where
 // they are: this copies what it needs into a scratch folder that has one.
@@ -112,6 +113,7 @@ for (let f = 0; f < FIGHTS; f++) {
   const arena = ARENAS[f % ARENAS.length];
   const base = 25 + Math.floor(rnd() * 110);
   const armies = [0, 1, 2, 3].map(() => makeArmy(rnd, Math.max(4, Math.round(base * (0.55 + rnd() * 0.9)))));
+  if (flag('mirror')) armies[1] = armies[2] = armies[3] = armies[0];
   const r = fight(1000 + f * 13 + SEED, { armies, arena });
   A.n++; if (r.res.timedOut) A.timed++;
   A.len.push(r.res.seconds); A.firstKo.push(r.tally.firstKo);

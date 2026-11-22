@@ -22,8 +22,11 @@ export const TUNE = {
   FAV_DMG: 1.25, FAV_TAKEN: 0.8, FAV_SPEED: 1.1,       // the edge an arena gives its three favoured types
   REINFORCE_EVERY: 0.8,     // seconds between reserves dropping in at a team's corner
   DROP_TIME: 0.8,           // a reserve cannot be hurt, or act, while it falls in
-  ARENA_MIN: 28, ARENA_MAX: 50,
-  MAX_H_FRAC: 0.2, MIN_H_FRAC: 0.036, H_TARGET: 0.058,  // drawn heights, as shares of the arena side
+  ARENA_MIN: 30, ARENA_MAX: 40,
+  // Drawn heights. A typical monster is H_TARGET of the arena side; others are scaled by the ROOT of how much
+  // taller or shorter they really are, within H_MIN..H_MAX times typical. So a sea serpent towers over a mouse,
+  // but nothing is a speck and nothing blots out the floor. (Stats still use the real height.)
+  H_TARGET: 0.06, H_MIN: 0.62, H_MAX: 2.5,
   HIT_DELAY: 0.14,          // a melee swing lands this long after it starts (so the blow meets the animation)
   SHOT_SPEED: 0.62,         // ranged attacks fly this many arena sides per second
   // knockback: metres slid = kb x (KB_FLAT + KB_FRAC x damage share x (1 + KB_WEAK x health lost)) / weight
@@ -36,8 +39,8 @@ export const TUNE = {
   BREAK_DIST: 0.9,          // a knock of at least this many metres breaks a wind-up
   RALLY_CD: 9, RALLY_BALL_CD: 1.1, RALLY_POWER: 1.2, RALLY_WIND: 0.55,
   RAM_MIN: 2.5, RAM_PUSH: 0.3, RAM_DMG: 0.04, RAM_IMMUNE: 1.2,
-  SCOOP_RATIO: 0.5, SCOOP_GROW: 0.8, SCOOP_GULP: 0.7, SCOOP_DRAG: 0.35,
-  BALL_SPREAD: 0.6, BALL_MAX_GROW: 1.8, BALL_GRIP: 4.5,
+  SCOOP_RATIO: 0.4, SCOOP_GROW: 0.8, SCOOP_GULP: 0.7, SCOOP_DRAG: 0.35,
+  BALL_BASE: 1.3, BALL_SPREAD: 0.55, BALL_MAX_GROW: 1.5, BALL_GRIP: 4.5,
   DASH_MULT: 2.0, DASH_TIME: 0.4, DASH_CD: 2.2,
   CPU_SPEED: 0.9, CPU_THINK: [0.3, 0.55],
   CLASH_STUN: 1.0,
@@ -62,7 +65,7 @@ export const isFavoured = (arena, spec) => spec.types.some((t) => arena.types.in
 //   rush   the user itself charges down a line
 export const MOVES = {
   fire:     { name: 'Flame Burst',   shape: 'cone',   reach: 7.5, arc: 0.62, power: 1.7, kb: 2.2, wind: 0.85 },
-  water:    { name: 'Tidal Surge',   shape: 'wave',   reach: 12, width: 3.4, power: 1.0, kb: 1.0, carry: 0.75, wind: 0.9 },
+  water:    { name: 'Tidal Surge',   shape: 'wave',   reach: 12, width: 2.4, power: 1.0, kb: 1.0, carry: 0.75, wind: 0.9 },
   electric: { name: 'Chain Bolt',    shape: 'chain',  reach: 8.5, jumps: 4, power: 1.35, kb: 0.5, stun: 0.7, wind: 0.6 },
   grass:    { name: 'Bloom Drain',   shape: 'nova',   size: 4.6, power: 1.25, kb: 1.2, heal: 0.6, wind: 0.8 },
   ice:      { name: 'Deep Freeze',   shape: 'blast',  reach: 9, size: 3.3, power: 1.2, kb: 0.3, stun: 1.7, frozen: true, wind: 0.9 },
@@ -94,11 +97,9 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
   recs.forEach((r) => r.forEach((c) => { heights.push(c.spec.height); biggest = Math.max(biggest, c.spec.height); }));
   heights.sort((a, b) => a - b);
   const total = heights.length, median = total ? heights[total >> 1] : 1;
-  const L = clamp(27 + Math.min(biggest, 26) * 0.9, T.ARENA_MIN, T.ARENA_MAX), half = L / 2, K = L / 32;
-  // drawn height: zoom so a typical monster is H_TARGET of the arena side, then clamp (which shrinks the giants)
-  const zoom = clamp(L * T.H_TARGET / median, 1, 3.2);
-  const hOf = (spec) => clamp(spec.height * zoom, L * T.MIN_H_FRAC, L * T.MAX_H_FRAC);
-  const hRef = hOf({ height: median });
+  const L = clamp(29 + Math.sqrt(total) * 0.35 + Math.min(biggest, 30) * 0.25, T.ARENA_MIN, T.ARENA_MAX), half = L / 2, K = L / 32;
+  const hRef = L * T.H_TARGET;
+  const hOf = (spec) => hRef * clamp(Math.sqrt(spec.height / median), T.H_MIN, T.H_MAX);
   const spdK = clamp(L / 40, 0.8, 1.5);
   function unitStats(c) {
     const b = STATS[c.spec.dex] || DEF, m = Math.sqrt(c.spec.height), special = b[3] > b[1];
@@ -155,10 +156,9 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
     return e;
   };
 
-  // ---- balls: "earned but compressed". The base ball can scoop about the smallest quarter of what is fielded.
-  const drawn = []; recs.forEach((r, k) => { for (let i = 0; i < onStart[k]; i++) drawn.push(r[i].h); }); drawn.sort((a, b) => a - b);
-  const pLow = drawn.length ? drawn[Math.floor(drawn.length / 4)] : 1;
-  const baseD = clamp(pLow / T.SCOOP_RATIO * 0.9, L * 0.06, L * 0.1);
+  // ---- balls: "earned but compressed". The smallest ball is a little wider than a typical monster is tall and
+  // can scoop nothing but the very smallest; the biggest is BALL_SPREAD wider and can scoop a few more.
+  const baseD = hRef * T.BALL_BASE;
   const finishD = teams.map((tm) => Math.max(0.05, +tm.ballD || 0.5)), loD = Math.min(...finishD, 1e9), spanD = Math.max(Math.log(Math.max(...finishD, loD) / loD), Math.log(4));
   const topSpeed0 = 4.5 + L * 0.13;                             // ball top speed before size, dash and arena factors
   const balls = teams.map((tm, k) => {
@@ -167,7 +167,7 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
       stun: 0, safe: 0, gulp: 0, dashT: 0, dashCd: 0, combo: 0, comboT: 0, rallyCd: 0, cargo: [], scoops: 0, rams: 0, rallies: 0, ringOuts: 0,
       aim: null, plan: '', rt: rand() * 0.5, ax: 0, az: 0, wob: rand() * 6.28, moving: false, gone: false, teamOut: false };
   });
-  const maxD = (b) => Math.min(b.D0 * T.BALL_MAX_GROW, L * 0.16);
+  const maxD = (b) => b.D0 * T.BALL_MAX_GROW;
   function stunBall(b, dur) { if (b.safe > 0 || b.gone) return false; b.stun = dur; b.safe = dur + 1.5; b.dashT = 0; return true; }
 
   // ---- things in flight and things that happen a little later (all deterministic: kept in order)

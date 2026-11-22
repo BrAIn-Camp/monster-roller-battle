@@ -13,15 +13,16 @@ import { createFx, TYPE_HEX, TYPE_GLOW } from './arena-fx.js';
 import { el, setText, replay, injectStyle, isMe, teamLabel, chip, HAS_DOM, clamp } from './arena-ui.js';
 
 // ---------- timings and looks ----------
-const FUSE = 1.15;            // seconds for one "three become one"
-const FUSE_GAP = 0.3;         // between one showcase starting and the next
-const SHOW_CHAINS = 3;        // merge lines shown per team (the most valuable ones)
-const MERGE_HOLD = 0.55;      // the results stand for a moment, then leave
+const FUSE = 1.05;            // seconds for one "three become one"
+const GATHER = 0.6;           // share of that spent spinning together (the rest: the flash, and the new one landing)
+const SHOW_FUSES = 3;         // merges shown per team, one after another (its most valuable lines)
+const MERGE_START = 0.35, MERGE_HOLD = 0.6;           // a beat before the first one, and after the last
 const DROP_PHASE = 1.9, DROP_FALL = 0.42;
 const COUNT_STEP = 0.7;       // seconds per "3", "2", "1"
 const FREEZE = 1.5, CHEER = 4.2;                      // slow-motion last knockout, then the winners' celebration
 const SLOWMO = 0.22;
-const CAM_FOV = 36, CAM_ELEV = 1.06;                  // fixed camera: field of view (deg), elevation above the floor (rad)
+const CAM_FOV = 36, CAM_ELEV = 1.06;                  // the camera: field of view (deg), elevation above the floor (rad)
+const CAM_CLOSE = 0.42;       // how far in it will go when few are left (share of the way to the floor)
 const STICKERS = 30;          // scooped monsters drawn on a ball
 const SND = {                 // [wave, from Hz, to Hz, seconds] for a hit of each type
   normal: ['triangle', 330, 190, 0.09], fire: ['sawtooth', 430, 150, 0.16], water: ['sine', 540, 250, 0.14], grass: ['triangle', 720, 480, 0.1], electric: ['square', 1500, 650, 0.08],
@@ -175,7 +176,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
   // ---- drawn in bulk: team rings, favoured auras, health bars, signature-move meters, stars, "roll through me" marks
   const RN = NT * TUNE.FIELD_CAP + 24;
   const inst = (geo, material, n = RN) => { const m = new THREE.InstancedMesh(geo, material, n); m.frustumCulled = false; m.count = 0; scene.add(m); owned.push(material); return m; };
-  const ringMesh = inst(GEO.ring, new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.85, depthWrite: false }));
+  const ringMesh = inst(new THREE.RingGeometry(0.86, 1, 30).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.9, depthWrite: false }));
   const auraMesh = inst(GEO.thin, new THREE.MeshBasicMaterial({ color: 0xffe169, transparent: true, opacity: 0.9, depthWrite: false, blending: THREE.AdditiveBlending }));
   const barBg = inst(GEO.plane, new THREE.MeshBasicMaterial({ color: 0x2b2540, depthTest: false, transparent: true }));
   const barLag = inst(GEO.planeL, new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false, transparent: true }));
@@ -188,11 +189,11 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
 
   // ---- fighters. A monster's drawing state hangs off it as u.v; the sim never looks at it.
   const views = [], dying = [];
-  function ensure(u) {
+  function ensure(u, made) {                                    // made: an actor that already exists (from the merge showcase)
     if (u.v) return u.v;
-    const actor = buildActor(u.spec, u.team);
-    actor.root.scale.setScalar(0.0001); actor.root.traverse((o) => { if (o.isMesh) o.castShadow = true; }); scene.add(actor.root);
-    const v = u.v = { u, actor, pop: 0, delay: 0, fall: -1, land: 1, lunge: 0, kick: 0, flash: 0, flashCol: 0xffffff, squash: 0, yaw: u.yaw, y: 0, lag: 1, phase: vr() * 6.28, tele: null, ice: null, lift: 0, glow: 0, tumble: 0, cheer: 0 };
+    const actor = made || buildActor(u.spec, u.team);
+    if (!made) { actor.root.scale.setScalar(0.0001); actor.root.traverse((o) => { if (o.isMesh) o.castShadow = true; }); scene.add(actor.root); }
+    const v = u.v = { u, actor, pop: 0, delay: 0, fall: -1, land: 1, lunge: 0, kick: 0, flash: 0, flashCol: 0xffffff, squash: 0, yaw: u.yaw, y: 0, lag: 1, phase: vr() * 6.28, tele: null, ice: null, lift: 0, glow: 0, tumble: 0, cheer: 0, hop: null, bar: 0 };
     views.push(v);
     return v;
   }
@@ -301,8 +302,9 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
   const stripYaw = (dx, dz) => Math.atan2(dx, dz) + Math.PI;   // the strip and wedge shapes run along -z
   function telegraph(u, w) {
     const v = ensure(u), M = w.M, c = hexOf(w.move), holds = [], k = () => clamp(w.t / w.dur, 0, 1), y = 0.035;
-    const outline = (kind, o, place) => holds.push(fx.hold(kind, Object.assign({ color: c, opacity: 0.2 }, o), (t, dt, m) => place(m, 1)));
-    const fill = (kind, o, place) => holds.push(fx.hold(kind, Object.assign({ color: c, opacity: 0.5, lit: true }, o), (t, dt, m) => { place(m, k()); m.material.opacity = 0.3 + 0.25 * k() + 0.12 * Math.sin(T * 30); }));
+    // the whole area faintly, so it can be read at once; and a brighter fill that grows until the move goes off
+    const outline = (kind, o, place) => holds.push(fx.hold(kind, Object.assign({ color: c, opacity: 0.16 }, o), (t, dt, m) => place(m, 1)));
+    const fill = (kind, o, place) => holds.push(fx.hold(kind, Object.assign({ color: c, opacity: 0.3 }, o), (t, dt, m) => { place(m, k()); m.material.opacity = 0.2 + 0.22 * k() + 0.08 * Math.sin(T * 30); }));
     switch (M.shape) {
       case 'cone': { const place = (m, f) => { m.position.set(u.x, y, u.z); m.rotation.y = stripYaw(w.dx, w.dz); m.scale.set(w.reach * f, 1, w.reach * f); }; outline('wedge', { arc: M.arc }, place); fill('wedge', { arc: M.arc }, place); break; }
       case 'beam': case 'rush': case 'wave': { const wd = w.width + (M.shape === 'wave' ? 1.2 * K : 0), place = (m, f) => { m.position.set(u.x, y, u.z); m.rotation.y = stripYaw(w.dx, w.dz); m.scale.set(wd, 1, w.reach * f); }; outline('strip', {}, place); fill('strip', {}, place); break; }
@@ -418,7 +420,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     dying.push({ u, v, x: u.x, y: v.y, z: u.z, vx: dx * Math.max(sp, ring ? 3 : 0), vz: dz * Math.max(sp, ring ? 3 : 0), vy: ring ? 3 + sp * 0.12 : (7 + e.dist * 0.5) * (big ? 0.8 : 1), spin: (vr() < 0.5 ? -1 : 1) * (6 + vr() * 6), rx: 0, t: 0, ring, bounced: false, scale: 1 });
     v.actor.play('faint', { hold: true, speed: 2.2 }); v.actor.flash(0.9, 0xffffff);
     if (ring) { tone(1300, 220, 0.6, 'sine', 0.12); fx.ring(u.x, u.z, { r0: u.r, r1: u.r + 3.5 * K, color: 0xffffff, life: 0.35 }); }
-    else { fx.star(u.x, u.h * 0.7, u.z, { size: u.h * 1.8 + 2, color: 0xfff2b0, life: 0.4, five: false }); fx.ring(u.x, u.z, { r0: u.r, r1: u.r + 3 * K, color: teams[u.team].hex, life: 0.4 }); fx.burst(u.x, u.h * 0.6, u.z, big ? 22 : 12, 0xffffff, 8, 0.4 * K, 0.6); tone(big ? 200 : 300, 60, big ? 0.45 : 0.3, 'triangle', big ? 0.2 : 0.12); }
+    else { fx.star(u.x, u.h * 0.7, u.z, { size: u.h * 0.8 + 1.1 * K, color: 0xfff2b0, life: 0.3, opacity: 0.9 }); fx.ring(u.x, u.z, { r0: u.r, r1: u.r + 3 * K, color: teams[u.team].hex, life: 0.4 }); fx.burst(u.x, u.h * 0.6, u.z, big ? 22 : 12, 0xffffff, 8, 0.4 * K, 0.6); tone(big ? 200 : 300, 60, big ? 0.45 : 0.3, 'triangle', big ? 0.2 : 0.12); }
     cry(u.spec, big ? 0.12 : 0.07); bump(big ? 0.35 : 0.15);
     if (hud) pipFlash(u.team);
     lastKo.set(u.x, u.h * 0.5, u.z);
@@ -432,7 +434,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
       if (d.y < gy && d.vy < 0) {
         if (gy === 0 && !d.bounced) { d.bounced = true; d.y = 0; d.vy = -d.vy * 0.42; d.vx *= 0.7; d.vz *= 0.7; fx.puff(d.x, 0.2, d.z, 6, 0xf5efe0, 4, 0.4, 0.4); tone(120, 60, 0.12, 'triangle', 0.08); }
         else {                                                 // gone: stars on the floor, a splash far below
-          if (gy === 0) { fx.star(d.x, u.h * 0.5, d.z, { size: u.h + 1.5, color: 0xffe169, five: true, life: 0.5, spin: 3 }); fx.burst(d.x, u.h * 0.4, d.z, 12, 0xfff2b0, 6, 0.35 * K, 0.6); }
+          if (gy === 0) { fx.star(d.x, u.h * 0.5, d.z, { size: u.h * 0.6 + 0.9 * K, color: 0xffe169, five: true, life: 0.5, spin: 3 }); fx.burst(d.x, u.h * 0.4, d.z, 12, 0xfff2b0, 6, 0.35 * K, 0.6); }
           else { fx.puff(d.x, -DROP + 0.3, d.z, 14, arena.detail, 6, 0.6 * K, 0.9, -12, 9); fx.ring(d.x, d.z, { r0: 0.5, r1: 4 * K, color: 0xffffff, y: -DROP + 0.1, life: 0.6, lit: false, opacity: 0.6 }); tone(160, 70, 0.3, 'sine', 0.1); }
           root.removeFromParent(); d.v.actor.dispose(); dying.splice(i, 1); continue;
         }
@@ -470,7 +472,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
         const t = e.t, v = t.v; if (!v) break;
         const c = hexOf(e.type), share = e.dmg / t.st.maxHp, big = e.heavy || e.special, y = t.h * 0.55;
         v.flash = big ? 0.22 : 0.14; v.flashCol = 0xffffff; v.squash = big ? 0.3 : 0.16;
-        fx.star(t.x + (vr() - 0.5) * t.r, y + (vr() - 0.5) * t.h * 0.3, t.z + (vr() - 0.5) * t.r, { size: clamp(0.7 + share * 9 + (big ? 0.8 : 0), 0.7, 4.2) * K * (0.8 + t.h * 0.12), color: e.eff > 1 ? 0xffffff : glowOf(e.type), life: big ? 0.32 : 0.2 });
+        fx.star(t.x + (vr() - 0.5) * t.r, y + (vr() - 0.5) * t.h * 0.3, t.z + (vr() - 0.5) * t.r, { size: (clamp(0.45 + share * 4, 0.45, 1.1) + (big ? 0.45 : 0)) * K + t.r * 0.35, color: e.eff > 1 ? 0xffffff : glowOf(e.type), life: big ? 0.26 : 0.16, opacity: 0.85 });
         fx.burst(t.x, y, t.z, big ? 12 : e.eff > 1 ? 8 : 4, c, big ? 9 : 5, (big ? 0.4 : 0.28) * K, 0.4, e.type !== 'rock' && e.type !== 'ground' && e.type !== 'grass');
         if (e.eff > 1) { fx.ring(t.x, t.z, { r0: t.r, r1: t.r + 2.2 * K, color: c, life: 0.3 }); fx.chevrons(t.x, t.h + 1.0, t.z, { color: 0xff5a4a, size: 0.42 + t.h * 0.08, n: 2, life: 0.55 }); }
         else if (e.eff < 1 && e.dmg > 0) fx.chevrons(t.x, t.h + 1.4, t.z, { color: 0x9a96b0, size: 0.36 + t.h * 0.06, n: 1, life: 0.5, down: true });
@@ -529,72 +531,117 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     }
   }
 
-  // ---- the merge showcase: for each team, its best merge lines, three at a time spinning into one
-  const show = [];                                              // { team, x, z, stages: [{ from, to, stars, count }], t0, actors }
+  // ---- the merge showcase. Each team has a spot in front of its corner where, one after another, three of a kind
+  // spin together and become one; the result hops back to a line-up by the corner. When the armies drop in, the
+  // ones in the line-up walk on as themselves: they are the same monsters that are about to fight.
+  const show = [];                                              // per team: { team, x, z, fuses, lined, ... }
   let mergeLen = 0;
+  const sameKind = (a, b) => (a.base || a).dex === (b.base || b).dex && a.height === b.height && (a.stars || 0) === (b.stars || 0);
   plans.forEach((p, k) => {
     if (!p.merges.length) return;
-    const finals = p.merges.filter((m) => !p.merges.some((o) => o.fromKey === m.toKey)).sort((a, b) => power(b.to) - power(a.to) || a.to.dex - b.to.dex).slice(0, SHOW_CHAINS);
-    const [cx, cz] = CORNERS[k % 4], n = finals.length, tx = -cz * Math.SQRT1_2, tz = cx * Math.SQRT1_2, gap = L * 0.125;
-    finals.forEach((m, i) => {
+    const finals = p.merges.filter((m) => !p.merges.some((o) => o.fromKey === m.toKey)).sort((a, b) => power(b.to) - power(a.to) || a.to.dex - b.to.dex);
+    const fuses = [];
+    for (const m of finals) {
       const stages = [m]; let prev = p.merges.find((o) => o.toKey === m.fromKey);
-      while (prev && stages.length < 3) { stages.unshift(prev); prev = p.merges.find((o) => o.toKey === prev.fromKey); }      // (the line, earliest stage first)
-      const off = (i - (n - 1) / 2) * gap, c = { team: k, x: cx * L * 0.27 + tx * off, z: cz * L * 0.27 + tz * off, stages, t0: 0.25 + i * FUSE_GAP + k * 0.07, parts: [], result: null, stage: -1, done: false, face: Math.atan2(-cx, -cz) };
-      show.push(c); mergeLen = Math.max(mergeLen, c.t0 + stages.length * FUSE + MERGE_HOLD);
-    });
+      while (prev) { stages.unshift(prev); prev = p.merges.find((o) => o.toKey === stages[0].fromKey); }       // (the line, earliest stage first)
+      const take = stages.slice(-Math.min(stages.length, SHOW_FUSES - fuses.length));
+      take.forEach((st, i) => fuses.push({ m: st, cont: i > 0, last: i === take.length - 1 }));
+      if (fuses.length >= SHOW_FUSES) break;
+    }
+    const [cx, cz] = CORNERS[k % 4], n = fuses.filter((f) => f.last).length;
+    show.push({ team: k, x: cx * L * 0.19, z: cz * L * 0.19, cx, cz, fuses, n, idx: -1, parts: [], result: null, lined: [], flashed: false, face: Math.atan2(-cx, -cz) });
+    mergeLen = Math.max(mergeLen, MERGE_START + fuses.length * FUSE + MERGE_HOLD);
   });
-  const showH = (spec) => clamp(sim.hOf(spec) * 1.15, L * 0.05, L * 0.12);
+  const showH = (spec) => clamp(sim.hOf(spec) * 1.7, L * 0.085, L * 0.17);
+  const lineSpot = (c, j) => { const tx = -c.cz * Math.SQRT1_2, tz = c.cx * Math.SQRT1_2, off = (j - (c.n - 1) / 2) * L * 0.105; return [c.cx * L * 0.345 + tx * off, c.cz * L * 0.345 + tz * off]; };
   const freeActor = (a) => { a.root.removeFromParent(); a.dispose(); };
+  const newActor = (spec, k) => { const a = buildActor(spec, k); a.root.scale.setScalar(0.0001); a.root.traverse((o) => { if (o.isMesh) o.castShadow = true; }); scene.add(a.root); return a; };
   function showcase(dt) {
     for (const c of show) {
-      const t = pt - c.t0; if (t < 0 || c.done) continue;
-      const si = Math.min(c.stages.length - 1, Math.floor(t / FUSE)), st = c.stages[si], k = clamp((t - si * FUSE) / FUSE, 0, 1), tm = teams[c.team];
-      if (si !== c.stage) {                                     // a new stage: three of `from` (the last result is one of them)
-        c.stage = si;
+      const t = pt - MERGE_START - c.team * 0.06, tm = teams[c.team];
+      for (const q of c.lined) {                                // the ones already made: hop to their place, then wait there
+        q.t += dt; const g = clamp(q.t / 0.4, 0, 1), e = smooth(g), root = q.actor.root;
+        root.position.set(q.x0 + (q.x - q.x0) * e, Math.sin(g * Math.PI) * q.h * 0.9 + (g >= 1 ? Math.abs(Math.sin((q.t - 0.4) * 6)) * q.h * 0.06 : 0), q.z0 + (q.z - q.z0) * e);
+        root.rotation.y = c.face; root.scale.setScalar(q.h * (1 + (q.h0 / q.h - 1) * (1 - e)));
+        if (g >= 1 && !q.landed) { q.landed = true; fx.puff(q.x, 0.15, q.z, 6, 0xf5efe0, 3, 0.35, 0.4); tone(180, 80, 0.1, 'triangle', 0.08); }
+        q.actor.update(dt);
+      }
+      if (t < 0 || c.idx >= c.fuses.length) continue;
+      if (t >= c.fuses.length * FUSE) { if (c.result) lineUp(c, c.fuses[c.fuses.length - 1].m.to); c.idx = c.fuses.length; continue; }
+      const fi = Math.min(c.fuses.length - 1, Math.floor(t / FUSE)), f = c.fuses[fi], st = f.m, k = clamp((t - fi * FUSE) / FUSE, 0, 1);
+      if (fi !== c.idx) {                                       // the next three (when a line carries on, the one just made is the first of them)
+        c.idx = fi; c.flashed = false;
+        if (c.result && !f.cont) lineUp(c, c.fuses[fi - 1].m.to);
         for (const a of c.parts) freeActor(a.actor);
         c.parts = [];
-        for (let i = 0; i < 3; i++) { const keep = i === 0 && c.result; const actor = keep ? c.result : buildActor(st.from, c.team); if (!keep) { actor.root.scale.setScalar(0.0001); scene.add(actor.root); } c.parts.push({ actor, a: i * 2.094 + si }); }
-        c.result = null; c.flashed = false;
-        tone(392 + si * 130, 523 + si * 130, 0.5, 'triangle', 0.07, 0);
+        for (let i = 0; i < 3; i++) { const keep = i === 0 && f.cont && c.result; c.parts.push({ actor: keep ? c.result : newActor(st.from, c.team), a: i * 2.094 + fi * 0.7 + c.team, kept: !!keep }); }
+        c.result = null;
+        tone(330 + fi * 110, 520 + fi * 110, FUSE * 0.5, 'triangle', 0.06);
       }
-      const h = showH(st.from), R = h * 0.95 + 0.4;
-      if (k < 0.62) {                                           // gather: pop in, then orbit faster and tighter
-        const g = k / 0.62, r = R * (1 - g * g * 0.92), spin = g * g * 9;
-        c.parts.forEach((p, i) => {
-          const a = p.a + spin, root = p.actor.root, popK = i === 0 && si > 0 ? 1 : clamp(g * 5, 0, 1);
-          root.position.set(c.x + Math.cos(a) * r, h * 0.5 * g * g, c.z + Math.sin(a) * r); root.rotation.y = a + Math.PI / 2 + g * 6; root.scale.setScalar(h * backOut(popK) * (1 - g * g * 0.45)); p.actor.update(dt);
-          if (vr() < 0.6) fx.spark(root.position.x, root.position.y + h * 0.5, root.position.z, 0, 0.5, 0, vr() < 0.5 ? tm.hex : 0xffffff, 0.3 * K, 0.35, 0, true);
+      const h = showH(st.from), R = h * 0.8 + 0.9;
+      if (k < GATHER) {                                         // gather: pop in on a ring, then round and round, faster and tighter
+        const g = k / GATHER, r = R * (1 - g * g * g * 0.94), spin = g * g * 8.5;
+        c.parts.forEach((p) => {
+          const a = p.a + spin, root = p.actor.root, popK = p.kept ? 1 : clamp(g * 4.5, 0, 1);
+          root.position.set(c.x + Math.cos(a) * r, h * 0.35 * g * g + Math.abs(Math.sin(g * 14 + p.a)) * h * 0.08 * (1 - g), c.z + Math.sin(a) * r);
+          root.rotation.y = -a + Math.PI + g * 3; root.scale.setScalar(h * backOut(popK) * (1 - g * g * g * 0.4)); p.actor.update(dt); p.actor.flash(g * g * 0.8, 0xffffff);
+          if (vr() < 0.35 + g * 0.6) fx.spark(root.position.x, root.position.y + h * 0.5, root.position.z, 0, 0.6, 0, vr() < 0.6 ? tm.hex : 0xffffff, (0.25 + g * 0.2) * K, 0.4, 0, true);
         });
+        if (g > 0.25) fx.spark(c.x + (vr() - 0.5) * R, 0.1, c.z + (vr() - 0.5) * R, 0, 4 + g * 6, 0, 0xffffff, 0.22 * K, 0.35, 0, true);
       } else {
-        if (!c.flashed) {                                       // they meet: flash, and one stands where three were
+        const hh = showH(st.to);
+        if (!c.flashed) {                                       // they meet: a flash, and one stands where three were
           c.flashed = true;
           for (const p of c.parts) freeActor(p.actor);
           c.parts = [];
-          const hh = showH(st.to);
-          fx.flash(c.x, hh * 0.6, c.z, { r: hh * 1.3 + 1, color: 0xffffff, life: 0.35, opacity: 1 }); fx.ring(c.x, c.z, { r0: 0.4, r1: hh * 1.6 + 2.5, color: tm.hex, life: 0.5, opacity: 1 }); fx.ring(c.x, c.z, { r0: 0.2, r1: hh * 1.2 + 1.5, color: 0xffffff, life: 0.35 });
-          fx.burst(c.x, hh * 0.6, c.z, 26, 0xffffff, 9, 0.4 * K, 0.7); fx.burst(c.x, hh * 0.6, c.z, 16, tm.hex, 7, 0.45 * K, 0.8);
-          if (st.stars) for (let i = 0; i < st.stars; i++) fx.star(c.x + (i - (st.stars - 1) / 2) * hh * 0.5, hh * 1.35 + 0.6, c.z, { size: hh * 0.3 + 0.5, color: 0xffd23f, five: true, life: FUSE * 0.36 + MERGE_HOLD * (si === c.stages.length - 1 ? 1 : 0), spin: 0.6, lit: false });
-          c.result = buildActor(st.to, c.team); c.result.root.scale.setScalar(0.0001); scene.add(c.result.root); c.result.play('entrance', { dur: 0.9 });
-          const f = 523 * 1.19 ** si; tone(f, f, 0.1, 'triangle', 0.16); tone(f * 1.26, f * 1.26, 0.1, 'triangle', 0.16, 0.08); tone(f * 1.5, f * 2, 0.3, 'triangle', 0.18, 0.16);
-          cry(st.to, 0.08); bump(0.12);
-          if (hud) { const pnl = hud.panels[c.team]; replay(pnl.root, 'ar-bump'); }
+          fx.flash(c.x, hh * 0.55, c.z, { r: hh * 0.75 + 0.5, color: 0xffffff, life: 0.22, opacity: 0.85 });
+          fx.ring(c.x, c.z, { r0: 0.4, r1: hh * 1.5 + 2.2, color: tm.hex, life: 0.5, opacity: 1 }); fx.ring(c.x, c.z, { r0: 0.2, r1: hh * 1.1 + 1.4, color: 0xffffff, life: 0.32, thin: true });
+          fx.burst(c.x, hh * 0.6, c.z, 22, 0xffffff, 8, 0.36 * K, 0.6); fx.burst(c.x, hh * 0.6, c.z, 14, tm.hex, 6.5, 0.42 * K, 0.75);
+          for (let i = 0; i < 10; i++) { const a = i / 10 * 6.283; fx.spark(c.x + Math.cos(a) * hh * 0.5, 0.2, c.z + Math.sin(a) * hh * 0.5, Math.cos(a) * 2, 7 + vr() * 4, Math.sin(a) * 2, 0xffe169, 0.3 * K, 0.7, -9, true); }
+          if (st.stars) for (let i = 0; i < st.stars; i++) fx.star(c.x + (i - (st.stars - 1) / 2) * hh * 0.42, hh * 1.25 + 0.7, c.z, { size: hh * 0.24 + 0.45, color: 0xffd23f, five: true, life: FUSE * (1 - GATHER) + 0.25, spin: 0.5, lit: false });
+          c.result = newActor(st.to, c.team); c.result.play('entrance', { dur: 0.8 });
+          const fq = 523 * 1.19 ** fi; tone(fq, fq, 0.1, 'triangle', 0.16); tone(fq * 1.26, fq * 1.26, 0.1, 'triangle', 0.16, 0.08); tone(fq * 1.5, fq * 2, 0.3, 'triangle', 0.18, 0.16);
+          cry(st.to, 0.08); bump(0.1);
+          if (hud) replay(hud.panels[c.team].root, 'ar-bump');
         }
-        const g = (k - 0.62) / 0.38, hh = showH(st.to), root = c.result.root;
-        root.position.set(c.x, Math.abs(Math.sin(g * Math.PI)) * hh * 0.25, c.z); root.rotation.y = c.face + (1 - smooth(Math.min(1, g * 1.4))) * 5; root.scale.setScalar(hh * backOut(clamp(g * 2.2, 0, 1))); c.result.update(dt);
+        const g = (k - GATHER) / (1 - GATHER), root = c.result.root;
+        root.position.set(c.x, Math.abs(Math.sin(Math.min(1, g * 1.5) * Math.PI)) * hh * 0.3, c.z); root.rotation.y = c.face + (1 - smooth(Math.min(1, g * 1.6))) * 6.283; root.scale.setScalar(hh * backOut(clamp(g * 2.6, 0, 1))); c.result.update(dt);
       }
-      if (t >= c.stages.length * FUSE) { c.done = true; c.holdT = 0; }
-    }
-    for (const c of show) if (c.done && c.result) {             // the results stand a moment, then go up in sparks to be dropped in with the rest
-      c.holdT += dt; const root = c.result.root, hh = showH(c.stages[c.stages.length - 1].to), left = mergeLen - pt;
-      c.result.update(dt);
-      if (left < 0.3) { const g = clamp(1 - left / 0.3, 0, 1); root.scale.setScalar(hh * (1 - g) + 0.0001); root.position.y = g * g * hh * 3; if (vr() < 0.8) fx.spark(c.x + (vr() - 0.5) * hh, root.position.y + vr() * hh, c.z + (vr() - 0.5) * hh, 0, 6, 0, vr() < 0.5 ? teams[c.team].hex : 0xffffff, 0.3 * K, 0.4, 0, true); }
-      else { root.position.y = Math.abs(Math.sin(c.holdT * 7)) * hh * 0.12; root.scale.setScalar(hh); }
     }
   }
-  function endShowcase() { for (const c of show) { for (const p of c.parts) freeActor(p.actor); c.parts = []; if (c.result) { freeActor(c.result); c.result = null; } c.done = true; } }
+  function lineUp(c, spec) {                                    // the one just made takes its place by the corner
+    if (!c.result) return;
+    const [x, z] = lineSpot(c, c.lined.length);
+    c.lined.push({ actor: c.result, spec, x0: c.x, z0: c.z, x, z, t: 0, h0: showH(spec), h: sim.hOf(spec), landed: false });
+    c.result = null;
+  }
+  const leaving = [];                                           // made in the showcase but not on the floor at the start: up and away
+  function endShowcase(adoptThem) {
+    for (const c of show) {
+      for (const p of c.parts) freeActor(p.actor);
+      c.parts = [];
+      if (c.result) lineUp(c, c.fuses[Math.max(0, Math.min(c.idx, c.fuses.length - 1))].m.to);
+      for (const q of c.lined) {
+        const u = adoptThem && sim.field.find((o) => o.team === c.team && !o.v && sameKind(o.spec, q.spec));
+        if (u) { const v = ensure(u, q.actor), p = q.actor.root.position; v.pop = 1; v.hop = { x: p.x, z: p.z, t: 0, dur: 0.5 }; }
+        else if (adoptThem) leaving.push({ actor: q.actor, t: 0, h: q.h, x: q.x, z: q.z, team: c.team });
+        else freeActor(q.actor);
+      }
+      c.lined = []; c.idx = c.fuses.length;
+    }
+  }
+  function drawLeaving(dt) {
+    for (let i = leaving.length - 1; i >= 0; i--) {
+      const q = leaving[i]; q.t += dt; const g = clamp(q.t / 0.35, 0, 1), root = q.actor.root;
+      root.position.y = g * g * q.h * 4; root.scale.setScalar(q.h * (1 - g) + 0.0001);
+      if (vr() < 0.8) fx.spark(q.x + (vr() - 0.5) * q.h, root.position.y + vr() * q.h, q.z + (vr() - 0.5) * q.h, 0, 6, 0, vr() < 0.5 ? teams[q.team].hex : 0xffffff, 0.3 * K, 0.4, 0, true);
+      if (g >= 1) { freeActor(q.actor); leaving.splice(i, 1); }
+    }
+  }
 
   // ---- state
-  let phase = total ? (mergeLen > 0 ? 'merge' : 'drop') : 'done', pt = 0, countN = -1, finished = !total, cheering = !total, hudT = 0, lowTick = 99, slow = 1, zoom = 0;
+  let phase = total ? (mergeLen > 0 ? 'merge' : 'drop') : 'done', pt = 0, countN = -1, finished = !total, cheering = !total, hudT = 0, lowTick = 99;
+  const cam = { x: 0, z: 0, f: 0 };                             // where the camera has drifted to: a slide over the floor, and how far in
   const winner = () => sim.winner;
 
   // ---- HUD (DOM). Everything is cached so nothing is rewritten unless it changed.
@@ -617,7 +664,8 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     hud.clock = el('div', 'ar-pill ar-clock', top);
     el('div', 'ar-pill ar-name', top, `${arena.name} ${arena.types.map(chip).join('')}`);
     hud.big = el('div', 'ar-big', root); hud.sub = el('div', 'ar-pill ar-sub', root);
-    hud.skip = el('div', 'ar-pill ar-skip', root, 'Skip (Space)'); if (noSkip) hud.skip.style.display = 'none';
+    hud.skip = el('div', 'ar-pill ar-skip', root, 'Hold Enter to skip<i></i>'); if (noSkip) hud.skip.style.display = 'none';
+    hud.skipFill = hud.skip.lastChild;
     if (phase !== 'merge') root.classList.add('ar-fighting');
   }
   function big(text, anim, small) { if (!hud) return; hud.big.textContent = text; hud.big.classList.toggle('ar-small', !!small); hud.big.classList.remove('ar-punch', 'ar-stay'); replay(hud.big, anim); }
@@ -686,7 +734,9 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
       if (u.launched > 0) { v.tumble += fdt * 14; y += Math.abs(Math.sin(v.tumble)) * h * 0.18; } else v.tumble = 0;
       v.y = y + fallY;
       let dy = u.yaw - v.yaw; dy = Math.atan2(Math.sin(dy), Math.cos(dy)); v.yaw += dy * Math.min(1, fdt * 14);
-      A.root.position.set(u.x + Math.sin(v.yaw) * lu, v.y, u.z + Math.cos(v.yaw) * lu);
+      let px = u.x, pz = u.z;
+      if (v.hop) { const q = v.hop; q.t += dt; const g = clamp(q.t / q.dur, 0, 1), e = smooth(g); px = q.x + (u.x - q.x) * e; pz = q.z + (u.z - q.z) * e; v.y += Math.sin(g * Math.PI) * h * 0.9; if (g >= 1) { v.hop = null; v.land = 0; fx.puff(u.x, 0.15, u.z, 5, 0xf5efe0, 3, 0.3, 0.4); } }
+      A.root.position.set(px + Math.sin(v.yaw) * lu, v.y, pz + Math.cos(v.yaw) * lu);
       const wob = u.stun > 0 && !u.frozen ? Math.sin(T * 40) * 0.3 : 0;
       A.root.rotation.set(u.launched > 0 ? -0.5 * Math.sin(v.tumble) : 0, v.yaw + wob, u.stun > 0 && !u.frozen ? Math.sin(T * 31) * 0.18 : 0);
       const landSq = v.land < 1 ? Math.sin(v.land * Math.PI) * 0.28 * (1 - v.land) * 2 : 0, sq = v.squash + landSq, grow = (u.wind ? 1 + 0.08 * Math.sin(T * 34) * clamp(u.wind.t / u.wind.dur, 0, 1) : 1) * (v.pop < 1 ? backOut(v.pop) : 1) * h;
@@ -700,26 +750,31 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
       A.update(u.frozen ? 0 : fdt * (u.moving && !A.rigged ? 1 : 1));
       if (v.pop <= 0 || fallY > h * 2 || n >= RN) continue;
       // ring, aura, bars
-      const s = Math.max(0.5, u.r * 1.55);
+      const s = Math.max(0.55, u.r * 1.4);
       m4.makeScale(s, 1, s).setPosition(u.x, 0.02, u.z); ringMesh.setMatrixAt(n, m4); ringMesh.setColorAt(n, teamCol[u.team]); n++;
-      if (u.fav) { const a = s * (1.28 + 0.1 * Math.sin(T * 5 + v.phase)); m4.makeScale(a, 1, a).setPosition(u.x, 0.026, u.z); auraMesh.setMatrixAt(na++, m4); }
+      if (u.fav) { const a = s * (1.2 + 0.08 * Math.sin(T * 5 + v.phase)); m4.makeScale(a, 1, a).setPosition(u.x, 0.026, u.z); auraMesh.setMatrixAt(na++, m4); }
       if (!fight || fallY > 0.5) continue;
-      const bw = clamp(h * 0.95, 1.5 * K, 3.6 * K), bh = 0.3 * K, by = h * 1.1 + y + 0.5 * K, f = clamp(u.hp / u.st.maxHp, 0, 1);
+      // The health bar appears once it has something to say (hurt, or its signature move is nearly ready), so a
+      // fresh army is not a wall of bars. Under it, a thin gold line fills as the move charges.
+      const bw = clamp(h * 0.8, 1.3 * K, 2.5 * K), bh = 0.2 * K, by = h * 1.08 + y + 0.45 * K, f = clamp(u.hp / u.st.maxHp, 0, 1), ch = u.wind ? 1 : u.charge;
       v.lag = Math.max(f, v.lag - fdt * 0.45);
-      bar(barBg, nb, u.x, by - bh * 0.22, u.z, bw + 0.16 * K, bh * 1.75, null);
-      bar(barLag, nb, u.x - bw / 2, by, u.z, Math.max(0.001, bw * v.lag), bh, WHITE);
-      bar(barFill, nb, u.x - bw / 2, by, u.z, Math.max(0.001, bw * f), bh, teamCol[u.team]);
-      const ch = u.wind ? 1 : u.charge;
-      bar(barCharge, nb, u.x - bw / 2, by - bh * 0.78, u.z, Math.max(0.001, bw * ch), bh * 0.4, ch >= 1 || u.wind ? (Math.sin(T * 24) > 0 ? WHITE : GOLD) : u.rallied ? WHITE : GOLD);
-      nb++;
-      for (let j = 0; j < u.stars && ns < RN * 3; j++) { const ss = 0.34 * K; s3.set(ss, ss, ss); m4.compose(v3.set(u.x + (j - (u.stars - 1) / 2) * ss * 2.2, by + bh * 1.5 + ss * 0.6, u.z), camQ, s3); starMesh.setMatrixAt(ns++, m4); }
+      const want = f < 0.999 || ch > 0.7 || u.stars > 0 ? 1 : 0; v.bar += (want - v.bar) * Math.min(1, dt * 10);
+      if (v.bar > 0.02) {
+        const a = v.bar;
+        bar(barBg, nb, u.x, by - bh * 0.3, u.z, (bw + 0.12 * K) * a, bh * 1.9, null);
+        bar(barLag, nb, u.x - bw * a / 2, by, u.z, Math.max(0.001, bw * v.lag * a), bh, WHITE);
+        bar(barFill, nb, u.x - bw * a / 2, by, u.z, Math.max(0.001, bw * f * a), bh, teamCol[u.team]);
+        bar(barCharge, nb, u.x - bw * a / 2, by - bh * 0.85, u.z, Math.max(0.001, bw * ch * a), bh * 0.42, ch >= 1 || u.wind ? (Math.sin(T * 24) > 0 ? WHITE : GOLD) : GOLD);
+        nb++;
+        for (let j = 0; j < u.stars && ns < RN * 3; j++) { const ss = 0.3 * K * a; s3.set(ss, ss, ss); m4.compose(v3.set(u.x + (j - (u.stars - 1) / 2) * ss * 2.2, by + bh * 1.2 + ss * 0.9, u.z), camQ, s3); starMesh.setMatrixAt(ns++, m4); }
+      }
       if (u.team === myTeam && nm < TUNE.FIELD_CAP + 4 && u.rallyCd <= 0 && !u.wind && !u.rush && u.stun <= 0 && phase === 'fight' && !sim.balls[myTeam].gone) {      // "roll through me"
         const ms = (0.42 + 0.06 * Math.sin(T * 9 + v.phase)) * K; s3.set(ms, ms, ms); m4.compose(v3.set(u.x, by + bh * 2.2 + ms + u.stars * 0.3 * K + Math.sin(T * 6 + v.phase) * 0.12, u.z), camQ, s3); markMesh.setMatrixAt(nm++, m4);
       }
     }
     ringMesh.count = n; auraMesh.count = na; barBg.count = barLag.count = barFill.count = barCharge.count = nb; starMesh.count = ns; markMesh.count = nm;
     for (const m of [ringMesh, auraMesh, barBg, barLag, barFill, barCharge, starMesh, markMesh]) { m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true; }
-    drawDying(fdt);
+    drawDying(fdt); drawLeaving(dt);
     if (fight) drawFlying(fdt);
     // balls
     for (const w of ballViews) {
@@ -758,11 +813,25 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     // sudden death: the light turns
     const heat = clamp((sim.ramp - 1) / 1.6, 0, 1), pulse = heat > 0 ? 0.5 + 0.5 * Math.sin(T * (3 + heat * 5)) : 0;
     scene.background.copy(sky).lerp(skyHot, heat * (0.55 + 0.2 * pulse)); hemi.intensity = 1.75 - heat * 0.45; sun.color.setHex(0xfff4d6).lerp(col.set(0xff7a4a), heat * 0.8);
-    // the camera: fixed, but for a small shake, and a push-in on the last knockout
+    // The camera never turns (steering stays "up is away"), but it closes in: on whatever is still fighting as the
+    // floor empties, and hard on the last knockout. Everything alive, and every ball in play, stays in frame.
     shake = Math.max(0, shake - dt * 1.6);
-    const zt = phase === 'finish' && pt < FREEZE ? 1 : 0; zoom += (zt - zoom) * Math.min(1, dt * (zt ? 5 : 2.5));
-    camera.position.copy(camBase);
-    if (zoom > 0.001) { const z = smooth(zoom) * 0.4; camera.position.x += (lastKo.x - camLook.x) * z * 1.4; camera.position.z += (lastKo.z - camLook.z) * z * 1.4; camera.position.addScaledVector(camDir, z * 0.75); }
+    let gx = 0, gz = 0, gf = 0;
+    if (phase === 'finish' && pt < FREEZE) { gx = lastKo.x; gz = lastKo.z; gf = 0.52; }
+    else if (phase === 'fight' || phase === 'finish') {
+      let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
+      const grow = (x, z, pad) => { x0 = Math.min(x0, x - pad); x1 = Math.max(x1, x + pad); z0 = Math.min(z0, z - pad); z1 = Math.max(z1, z + pad); };
+      for (const u of sim.field) if (u.alive) grow(u.x, u.z, u.h + 1.5);
+      for (const b of sim.balls) if (!b.gone && (!b.teamOut || b.team === myTeam)) grow(b.x, b.z, b.R + 2);
+      if (x1 > x0) {
+        const s = Math.max((x1 - x0) / L, (z1 - z0) / L * 1.25) + 0.16;       // (the floor is seen foreshortened: depth costs more screen than width)
+        gf = clamp(1 - s, 0, CAM_CLOSE); const pan = clamp(gf / 0.12, 0, 1);
+        gx = clamp((x0 + x1) / 2, -half * 0.6, half * 0.6) * pan; gz = clamp((z0 + z1) / 2, -half * 0.6, half * 0.6) * pan;
+      }
+    }
+    const ck = Math.min(1, dt * (phase === 'finish' && pt < FREEZE ? 4 : gf < cam.f ? 2.2 : 0.7));      // quick to pull back, slow to close in
+    cam.x += (gx - cam.x) * ck; cam.z += (gz - cam.z) * ck; cam.f += (gf - cam.f) * ck;
+    camera.position.copy(camBase); camera.position.x += cam.x; camera.position.z += cam.z; camera.position.addScaledVector(camDir, cam.f);
     camera.position.x += (vr() - 0.5) * shake * 0.7; camera.position.y += (vr() - 0.5) * shake * 0.7;
     hudT -= dt; if (hudT <= 0) { hudT = 0.1; drawHud(); }
   }
@@ -775,10 +844,10 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
   }
   function finishNow() { phase = 'done'; finished = true; }
   function beginDrop() {
-    phase = 'drop'; pt = 0; endShowcase();
+    phase = 'drop'; pt = 0; endShowcase(true);
     if (hud) hud.root.classList.add('ar-fighting');
     const order = sim.field.slice().sort((a, b) => a.team - b.team || b.value - a.value); let k = -1, i = 0;
-    for (const u of order) { if (u.team !== k) { k = u.team; i = 0; } const v = ensure(u); v.fall = 0; v.delay = 0.15 + i++ * 0.075 + u.team * 0.05; v.fallDur = DROP_FALL; }
+    for (const u of order) { if (u.team !== k) { k = u.team; i = 0; } if (u.v) continue; const v = ensure(u); v.fall = 0; v.delay = 0.2 + i++ * 0.08 + u.team * 0.05; v.fallDur = DROP_FALL; }
   }
   function drain() { const ev = sim.events; for (let i = 0; i < ev.length; i++) onEvent(ev[i]); ev.length = 0; }
 
@@ -817,12 +886,13 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
       view(dt, fdt);
     },
     resize: resizeView,
+    skipHold(f) { if (hud && hud.skipF !== f) { hud.skipF = f; hud.skipFill.style.width = (clamp(f, 0, 1) * 100).toFixed(0) + '%'; } },      // how far through the hold-to-skip
     status() { const st = sim.status(); st.forEach((s, k) => { s.brought = plans[k].before; s.merged = plans[k].after; s.bench = plans[k].bench; }); return st; },
     result() { return sim.result(); },
     skip() {                                                    // play the rest out instantly: 30 Hz, every ball CPU-driven, no effects
       if (destroyed || finished) return;
       quiet = true; fx.quiet = true; sim.auto = true;
-      endShowcase();
+      endShowcase(false); for (const q of leaving) freeActor(q.actor); leaving.length = 0;
       for (let i = 0; i < 9000 && !sim.finished; i++) { sim.step(1 / 30); sim.events.length = 0; }
       for (const d of dying) { d.v.actor.root.removeFromParent(); d.v.actor.dispose(); } dying.length = 0;
       for (const v of views.slice()) { if (!v.u.alive) { v.actor.root.removeFromParent(); forget(v); } else { v.fall = -1; v.pop = 1; v.delay = 0; dropTele(v); } }
@@ -836,7 +906,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     destroy() {
       if (destroyed) return; destroyed = true;
       if (hud) { hud.root.remove(); hud = null; }
-      endShowcase();
+      endShowcase(false); for (const q of leaving) q.actor.dispose();
       for (const v of views) v.actor.dispose(); for (const d of dying) d.v.actor.dispose();
       fx.dispose();
       for (const m of mats.values()) m.dispose(); for (const o of owned) o.dispose();

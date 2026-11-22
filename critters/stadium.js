@@ -60,9 +60,12 @@ function texFor(slug, png) {
   const key = slug + '/' + png;
   let t = texCache.get(key);
   if (!t) {
+    // (not fixTexture: that marks the texture for upload, and until the file has arrived there is nothing to
+    // upload, which made the renderer warn on every frame in between. The loader marks it itself when it lands.)
     t = texLoader.load(BASE + 'tex/' + slug + '/' + png);
     t.flipY = false;
-    fixTexture(t);
+    t.magFilter = THREE.NearestFilter;
+    t.colorSpace = THREE.SRGBColorSpace;
     texCache.set(key, t);
   }
   return t;

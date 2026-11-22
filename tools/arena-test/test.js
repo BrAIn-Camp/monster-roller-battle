@@ -6,7 +6,7 @@
 //   ?seed=7      the same armies and the same fight every time                    ?models=0   generated critters only
 //   ?only=1,4,7  armies made of just these slots (to look at particular monsters and moves)
 //   ?speed=0.25  slow motion (or 4 for fast forward)
-// Keys: WASD / arrows steer, Shift dashes, Space skips, R restarts, 1-8 restarts in that arena, P pauses.
+// Keys: WASD / arrows steer, Shift dashes, Space skips (in the game itself: hold Enter), R restarts, 1-8 restarts in that arena, P pauses.
 import * as THREE from 'three';
 import { ARENAS, createWheel, createBattle } from '../../arena.js';
 import { buildCritterGeometry } from '../../critters/kit.js';
@@ -131,11 +131,9 @@ function begin(arena) {
 function fit() { renderer.setSize(innerWidth, innerHeight, false); if (battle) battle.resize(innerWidth / innerHeight); }
 addEventListener('resize', fit);
 
-const SPEED = Q.has('speed') ? +Q.get('speed') : 1;
+const SPEED = Q.has('speed') ? +Q.get('speed') : 1, MANUAL = Q.has('manual');      // ?manual: nothing moves until __tick() is called (for looking at single frames)
 let last = performance.now();
-function tick(now) {
-  const dt = Math.min(0.05, (now - last) / 1000) * SPEED; last = now;
-  if (paused) { if (battle) renderer.render(battle.scene, battle.camera); return; }
+function advance(dt) {
   if (wheel) {
     wheel.step(dt);
     if (wheel.done) { const arena = wheel.arena; wheel.destroy(); wheel = null; begin(arena); }
@@ -150,10 +148,15 @@ function tick(now) {
     }
   } else renderer.clear();
 }
+function tick(now) {
+  const dt = Math.min(0.05, (now - last) / 1000) * SPEED; last = now;
+  if (paused || MANUAL) { if (battle) renderer.render(battle.scene, battle.camera); return; }
+  advance(dt);
+}
 function frame(now) { requestAnimationFrame(frame); tick(now); }
 // (a hidden tab gets no animation frames; ?keepalive ticks it from a timer so it can be tested in the background)
 if (Q.has('keepalive')) setInterval(() => { if (performance.now() - last > 200) tick(performance.now()); }, 33);
-window.__tick = (n = 1, dt = 1 / 30) => { for (let i = 0; i < n; i++) { last = performance.now() - dt * 1000 / SPEED; tick(performance.now()); } return battle && battle.phase; };
+window.__tick = (n = 1, dt = 1 / 60) => { for (let i = 0; i < n; i++) advance(dt); return battle && (battle.phase + ' ' + battle.sim.time.toFixed(2)); };
 fit();
 start(null);
 requestAnimationFrame(frame);
