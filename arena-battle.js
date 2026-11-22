@@ -100,7 +100,8 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
   const floor = put(GEO.box, lam(arena.floor), 0, -0.2, 0, L, 0.4, L, 0, scene); floor.receiveShadow = true;
   put(GEO.box, lam(arena.wall), 0, -0.4 - DROP * 0.5, 0, L - 0.3, DROP, L - 0.3, 0, scene);
   put(GEO.box, lam(new THREE.Color(arena.wall).multiplyScalar(0.7).getHex()), 0, -DROP - 0.1, 0, L * 0.86, DROP * 0.6, L * 0.86, 0, scene);
-  for (const [x, z, w, d] of [[0, -half + 0.14, L, 0.28], [0, half - 0.14, L, 0.28], [-half + 0.14, 0, 0.28, L], [half - 0.14, 0, 0.28, L]]) put(GEO.box, bas(0xfff6d8), x, 0.012, z, w, 0.02, d, 0, scene);   // the lip: this is the edge
+  const lipMat = new THREE.MeshBasicMaterial({ color: 0xfff6d8 }), lipCold = new THREE.Color(0xfff6d8), lipHot = new THREE.Color(0xff3b2e); owned.push(lipMat);
+  for (const [x, z, w, d] of [[0, -half + 0.14, L, 0.28], [0, half - 0.14, L, 0.28], [-half + 0.14, 0, 0.28, L], [half - 0.14, 0, 0.28, L]]) put(GEO.box, lipMat, x, 0.012, z, w, 0.02, d, 0, scene);   // the lip: this is the edge (it turns red in sudden death)
   put(GEO.thin, glass(0xffffff, 0.35), 0, 0.012, 0, L * 0.13);
   teams.forEach((tm, k) => {
     const [cx, cz] = CORNERS[k % 4];
@@ -572,7 +573,11 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
       case 'hazwarn': hazView.warn(e.q); break;
       case 'hazfire': hazView.fire(e.q); break;
       case 'bumper': if (hazView.bumper) hazView.bumper(e.q); break;
-      case 'ramp': if (hud) { hud.clock.classList.add('ar-hot'); } tone(220, 220, 0.5, 'sawtooth', 0.12); tone(330, 330, 0.5, 'sawtooth', 0.12, 0.25); tone(440, 660, 0.8, 'sawtooth', 0.14, 0.5); break;
+      case 'ramp':                                              // sudden death: a red wave runs out across the floor, and from here everything hits harder
+        if (hud) hud.clock.classList.add('ar-hot');
+        fx.ring(0, 0, { r0: 1, r1: L * 0.78, color: 0xff3b2e, life: 0.9, opacity: 0.9 }); fx.ring(0, 0, { r0: 0.5, r1: L * 0.6, color: 0xffb03a, life: 1.2, opacity: 0.7, thin: true }); bump(0.35);
+        tone(220, 220, 0.5, 'sawtooth', 0.12); tone(330, 330, 0.5, 'sawtooth', 0.12, 0.25); tone(440, 660, 0.8, 'sawtooth', 0.14, 0.5);
+        break;
       default: break;
     }
   }
@@ -800,6 +805,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
       else if (v.flash > 0) A.flash(Math.min(1, v.flash * 6), v.flashCol); else if (u.frozen && live) A.flash(0.5, 0x6fd8ff); else A.flash(0);
       if (u.frozen && live && !v.ice) { const s = h * 1.15; v.ice = fx.hold('shard', { color: 0xbff2ff, opacity: 0.55 }, (t, dtt, m) => { m.position.set(u.x, h * 0.55, u.z); m.scale.set(s, s * 1.3, s); m.rotation.y = 0.6; }); }
       else if (!(u.frozen && live) && v.ice) { v.ice.release(0.2); v.ice = null; for (let j = 0; j < 6; j++) { const a = vr() * 6.283; fx.shard(u.x, h * 0.6, u.z, Math.cos(a) * 4, 4 + vr() * 3, Math.sin(a) * 4, { size: 0.3 * K, color: 0xbff2ff, life: 0.5, opacity: 0.8 }); } }
+      if (live && u.launched > 0 && Math.abs(u.kx) + Math.abs(u.kz) > 7 && vr() < 0.7) fx.spark(u.x, h * (0.2 + vr() * 0.6), u.z, -u.kx * 0.08, 0.5, -u.kz * 0.08, 0xffffff, 0.3 * K, 0.28, 0, true);      // knocked flying: a streak behind it
       if (u.rush && vr() < 0.8) fx.spark(u.x - u.rush.dx * u.r, 0.2, u.z - u.rush.dz * u.r, (vr() - 0.5) * 3, 1 + vr() * 2, (vr() - 0.5) * 3, 0xf5efe0, 0.4 * K, 0.4);
       A.update(u.frozen && live ? 0 : fdt);
       if (v.pop <= 0 || fallY > h * 2 || n >= RN) continue;
@@ -888,6 +894,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     // sudden death: the light turns
     const heat = clamp((sim.ramp - 1) / 1.6, 0, 1), pulse = heat > 0 ? 0.5 + 0.5 * Math.sin(T * (3 + heat * 5)) : 0;
     scene.background.copy(sky).lerp(skyHot, heat * (0.55 + 0.2 * pulse)); hemi.intensity = 1.75 - heat * 0.45; sun.color.setHex(0xfff4d6).lerp(col.set(0xff7a4a), heat * 0.8);
+    lipMat.color.copy(lipCold).lerp(lipHot, sim.ramp > 1 ? 0.45 + 0.55 * pulse : 0);
     // The camera never turns (steering stays "up is away"), but it closes in: on whatever is still fighting as the
     // floor empties, and hard on the last knockout. Everything alive, and every ball in play, stays in frame.
     shake = Math.max(0, shake - dt * 1.6);
