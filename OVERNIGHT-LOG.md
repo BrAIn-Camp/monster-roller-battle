@@ -110,6 +110,40 @@ charge in 17 s rather than 11 (there were 120 a fight), and 2 s between a ball's
 
 Run it yourself: `node tools/arena-test/headless.mjs 400`. Try a number without editing: `... tune=RAMP_AT:60,HP_SCALE:12`.
 
-## Still to do / known rough edges
+## Not verified, and known rough edges
 
-(kept up to date as the night goes on; see the end of the file for the final state)
+**I could not watch it move or hear it.** Everything here was checked from still frames stepped one at a time, from
+numbers, and from the console. Nobody has sat and played a round. The things most likely to need your eye and ear:
+
+- *Feel.* Whether a ram, a rally and a ring-out feel as good as the numbers say. Steering is the same ball as before,
+  with no walls to save it.
+- *Sound.* The fight tune, the per-type hit sounds and the limiter have never been heard. If the mix is wrong, the tune's
+  volumes are in `fightTick` (`main.js`) and the hit sounds in `SND` (`arena-battle.js`).
+- *Animation timing.* A model's attack clip is 1.3 to 6 s long as extracted; it is squeezed to 0.4 to 0.85 s for an
+  ordinary hit and to the wind-up plus half a second for a signature move. Some species will look hurried.
+- *Two different browsers in one room.* See bug 16's note: built to agree, tested only Chrome against Chrome.
+- *A ball out for the fight.* As you chose. A player who rolls off in the first seconds watches the rest (their monsters
+  fight on). If that grates, a respawn is a few lines in `ballOut` (`arena-sim.js`).
+
+Smaller things, left as they are:
+
+- A team whose only surviving monsters are inside a rival's ball is out, and the fight can end with them still in it.
+- The floor cap of 12 is soft: a monster freed from a ball comes back on top of the reserves that replaced it (14 seen).
+- A monster nudged just past the edge line snaps back rather than stepping back.
+- The stand-in build (no models) fights with the same moves, but its critters have no clips: they lean, lunge, squash
+  and breathe instead.
+- `battle.js` (the old plain battle) is still there as the fallback if `arena.js` fails to load. Untouched.
+- `tools/events-test.mjs` was already broken before tonight and still is.
+
+**Not arena work, but you should know:** the Stadium models are committed and pushed (`models/stadium/`, 1,231 files),
+while `models/stadium/README.md`, `critters/local-mode.js` and `CREDITS.md` all still say they are not distributed. I
+did not touch that. The arena uses them whenever the folder is there, and falls back to the generated critters when it
+is not.
+
+## What to try first
+
+1. `python tools/serve.py 8417`, open http://127.0.0.1:8417/, play a round. The arena starts after the wheel.
+2. In the arena: roll through one of your own monsters (the gold dotted trail points at one), ram a rival near the edge,
+   and keep your own ball on the floor. Shift or Space dashes, Esc pauses, holding Enter skips.
+3. For the arena alone: http://127.0.0.1:8417/tools/arena-test/ (R restarts, 1-8 pick an arena, `?cpu` to just watch).
+4. `node tools/arena-test/headless.mjs 400 moves` for the balance report.
