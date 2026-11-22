@@ -48,6 +48,22 @@ export const TUNE = {
 };
 const T = TUNE;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+// The fight is replayed step for step on every machine in a multiplayer game, so it must come out the same in every
+// browser, to the last bit. Adding, multiplying, dividing and square roots do; Math.hypot, Math.pow, Math.exp,
+// Math.log, Math.cbrt and the trig functions are only "close enough", and each engine is close in its own way. So
+// the fight uses these instead (plain arithmetic, the same everywhere), and never the Math versions.
+const hyp = (a, b) => Math.sqrt(a * a + b * b);
+const cube = (v) => v * v * v;
+const PI = 3.141592653589793, TAU = 6.283185307179586;
+function sin(x) {                                     // a polynomial, good to nine places
+  x -= TAU * Math.round(x / TAU);
+  if (x > PI / 2) x = PI - x; else if (x < -PI / 2) x = -PI - x;
+  const q = x * x;
+  return x * (1 + q * (-1 / 6 + q * (1 / 120 + q * (-1 / 5040 + q * (1 / 362880 + q * (-1 / 39916800 + q / 6227020800))))));
+}
+const cos = (x) => sin(x + PI / 2);
+const fade = (x) => 1 / (1 + x * (1 + x * (0.5 + x * (1 / 6 + x / 24))));     // e^-x for the small x of one step
+function cbrt(v) { if (v <= 0) return 0; let g = Math.sqrt(Math.sqrt(v)) + 0.1; for (let i = 0; i < 24; i++) g = (2 * g + v / (g * g)) / 3; return g; }
 const DEF = [50, 50, 50, 50, 50, 50];
 export const CORNERS = [[-1, 1], [-1, -1], [1, -1], [1, 1]];          // team 0 bottom-left of the screen, then clockwise
 
@@ -130,7 +146,7 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
   }
   recs.forEach((r, k) => {
     const [cx, cz] = CORNERS[k % 4], spread = L * 0.13 * clamp(Math.sqrt(onStart[k] / 12), 0.4, 1);
-    for (let i = 0; i < onStart[k]; i++) { const a = rand() * 6.283, d = Math.sqrt(rand()) * spread; spawn(r[i], k, cx * L * 0.29 + Math.cos(a) * d, cz * L * 0.29 + Math.sin(a) * d, 0); }
+    for (let i = 0; i < onStart[k]; i++) { const a = rand() * 6.283, d = Math.sqrt(rand()) * spread; spawn(r[i], k, cx * L * 0.29 + cos(a) * d, cz * L * 0.29 + sin(a) * d, 0); }
   });
   const inner = (u) => half - u.r * T.EDGE_GRIP;
   function separate(hold) {                                     // keep monsters from standing inside each other (the lighter one gives way)
@@ -140,7 +156,7 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
       for (let j = i + 1; j < n; j++) {
         const v = field[j], min = (u.r + v.r) * 0.92, dx = u.x - v.x, dz = u.z - v.z;
         if (dx > min || dx < -min || dz > min || dz < -min) continue;
-        const d = Math.hypot(dx, dz) || 0.001;
+        const d = hyp(dx, dz) || 0.001;
         if (d < min) { const push = (min - d) * 0.5 / d, wu = v.r * v.r / (u.r * u.r + v.r * v.r); u.x += dx * push * wu; u.z += dz * push * wu; v.x -= dx * push * (1 - wu); v.z -= dz * push * (1 - wu); }
       }
       if (hold || !(u.launched > 0 || u.stun > 0 || u.air)) { const lim = inner(u); u.x = clamp(u.x, -lim, lim); u.z = clamp(u.z, -lim, lim); }
@@ -159,12 +175,12 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
   // ---- balls: "earned but compressed". The smallest ball is a little wider than a typical monster is tall and
   // can scoop nothing but the very smallest; the biggest is BALL_SPREAD wider and can scoop a few more.
   const baseD = hRef * T.BALL_BASE;
-  const finishD = teams.map((tm) => Math.max(0.05, +tm.ballD || 0.5)), loD = Math.min(...finishD, 1e9), spanD = Math.max(Math.log(Math.max(...finishD, loD) / loD), Math.log(4));
+  const finishD = teams.map((tm) => Math.max(0.05, +tm.ballD || 0.5)), loD = Math.min(...finishD, 1e9), spanD = Math.sqrt(Math.max(Math.max(...finishD, loD) / loD, 4)) - 1;
   const topSpeed0 = 4.5 + L * 0.13;                             // ball top speed before size, dash and arena factors
   const balls = teams.map((tm, k) => {
-    const [cx, cz] = CORNERS[k % 4], D = baseD * (1 + T.BALL_SPREAD * Math.log(finishD[k] / loD) / spanD);
+    const [cx, cz] = CORNERS[k % 4], D = baseD * (1 + T.BALL_SPREAD * (Math.sqrt(finishD[k] / loD) - 1) / spanD);
     return { isBall: true, team: k, cpu: !tm.human, x: cx * L * 0.12, z: cz * L * 0.12, vx: 0, vz: 0, D, D0: D, R: D / 2, hd: Math.atan2(-cx, -cz),
-      stun: 0, safe: 0, gulp: 0, dashT: 0, dashCd: 0, combo: 0, comboT: 0, rallyCd: 0, cargo: [], scoops: 0, rams: 0, rallies: 0, ringOuts: 0,
+      hx: -cx * Math.SQRT1_2, hz: -cz * Math.SQRT1_2, stun: 0, safe: 0, gulp: 0, dashT: 0, dashCd: 0, combo: 0, comboT: 0, rallyCd: 0, cargo: [], scoops: 0, rams: 0, rallies: 0, ringOuts: 0,
       aim: null, plan: '', rt: rand() * 0.5, ax: 0, az: 0, wob: rand() * 6.28, moving: false, gone: false, teamOut: false };
   });
   const maxD = (b) => b.D0 * T.BALL_MAX_GROW;
@@ -180,7 +196,7 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
   // ---- hurting, knocking back, knocking out
   function knock(t, dx, dz, dist) {                             // slide t `dist` metres along (dx, dz)
     if (!t.alive || dist <= 0) return;
-    const d = Math.hypot(dx, dz) || 1, v = dist * T.KB_DECAY;
+    const d = hyp(dx, dz) || 1, v = dist * T.KB_DECAY;
     t.kx += dx / d * v; t.kz += dz / d * v;
     t.launched = Math.max(t.launched, clamp(0.12 + dist * 0.09, 0.15, T.KB_TUMBLE));
     if (dist >= T.BREAK_DIST) breakWind(t);
@@ -188,7 +204,7 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
   function breakWind(t) {
     if (!t.wind && !t.rush) return;
     if (t.wind) { emit({ e: 'break', u: t, move: t.wind.move }); t.charge = 0.45; }
-    t.wind = null; t.rush = null;
+    t.wind = null; t.rush = null; t.rallied = false;
   }
   function stunUnit(t, dur, frozen) { if (!t.alive) return; t.stun = Math.max(t.stun, dur); if (frozen) t.frozen = true; breakWind(t); }
   // src: the attacker (or null for a hazard or a ball). o: { type, eff, kb, dx, dz, stun, frozen, special, team }
@@ -218,7 +234,7 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
     const by = src || (now - t.lastT < 4 ? t.lastBy : null), team = src ? src.team : now - t.lastT < 4 ? t.lastTeam : -1;
     if (by && by.team !== t.team) by.kills++;
     if (how === 'ring' && team >= 0 && team !== t.team) balls[team].ringOuts += by ? 0 : 1;
-    const d = Math.hypot(dx, dz) || 1;
+    const d = hyp(dx, dz) || 1;
     emit({ e: how, t, by, team, dx: dx / d, dz: dz / d, dist });
     hitStop(T.FREEZE_KO + (t.h > hRef * 1.3 ? 0.04 : 0));
   }
@@ -236,7 +252,7 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
   function shoveBalls(team, x, z, radius, force, dx, dz) {
     for (const b of balls) {
       if (b.gone || b.team === team) continue;
-      const ex = b.x - x, ez = b.z - z, d = Math.hypot(ex, ez) || 0.01;
+      const ex = b.x - x, ez = b.z - z, d = hyp(ex, ez) || 0.01;
       if (d > radius + b.R) continue;
       const nx = dx === undefined ? ex / d : dx, nz = dx === undefined ? ez / d : dz;
       b.vx += nx * force; b.vz += nz * force; b.dashT = 0;
@@ -250,11 +266,11 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
   const haz = (function makeHazard() {
     const H = { kind: arena.hazard, grip: T.BALL_GRIP, top: 1, zones: [], W: null, step() {}, slow: () => 1, hidden: () => false };
     const Z = H.zones, kind = arena.hazard;
-    H.danger = (x, z, pad) => { for (const q of Z) if (q.bad && (x - q.x) ** 2 + (z - q.z) ** 2 < (q.r + pad) ** 2) return q; return null; };
-    const within = (x, z, s) => { for (const q of Z) if (q.s === s && (x - q.x) ** 2 + (z - q.z) ** 2 < q.r * q.r) return true; return false; };
+    H.danger = (x, z, pad) => { for (const q of Z) if (q.bad && (x - q.x) * (x - q.x) + (z - q.z) * (z - q.z) < (q.r + pad) * (q.r + pad)) return q; return null; };
+    const within = (x, z, s) => { for (const q of Z) if (q.s === s && (x - q.x) * (x - q.x) + (z - q.z) * (z - q.z) < q.r * q.r) return true; return false; };
     const blast = (q, dist, dmg, stun) => {                     // knock back and hurt whatever stands in zone q
-      for (const u of field) { if (u.fav || !u.alive || u.drop > 0) continue; const dx = u.x - q.x, dz = u.z - q.z, d = Math.hypot(dx, dz) || 0.01; if (d < q.r + u.r) { u.hp = Math.max(1, u.hp - u.st.maxHp * dmg); emit({ e: 'hit', u: null, t: u, dmg: 0, eff: 1, type: arena.types[0], heavy: false, special: false, dist }); knock(u, dx, dz, dist * K / u.st.weight); stunUnit(u, 0.4); } }
-      for (const b of balls) { if (b.gone) continue; const dx = b.x - q.x, dz = b.z - q.z, d = Math.hypot(dx, dz) || 0.01; if (d < q.r + b.R * 0.6) { b.vx += dx / d * dist * 6.5; b.vz += dz / d * dist * 6.5; if (stun) stunBall(b, stun); } }
+      for (const u of field) { if (u.fav || !u.alive || u.drop > 0) continue; const dx = u.x - q.x, dz = u.z - q.z, d = hyp(dx, dz) || 0.01; if (d < q.r + u.r) { u.hp = Math.max(1, u.hp - u.st.maxHp * dmg); emit({ e: 'hit', u: null, t: u, dmg: 0, eff: 1, type: arena.types[0], heavy: false, special: false, dist }); knock(u, dx, dz, dist * K / u.st.weight); stunUnit(u, 0.4); } }
+      for (const b of balls) { if (b.gone) continue; const dx = b.x - q.x, dz = b.z - q.z, d = hyp(dx, dz) || 0.01; if (d < q.r + b.R * 0.6) { b.vx += dx / d * dist * 6.5; b.vz += dz / d * dist * 6.5; if (stun) stunBall(b, stun); } }
     };
     const cycle = (q, dt, idle, warn, act, onWarn, onFire) => {     // idle -> warn (telegraph) -> active -> idle
       q.t -= dt; if (q.t > 0) return;
@@ -295,7 +311,7 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
       const W = H.W = { s: 0, t: 4.5, dx: 1, dz: 0 }; H.WARN = 1.5; H.ACT = 2.6;
       H.step = (dt) => {
         W.t -= dt;
-        if (W.s === 0 && W.t <= 0) { const a = Math.floor(rand() * 8) * Math.PI / 4; W.dx = Math.cos(a); W.dz = Math.sin(a); W.s = 1; W.t = H.WARN; emit({ e: 'hazwarn', q: W }); }
+        if (W.s === 0 && W.t <= 0) { const a = Math.floor(rand() * 8) * Math.PI / 4; W.dx = cos(a); W.dz = sin(a); W.s = 1; W.t = H.WARN; emit({ e: 'hazwarn', q: W }); }
         else if (W.s === 1 && W.t <= 0) { W.s = 2; W.t = H.ACT; emit({ e: 'hazfire', q: W }); }
         else if (W.s === 2) {
           for (const u of field) if (!u.fav && u.alive) { const p = u.air ? 2.6 : 1.8; shove(u, W.dx * p * dt, W.dz * p * dt); }
@@ -305,7 +321,7 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
       };
     } else if (kind === 'fog') {                                // Haunted Hollow: four fog banks drift about, always visible
       const r = L * 0.11;
-      for (let i = 0; i < 4; i++) { const a = i * 1.571 + 0.8; Z.push({ x: Math.cos(a) * L * 0.22, z: Math.sin(a) * L * 0.22, r, s: 2, vx: Math.cos(a * 2.3 + 1) * 1.3, vz: Math.sin(a * 2.3 + 1) * 1.3, bad: false }); }
+      for (let i = 0; i < 4; i++) { const a = i * 1.571 + 0.8; Z.push({ x: cos(a) * L * 0.22, z: sin(a) * L * 0.22, r, s: 2, vx: cos(a * 2.3 + 1) * 1.3, vz: sin(a * 2.3 + 1) * 1.3, bad: false }); }
       H.step = (dt) => { for (const q of Z) { q.x += q.vx * dt; q.z += q.vz * dt; if (Math.abs(q.x) > half - r * 0.6) q.vx = -Math.sign(q.x) * Math.abs(q.vx); if (Math.abs(q.z) > half - r * 0.6) q.vz = -Math.sign(q.z) * Math.abs(q.vz); } };
       H.hidden = (x, z) => within(x, z, 2);
     } else if (kind === 'bumpers') {                            // Meadow Stadium: four pinball bumpers
@@ -313,8 +329,8 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
       cross(L * 0.24).slice(1).forEach(([x, z]) => Z.push({ x, z, r, s: 2, hit: 0, bad: false }));
       H.step = (dt) => { for (const q of Z) {
         q.hit = Math.max(0, q.hit - dt);
-        for (const b of balls) { if (b.gone) continue; const dx = b.x - q.x, dz = b.z - q.z, d = Math.hypot(dx, dz) || 0.01; if (d < r + b.R) { const sp = Math.max(Math.hypot(b.vx, b.vz) * 1.05, topSpeed0 * 1.1); b.x = q.x + dx / d * (r + b.R); b.z = q.z + dz / d * (r + b.R); b.vx = dx / d * sp; b.vz = dz / d * sp; b.dashT = 0; q.hit = 0.25; emit({ e: 'bumper', q, b }); } }
-        for (const u of field) { const dx = u.x - q.x, dz = u.z - q.z, d = Math.hypot(dx, dz) || 0.01; if (d < r + u.r) { u.x = q.x + dx / d * (r + u.r); u.z = q.z + dz / d * (r + u.r); if (u.launched > 0 && q.hit <= 0) { const sp = Math.hypot(u.kx, u.kz) * 1.1 + 4; u.kx = dx / d * sp; u.kz = dz / d * sp; u.launched = Math.max(u.launched, 0.4); q.hit = 0.25; emit({ e: 'bumper', q, b: null }); } } }
+        for (const b of balls) { if (b.gone) continue; const dx = b.x - q.x, dz = b.z - q.z, d = hyp(dx, dz) || 0.01; if (d < r + b.R) { const sp = Math.max(hyp(b.vx, b.vz) * 1.05, topSpeed0 * 1.1); b.x = q.x + dx / d * (r + b.R); b.z = q.z + dz / d * (r + b.R); b.vx = dx / d * sp; b.vz = dz / d * sp; b.dashT = 0; q.hit = 0.25; emit({ e: 'bumper', q, b }); } }
+        for (const u of field) { const dx = u.x - q.x, dz = u.z - q.z, d = hyp(dx, dz) || 0.01; if (d < r + u.r) { u.x = q.x + dx / d * (r + u.r); u.z = q.z + dz / d * (r + u.r); if (u.launched > 0 && q.hit <= 0) { const sp = hyp(u.kx, u.kz) * 1.1 + 4; u.kx = dx / d * sp; u.kz = dz / d * sp; u.launched = Math.max(u.launched, 0.4); q.hit = 0.25; emit({ e: 'bumper', q, b: null }); } } }
       } };
     } else if (kind === 'ice') { H.grip = 1.6; H.top = 1.1; }    // Frost Rink: balls slide
     return H;
@@ -323,7 +339,7 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
   // ---- signature moves
   const reachOf = (u, M) => (M.reach || M.size || 4) * K + u.h * 0.5;
   function windUp(u, t) {
-    const M = MOVES[u.move], dx = t.x - u.x, dz = t.z - u.z, d = Math.hypot(dx, dz) || 1;
+    const M = MOVES[u.move], dx = t.x - u.x, dz = t.z - u.z, d = hyp(dx, dz) || 1;
     u.wind = { move: u.move, M, t: 0, dur: M.wind * (u.rallied ? T.RALLY_WIND : 1), target: t, x: u.x, z: u.z, tx: t.x, tz: t.z, dx: dx / d, dz: dz / d, size: (M.size || 0) * K, reach: reachOf(u, M), width: (M.width || 0) * K + u.r, power: M.power * (u.rallied ? T.RALLY_POWER : 1) };
     u.yaw = Math.atan2(dx, dz); u.charge = 0; u.moving = false;
     emit({ e: 'wind', u, w: u.wind });
@@ -332,13 +348,13 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
     const w = u.wind, M = w.M, type = w.move, o = { type, kb: M.kb || 0, special: true, stun: M.stun || 0, frozen: !!M.frozen };
     u.wind = null; u.rallied = false; u.busy = 0.35; u.cd = Math.max(u.cd, 0.5);
     const tgt = w.target && w.target.alive ? w.target : null;
-    if (tgt && M.shape !== 'blast' && M.shape !== 'pool') { const dx = tgt.x - u.x, dz = tgt.z - u.z, d = Math.hypot(dx, dz) || 1; if (M.shape !== 'cone' && M.shape !== 'beam' && M.shape !== 'wave' && M.shape !== 'rush') { w.tx = tgt.x; w.tz = tgt.z; } w.dx = dx / d; w.dz = dz / d; u.yaw = Math.atan2(dx, dz); }
+    if (tgt && M.shape !== 'blast' && M.shape !== 'pool') { const dx = tgt.x - u.x, dz = tgt.z - u.z, d = hyp(dx, dz) || 1; if (M.shape !== 'cone' && M.shape !== 'beam' && M.shape !== 'wave' && M.shape !== 'rush') { w.tx = tgt.x; w.tz = tgt.z; } w.dx = dx / d; w.dz = dz / d; u.yaw = Math.atan2(dx, dz); }
     const ev = { e: 'fire', u, w, hits: [] };
     emit(ev);
     switch (M.shape) {
       case 'cone': {
-        const cos = Math.cos(M.arc);
-        foes(u.team, (v) => { const dx = v.x - u.x, dz = v.z - u.z, d = Math.hypot(dx, dz) || 0.01; if (d < w.reach + v.r && (d < u.r + v.r + 0.5 || (dx * w.dx + dz * w.dz) / d > cos)) { ev.hits.push(v); strike(u, v, w.power, o); } });
+        const edge = cos(M.arc);
+        foes(u.team, (v) => { const dx = v.x - u.x, dz = v.z - u.z, d = hyp(dx, dz) || 0.01; if (d < w.reach + v.r && (d < u.r + v.r + 0.5 || (dx * w.dx + dz * w.dz) / d > edge)) { ev.hits.push(v); strike(u, v, w.power, o); } });
         shoveBalls(u.team, u.x + w.dx * w.reach * 0.5, u.z + w.dz * w.reach * 0.5, w.reach * 0.55, 7 * M.kb / 2.2, w.dx, w.dz);
         break;
       }
@@ -351,18 +367,18 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
         waves.push({ u, team: u.team, x: u.x, z: u.z, dx: w.dx, dz: w.dz, p: u.r, reach: w.reach, width: w.width + 1.2 * K, speed: L * 0.55, power: w.power, o, hit: new Set(), carry: M.carry, ev });
         break;
       case 'nova':
-        foes(u.team, (v) => { if (M.grounded && v.air) return; const d = Math.hypot(v.x - u.x, v.z - u.z); if (d < w.size + u.r + v.r) { ev.hits.push(v); const dealt = strike(u, v, w.power, o); if (M.heal) ev.heal = (ev.heal || 0) + dealt * M.heal; } });
+        foes(u.team, (v) => { if (M.grounded && v.air) return; const d = hyp(v.x - u.x, v.z - u.z); if (d < w.size + u.r + v.r) { ev.hits.push(v); const dealt = strike(u, v, w.power, o); if (M.heal) ev.heal = (ev.heal || 0) + dealt * M.heal; } });
         if (ev.heal) {                                          // what it drained is shared by the user and friends inside the ring
-          const friends = field.filter((v) => v.alive && v.team === u.team && Math.hypot(v.x - u.x, v.z - u.z) < w.size + u.r + v.r);
+          const friends = field.filter((v) => v.alive && v.team === u.team && hyp(v.x - u.x, v.z - u.z) < w.size + u.r + v.r);
           ev.healed = friends; for (const v of friends) v.hp = Math.min(v.st.maxHp, v.hp + ev.heal / friends.length * (v === u ? 1.5 : 1));
         }
         shoveBalls(u.team, u.x, u.z, w.size + u.r, 6 * (M.kb || 1));
         break;
       case 'blast': {
         const cx = w.tx, cz = w.tz;
-        foes(u.team, (v) => { const dx = v.x - cx, dz = v.z - cz, d = Math.hypot(dx, dz); if (d < w.size + v.r) { ev.hits.push(v); strike(u, v, w.power, M.away ? Object.assign({}, o, { dx: v.x - u.x, dz: v.z - u.z }) : Object.assign({}, o, { dx: dx || 0.01, dz })); } });
+        foes(u.team, (v) => { const dx = v.x - cx, dz = v.z - cz, d = hyp(dx, dz); if (d < w.size + v.r) { ev.hits.push(v); strike(u, v, w.power, M.away ? Object.assign({}, o, { dx: v.x - u.x, dz: v.z - u.z }) : Object.assign({}, o, { dx: dx || 0.01, dz })); } });
         if (M.kb > 1) shoveBalls(u.team, cx, cz, w.size, 2.4 * M.kb, M.away ? w.dx : undefined, M.away ? w.dz : undefined);
-        else if (M.frozen) for (const b of balls) if (!b.gone && b.team !== u.team && Math.hypot(b.x - cx, b.z - cz) < w.size + b.R * 0.5) stunBall(b, 0.8);
+        else if (M.frozen) for (const b of balls) if (!b.gone && b.team !== u.team && hyp(b.x - cx, b.z - cz) < w.size + b.R * 0.5) stunBall(b, 0.8);
         break;
       }
       case 'pool':
@@ -374,18 +390,18 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
         for (let i = 0; i < M.jumps && cur; i++) {
           seen.add(cur); ev.chain.push(cur); ev.hits.push(cur);
           strike(u, cur, w.power * (1 - i * 0.15), Object.assign({}, o, { dx: cur.x - from.x, dz: cur.z - from.z }));
-          let nxt = null, bd = (5.5 * K) ** 2;
-          foes(u.team, (v) => { if (seen.has(v)) return; const d = (v.x - cur.x) ** 2 + (v.z - cur.z) ** 2; if (d < bd) { bd = d; nxt = v; } });
+          let nxt = null, bd = 5.5 * K * 5.5 * K;
+          foes(u.team, (v) => { if (seen.has(v)) return; const d = (v.x - cur.x) * (v.x - cur.x) + (v.z - cur.z) * (v.z - cur.z); if (d < bd) { bd = d; nxt = v; } });
           from = cur; cur = nxt;
         }
-        for (const b of balls) if (!b.gone && b.team !== u.team && ev.chain.some((v) => Math.hypot(b.x - v.x, b.z - v.z) < b.R + 1.5 * K)) stunBall(b, 0.7);
+        for (const b of balls) if (!b.gone && b.team !== u.team && ev.chain.some((v) => hyp(b.x - v.x, b.z - v.z) < b.R + 1.5 * K)) stunBall(b, 0.7);
         break;
       }
       case 'strike': {
         let v = tgt;
-        if (M.blink) { let bf = 2; foes(u.team, (q) => { const d = Math.hypot(q.x - u.x, q.z - u.z), f = q.hp / q.st.maxHp + d / (w.reach * 4); if (d < w.reach && f < bf) { bf = f; v = q; } }); }
+        if (M.blink) { let bf = 2; foes(u.team, (q) => { const d = hyp(q.x - u.x, q.z - u.z), f = q.hp / q.st.maxHp + d / (w.reach * 4); if (d < w.reach && f < bf) { bf = f; v = q; } }); }
         if (!v) break;
-        const dx = v.x - u.x, dz = v.z - u.z, d = Math.hypot(dx, dz) || 1, gap = u.r + v.r + 0.2;
+        const dx = v.x - u.x, dz = v.z - u.z, d = hyp(dx, dz) || 1, gap = u.r + v.r + 0.2;
         ev.from = { x: u.x, z: u.z };
         let hx = dx / d, hz = dz / d;
         if (M.blink) { const ex = Math.abs(v.x) > Math.abs(v.z) ? Math.sign(v.x) : 0, ez = ex ? 0 : Math.sign(v.z); hx = ex; hz = ez; u.x = v.x - hx * gap; u.z = v.z - hz * gap; }   // appear on its inner side, to knock it towards the nearest edge
@@ -404,13 +420,14 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
       case 'throw': {
         if (!tgt) break;
         const picked = [tgt];
-        foes(u.team, (v) => { if (v !== tgt && picked.length < M.count && Math.hypot(v.x - tgt.x, v.z - tgt.z) < w.size + v.r) picked.push(v); });
+        foes(u.team, (v) => { if (v !== tgt && picked.length < M.count && hyp(v.x - tgt.x, v.z - tgt.z) < w.size + v.r) picked.push(v); });
         ev.hits = picked; u.busy = M.lift + 0.2;
         for (const v of picked) { stunUnit(v, M.lift + 0.15); v.lifted = M.lift; }
         later(M.lift, () => { for (const v of picked) if (v.alive) { v.lifted = 0; if (u.alive) strike(u, v, w.power, Object.assign({}, o, { stun: 0, dx: v.x - u.x, dz: v.z - u.z })); else knock(v, v.x - u.x, v.z - u.z, 2 * K); } emit({ e: 'thrown', u, hits: picked }); });
         break;
       }
       case 'rush':
+        u.busy = 0;                                             // (off at once: the charge is the move)
         u.rush = { dx: w.dx, dz: w.dz, left: w.reach, speed: L * M.speed, hit: new Set(), power: w.power, o, width: w.width };
         break;
       default: break;
@@ -432,7 +449,7 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
       const P = pools[i]; P.t -= dt; P.life -= dt;
       if (P.t <= 0 && P.left > 0) {
         P.t += P.every; P.left--;
-        foes(P.team, (v) => { if (Math.hypot(v.x - P.x, v.z - P.z) < P.r + v.r) { v.slow = Math.max(v.slow, P.every + 0.1); if (P.u) strike(P.u, v, P.power, { type: P.type, kb: 0, special: false }); } });
+        foes(P.team, (v) => { if (hyp(v.x - P.x, v.z - P.z) < P.r + v.r) { v.slow = Math.max(v.slow, P.every + 0.1); if (P.u) strike(P.u, v, P.power, { type: P.type, kb: 0, special: false }); } });
       }
       if (P.life <= 0) pools.splice(i, 1);
     }
@@ -448,12 +465,12 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
     if (u.lifted > 0) u.lifted -= dt;
     // the edge
     const over = Math.max(Math.abs(u.x), Math.abs(u.z)) - half;
-    if (over > (u.air ? L * T.AIR_SAVE : u.r * T.EDGE_OUT)) { knockOut(u, null, Math.abs(u.x) > Math.abs(u.z) ? Math.sign(u.x) : 0, Math.abs(u.x) > Math.abs(u.z) ? 0 : Math.sign(u.z), Math.hypot(u.kx, u.kz) / T.KB_DECAY + 1, 'ring'); return; }
+    if (over > (u.air ? L * T.AIR_SAVE : u.r * T.EDGE_OUT)) { knockOut(u, null, Math.abs(u.x) > Math.abs(u.z) ? Math.sign(u.x) : 0, Math.abs(u.x) > Math.abs(u.z) ? 0 : Math.sign(u.z), hyp(u.kx, u.kz) / T.KB_DECAY + 1, 'ring'); return; }
     u.off = over > 0;
     if (u.stun > 0) { u.stun -= dt; if (u.stun <= 0) u.frozen = false; u.moving = false; return; }
     const lim = inner(u), loose = u.launched > 0;
     if (!loose && (Math.abs(u.x) > lim || Math.abs(u.z) > lim)) {       // back from the brink (a flyer drifts in over open air)
-      const sp = (u.air ? u.st.speed * 1.4 : 7) * dt, tx = clamp(u.x, -lim, lim), tz = clamp(u.z, -lim, lim), d = Math.hypot(tx - u.x, tz - u.z);
+      const sp = (u.air ? u.st.speed * 1.4 : 7) * dt, tx = clamp(u.x, -lim, lim), tz = clamp(u.z, -lim, lim), d = hyp(tx - u.x, tz - u.z);
       if (d <= sp) { u.x = tx; u.z = tz; } else { u.x += (tx - u.x) / d * sp; u.z += (tz - u.z) / d * sp; }
       if (u.off) { u.moving = true; return; }
     }
@@ -462,9 +479,12 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
     if (u.rush) {                                               // charging down a line, bowling foes aside
       const R = u.rush, step = Math.min(R.left, R.speed * dt);
       u.x += R.dx * step; u.z += R.dz * step; R.left -= step; u.moving = true;
-      foes(u.team, (v) => { if (!R.hit.has(v) && Math.hypot(v.x - u.x, v.z - u.z) < u.r + v.r + R.width * 0.5) { R.hit.add(v); const side = (v.x - u.x) * R.dz - (v.z - u.z) * R.dx >= 0 ? 1 : -1; strike(u, v, R.power, Object.assign({}, R.o, { dx: R.dx * 0.75 + R.dz * side * 0.6, dz: R.dz * 0.75 - R.dx * side * 0.6 })); } });
-      for (const b of balls) if (!b.gone && b.team !== u.team && !R.hit.has(b) && Math.hypot(b.x - u.x, b.z - u.z) < u.r + b.R) { R.hit.add(b); b.vx += R.dx * 9; b.vz += R.dz * 9; b.dashT = 0; }
-      if (R.left <= 0 || Math.abs(u.x) >= lim || Math.abs(u.z) >= lim) { u.x = clamp(u.x, -lim, lim); u.z = clamp(u.z, -lim, lim); u.rush = null; u.busy = 0.3; emit({ e: 'rushend', u }); }
+      foes(u.team, (v) => { if (!R.hit.has(v) && hyp(v.x - u.x, v.z - u.z) < u.r + v.r + R.width * 0.5) { R.hit.add(v); const side = (v.x - u.x) * R.dz - (v.z - u.z) * R.dx >= 0 ? 1 : -1; strike(u, v, R.power, Object.assign({}, R.o, { dx: R.dx * 0.75 + R.dz * side * 0.6, dz: R.dz * 0.75 - R.dx * side * 0.6 })); } });
+      for (const b of balls) if (!b.gone && b.team !== u.team && !R.hit.has(b) && hyp(b.x - u.x, b.z - u.z) < u.r + b.R) { R.hit.add(b); b.vx += R.dx * 9; b.vz += R.dz * 9; b.dashT = 0; }
+      // it stops when it runs INTO an edge; one that starts on the edge line and runs along it carries on
+      const wall = (Math.abs(u.x) >= lim && u.x * R.dx > 0.25 * Math.abs(u.x)) || (Math.abs(u.z) >= lim && u.z * R.dz > 0.25 * Math.abs(u.z));
+      u.x = clamp(u.x, -lim, lim); u.z = clamp(u.z, -lim, lim);
+      if (R.left <= 0 || wall) { u.rush = null; u.busy = 0.3; emit({ e: 'rushend', u }); }
       return;
     }
     if (u.wind) {                                               // winding up: rooted, and the telegraph is on the floor
@@ -475,13 +495,13 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
     if (!u.target || !u.target.alive || u.rt <= 0) {            // nearest foe, leaning towards ones it has a type advantage over
       u.rt = 0.8 + rand() * 0.5;
       let bst = null, bs = 1e9;
-      for (const v of field) { if (v.team === u.team || !v.alive || v.drop > 0) continue; const s = Math.hypot(v.x - u.x, v.z - u.z) * (1.3 - 0.15 * Math.min(best(u, v)[0], 2)) * (v.off ? 1.6 : 1); if (s < bs) { bs = s; bst = v; } }
+      for (const v of field) { if (v.team === u.team || !v.alive || v.drop > 0) continue; const s = hyp(v.x - u.x, v.z - u.z) * (1.3 - 0.15 * Math.min(best(u, v)[0], 2)) * (v.off ? 1.6 : 1); if (s < bs) { bs = s; bst = v; } }
       u.target = bst;
     }
     const t = u.target;
     u.charge = Math.min(1, u.charge + u.st.charge * dt);
     if (!t) { u.moving = false; return; }
-    const dx = t.x - u.x, dz = t.z - u.z, d = Math.hypot(dx, dz) || 0.001, reach = u.st.range > 0 ? u.st.range + t.r : u.r + t.r + 0.25;
+    const dx = t.x - u.x, dz = t.z - u.z, d = hyp(dx, dz) || 0.001, reach = u.st.range > 0 ? u.st.range + t.r : u.r + t.r + 0.25;
     u.yaw = Math.atan2(dx, dz);
     // a charged signature move goes off as soon as the target is inside it; one that reaches less far than the
     // monster's ordinary attack (a ring around itself, for a monster that fights at range) makes it close in first
@@ -507,7 +527,7 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
       else shots.push({ u, t, x: u.x, z: u.z, sx: u.x, sz: u.z, speed: L * T.SHOT_SPEED, type: b[1], miss, id: uid++ });
     } else {
       emit({ e: 'atk', u, t, type: b[1], ranged: false, miss });
-      if (!miss) later(T.HIT_DELAY, () => { if (u.alive && t.alive && u.stun <= 0 && Math.hypot(t.x - u.x, t.z - u.z) < u.r + t.r + 1.2) strike(u, t, 1, { kb: 1 }); });
+      if (!miss) later(T.HIT_DELAY, () => { if (u.alive && t.alive && u.stun <= 0 && hyp(t.x - u.x, t.z - u.z) < u.r + t.r + 1.2) strike(u, t, 1, { kb: 1 }); });
     }
   }
 
@@ -520,7 +540,7 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
     const lim = T.SCOOP_RATIO * b.D;
     for (const u of field) {
       if (!u.alive || u.drop > 0) continue;
-      const d = Math.hypot(u.x - b.x, u.z - b.z) + L * 0.1;
+      const d = hyp(u.x - b.x, u.z - b.z) + L * 0.1;
       if (u.team === b.team) {                                  // rally one of ours that has someone to hit
         if (b.rallyCd <= 0.3 && u.rallyCd <= 0 && !u.wind && !u.rush && u.stun <= 0 && u.target && u.charge < 0.85 && !b.teamOut) consider(u, (u.value + 1) * 1.1 / d, 'rally');
         continue;
@@ -539,7 +559,7 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
     for (const o of balls) {                                    // a rival ball: free what it scooped, or bump it off
       if (o === b || o.gone || o.safe > 0 || o.D > b.D * 1.25) continue;
       let mine = 0; for (const c of o.cargo) if (c.team === b.team) mine++;
-      const gap = edgeGap(o.x, o.z), s = ((mine ? 1 + mine * 3 : 0) + (gap < L * 0.18 ? 2.2 : 0.25)) / (Math.hypot(o.x - b.x, o.z - b.z) + L * 0.12);
+      const gap = edgeGap(o.x, o.z), s = ((mine ? 1 + mine * 3 : 0) + (gap < L * 0.18 ? 2.2 : 0.25)) / (hyp(o.x - b.x, o.z - b.z) + L * 0.12);
       consider(o, s, 'ram');
     }
     b.aim = bestT; b.plan = plan;
@@ -558,16 +578,16 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
       let tx = a ? a.x : 0, tz = a ? a.z : 0, lined = true;
       if (a && b.plan === 'ram') {                              // come at it from the inside, so the knock sends it outwards
         const tr = a.isBall ? a.R : a.r, [ox, oz] = outward(a.x, a.z), px = a.x - ox * (b.R + tr + 1.6), pz = a.z - oz * (b.R + tr + 1.6);
-        const ex = a.x - b.x, ez = a.z - b.z, e = Math.hypot(ex, ez) || 1;
+        const ex = a.x - b.x, ez = a.z - b.z, e = hyp(ex, ez) || 1;
         lined = (ex * ox + ez * oz) / e > 0.72 || a.wind;
         if (!lined && edgeGap(a.x, a.z) < L * 0.22) { tx = px; tz = pz; }
       }
-      const dx = tx - b.x, dz = tz - b.z, d = Math.hypot(dx, dz) || 0.001;
+      const dx = tx - b.x, dz = tz - b.z, d = hyp(dx, dz) || 0.001;
       if (a || d > L * 0.12) {
-        const w = Math.sin(now * 1.7 + b.wob) * 0.12, c = Math.cos(w), s = Math.sin(w);    // aim wobble
+        const w = sin(now * 1.7 + b.wob) * 0.12, c = cos(w), s = sin(w);    // aim wobble
         ix = (dx * c - dz * s) / d; iz = (dx * s + dz * c) / d;
         const q = haz.danger(b.x + ix * 2.5, b.z + iz * 2.5, b.R + 1);               // steer round live hazards
-        if (q) { const ex = b.x - q.x, ez = b.z - q.z, e = Math.hypot(ex, ez) || 1; ix += ex / e * 1.4; iz += ez / e * 1.4; const m = Math.hypot(ix, iz) || 1; ix /= m; iz /= m; }
+        if (q) { const ex = b.x - q.x, ez = b.z - q.z, e = hyp(ex, ez) || 1; ix += ex / e * 1.4; iz += ez / e * 1.4; const m = hyp(ix, iz) || 1; ix /= m; iz /= m; }
         else if (a && lined && b.plan !== 'rally' && b.dashCd <= 0 && d > b.R + 1.5 && d < L * 0.26 && (b.vx * dx + b.vz * dz) / d > top * 0.45 && rand() < dt * 2.4) {
           // only dash if stopping on the far side still leaves floor under the ball
           const stop = top * T.DASH_MULT * (T.DASH_TIME + 1.2 / haz.grip), far = d + stop * (b.plan === 'ram' ? 0.35 : 1);
@@ -578,27 +598,27 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
       const look = 0.35 + 1.5 / haz.grip, fx = b.x + b.vx * look, fz = b.z + b.vz * look, safe = half - b.R * 0.6 - L * 0.02;
       if (Math.abs(fx) > safe) { ix = -Math.sign(fx) * 1.6; dash = false; }
       if (Math.abs(fz) > safe) { iz = -Math.sign(fz) * 1.6; dash = false; }
-      const m = Math.hypot(ix, iz); if (m > 1) { ix /= m; iz /= m; }
+      const m = hyp(ix, iz); if (m > 1) { ix /= m; iz /= m; }
       b.ax += (ix - b.ax) * Math.min(1, dt * 7); b.az += (iz - b.az) * Math.min(1, dt * 7); ix = b.ax; iz = b.az;      // reaction lag
     } else {
       const s = (input && input(b.team)) || {}; ix = +s.x || 0; iz = +s.z || 0; dash = !!s.dash;
-      const m = Math.hypot(ix, iz); if (m > 1) { ix /= m; iz /= m; }
+      const m = hyp(ix, iz); if (m > 1) { ix /= m; iz /= m; }
     }
     if (dash && b.dashCd <= 0 && b.stun <= 0) {
-      let hx = ix, hz = iz; const m = Math.hypot(hx, hz);
-      if (m < 0.2) { hx = Math.sin(b.hd); hz = Math.cos(b.hd); } else { hx /= m; hz /= m; }
+      let hx = ix, hz = iz; const m = hyp(hx, hz);
+      if (m < 0.2) { hx = b.hx; hz = b.hz; } else { hx /= m; hz /= m; }
       b.vx = hx * top * T.DASH_MULT; b.vz = hz * top * T.DASH_MULT; b.dashT = T.DASH_TIME; b.dashCd = T.DASH_CD;
       emit({ e: 'dash', b });
     }
-    if (b.stun > 0) { const f = Math.exp(-2.2 * dt); b.vx *= f; b.vz *= f; }
+    if (b.stun > 0) { const f = fade(2.2 * dt); b.vx *= f; b.vz *= f; }
     else if (b.dashT > 0) b.dashT -= dt;                         // a dash is a committed burst: no steering until it ends
-    else { const k = 1 - Math.exp(-haz.grip * dt); b.vx += (ix * top - b.vx) * k; b.vz += (iz * top - b.vz) * k; }
-    let sp = Math.hypot(b.vx, b.vz);
+    else { const k = 1 - fade(haz.grip * dt); b.vx += (ix * top - b.vx) * k; b.vz += (iz * top - b.vz) * k; }
+    let sp = hyp(b.vx, b.vz);
     const cap = topSpeed0 * 3.2;                                 // however hard it was hit
     if (sp > cap) { b.vx *= cap / sp; b.vz *= cap / sp; sp = cap; }
     b.x += b.vx * dt; b.z += b.vz * dt;
     b.moving = sp > 0.6;
-    if (sp > 0.6) b.hd = Math.atan2(b.vx, b.vz);
+    if (sp > 0.6) { b.hx = b.vx / sp; b.hz = b.vz / sp; b.hd = Math.atan2(b.vx, b.vz); }      // (hd is only for drawing)
     if (Math.abs(b.x) > half + b.R * 0.15 || Math.abs(b.z) > half + b.R * 0.15) { ballOut(b); return; }      // off the edge: gone for the fight
 
     // monsters: scoop the small foes, ram the big ones, rally our own
@@ -607,7 +627,7 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
       if (!u.alive || u.drop > 0) continue;
       const dx = b.x - u.x, dz = b.z - u.z, reach = b.R + u.r;
       if (dx > reach || dx < -reach || dz > reach || dz < -reach) continue;
-      const d = Math.hypot(dx, dz) || 0.001;
+      const d = hyp(dx, dz) || 0.001;
       if (u.team === b.team) {
         if (d < b.R + u.r * 0.7 && sp > 1 && b.rallyCd <= 0 && u.rallyCd <= 0 && !u.wind && !u.rush && u.stun <= 0 && b.stun <= 0 && !b.teamOut) {
           u.charge = 1; u.rallied = true; u.rallyCd = T.RALLY_CD; b.rallyCd = T.RALLY_BALL_CD; b.rallies++; u.rt = 0;
@@ -642,16 +662,16 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
     u.alive = false; u.scooped = true; u.target = null; u.wind = null; u.rush = null;
     b.cargo.push(u); b.scoops++; b.combo = b.comboT > 0 ? b.combo + 1 : 0; b.comboT = 2.5; b.gulp = T.SCOOP_GULP; b.vx *= 1 - T.SCOOP_DRAG; b.vz *= 1 - T.SCOOP_DRAG; b.dashT = 0;
     if (b.aim === u) { b.aim = null; b.rt = Math.max(b.rt, 0.3); }
-    const D = Math.min(maxD(b), Math.cbrt(b.D ** 3 + T.SCOOP_GROW * u.h ** 3)); b.D = D; b.R = D / 2;
+    const D = Math.min(maxD(b), cbrt(cube(b.D) + T.SCOOP_GROW * cube(u.h))); b.D = D; b.R = D / 2;
     emit({ e: 'scoop', b, u });
   }
   function drop(b, n, all) {                                    // a rammed ball spills monsters back into play for their own team
     for (; (all || n > 0) && b.cargo.length; n--) {
-      const u = b.cargo.splice(all ? 0 : Math.floor(rand() * b.cargo.length), 1)[0], a = rand() * 6.283, lim = inner(u);
-      u.alive = true; u.scooped = false; u.noScoop = 2.5; u.stun = 0.4; u.rt = 0; u.kx = u.kz = 0; u.launched = 0;
-      u.x = clamp(b.x + Math.cos(a) * (b.R + u.r + 0.3), -lim, lim); u.z = clamp(b.z + Math.sin(a) * (b.R + u.r + 0.3), -lim, lim);
-      field.push(u);
-      const D = Math.max(b.D0, Math.cbrt(Math.max(0, b.D ** 3 - T.SCOOP_GROW * u.h ** 3))); b.D = D; b.R = D / 2;
+      const u = b.cargo.splice(all ? 0 : Math.floor(rand() * b.cargo.length), 1)[0], a = rand() * 6.283, lim = inner(u) - u.r;
+      u.alive = true; u.scooped = false; u.noScoop = 2.5; u.stun = 0; u.frozen = false; u.busy = 0.4; u.rt = 0; u.kx = u.kz = 0; u.launched = 0;      // (busy, not stunned: a stunned monster has no grip on the edge)
+      u.x = clamp(b.x + cos(a) * (b.R + u.r + 0.3), -lim, lim); u.z = clamp(b.z + sin(a) * (b.R + u.r + 0.3), -lim, lim);
+      if (!field.includes(u)) field.push(u);                    // (scooped this very step: it has not left the list yet)
+      const D = Math.max(b.D0, cbrt(Math.max(0, cube(b.D) - T.SCOOP_GROW * cube(u.h)))); b.D = D; b.R = D / 2;
       emit({ e: 'free', b, u });
     }
   }
@@ -665,16 +685,16 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
     for (let i = 0; i < balls.length; i++) for (let j = i + 1; j < balls.length; j++) {
       const a = balls[i], b = balls[j];
       if (a.gone || b.gone) continue;
-      const dx = b.x - a.x, dz = b.z - a.z, min = a.R + b.R, d = Math.hypot(dx, dz) || 0.001;
+      const dx = b.x - a.x, dz = b.z - a.z, min = a.R + b.R, d = hyp(dx, dz) || 0.001;
       if (d >= min) continue;
-      const nx = dx / d, nz = dz / d, ma = a.D ** 3, mb = b.D ** 3, sh = (min - d) / (ma + mb);
+      const nx = dx / d, nz = dz / d, ma = cube(a.D), mb = cube(b.D), sh = (min - d) / (ma + mb);
       a.x -= nx * sh * mb; a.z -= nz * sh * mb; b.x += nx * sh * ma; b.z += nz * sh * ma;
       const va = a.vx * nx + a.vz * nz, vb = b.vx * nx + b.vz * nz, cs = va - vb;
       if (cs <= 0) continue;
       const imp = 1.7 * cs / (1 / ma + 1 / mb);
       a.vx -= imp / ma * nx; a.vz -= imp / ma * nz; b.vx += imp / mb * nx; b.vz += imp / mb * nz; a.dashT = b.dashT = 0;
       if (cs < 3) continue;
-      const pa = a.D ** 1.5 * (Math.max(0, va) + 1), pb = b.D ** 1.5 * (Math.max(0, -vb) + 1), loser = pa > pb * 1.15 ? b : pb > pa * 1.15 ? a : null;
+      const pa = a.D * Math.sqrt(a.D) * (Math.max(0, va) + 1), pb = b.D * Math.sqrt(b.D) * (Math.max(0, -vb) + 1), loser = pa > pb * 1.15 ? b : pb > pa * 1.15 ? a : null;
       let stunned = false;
       if (loser && stunBall(loser, T.CLASH_STUN)) { const s = loser === b ? 1 : -1; loser.vx += s * nx * 5; loser.vz += s * nz * 5; drop(loser, 1 + (rand() < 0.5 ? 1 : 0)); stunned = true; }
       emit({ e: 'clash', a, b, loser: stunned ? loser : null, speed: cs });
@@ -709,10 +729,10 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
       timers.sort((a, b) => a.at - b.at || a.n - b.n);
       while (timers.length && timers[0].at <= now) timers.shift().fn();
     }
-    const kd = Math.exp(-T.KB_DECAY * dt);
+    const kd = fade(T.KB_DECAY * dt);
     for (let i = 0; i < field.length; i++) { const u = field[i]; if (u.alive) stepUnit(u, dt, kd); }
     for (let i = shots.length - 1; i >= 0; i--) {               // ranged attacks in flight
-      const s = shots[i], t = s.t, dx = t.x - s.x, dz = t.z - s.z, d = Math.hypot(dx, dz) || 0.001, mv = s.speed * dt;
+      const s = shots[i], t = s.t, dx = t.x - s.x, dz = t.z - s.z, d = hyp(dx, dz) || 0.001, mv = s.speed * dt;
       if (!t.alive || d <= mv + t.r * 0.5) { if (t.alive && !s.miss) strike(s.u, t, 1, { kb: 0.7, dx: t.x - s.sx, dz: t.z - s.sz }); emit({ e: 'shotend', s, hit: t.alive && !s.miss }); shots.splice(i, 1); }
       else { s.x += dx / d * mv; s.z += dz / d * mv; }
     }
@@ -730,7 +750,7 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
       reinT = T.REINFORCE_EVERY;
       for (let k = 0; k < NT; k++) if (next[k] < recs[k].length && stat[k].floor < T.FIELD_CAP) {
         const c = recs[k][next[k]++], [cx, cz] = CORNERS[k % 4], a = rand() * 6.283, d = Math.sqrt(rand()) * L * 0.1;
-        const lim = half - c.h * 0.3 - 0.3, u = spawn(c, k, clamp(cx * L * 0.3 + Math.cos(a) * d, -lim, lim), clamp(cz * L * 0.3 + Math.sin(a) * d, -lim, lim), T.DROP_TIME);
+        const lim = half - c.h * 0.3 - 0.3, u = spawn(c, k, clamp(cx * L * 0.3 + cos(a) * d, -lim, lim), clamp(cz * L * 0.3 + sin(a) * d, -lim, lim), T.DROP_TIME);
         u.noScoop = 1.5; stat[k].floor++;
         emit({ e: 'reinforce', u });
       }

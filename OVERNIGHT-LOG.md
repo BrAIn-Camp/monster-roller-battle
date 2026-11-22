@@ -53,6 +53,29 @@ built, the decisions taken without you, and every bug or rough edge found along 
 | 6 | (new) Every fight built its own copies of the effect shapes and never freed them. | Built once and shared. |
 | 7 | (existing) The arena had no music at all: the round's tune stops at "TIME UP". | A fight tune from the same synth (waiting / fighting / sudden death). |
 | 8 | (existing) A hidden tab ran the whole game at a fifth of its speed. The worker that keeps a hidden tab ticking gave it one tick per quarter second, and a tick covers at most 50 ms. In multiplayer that slowed every player whenever the host's tab was hidden or covered. | The catch-up now runs as many 50 ms ticks as the gap needs (up to a second's worth). Measured: 10.0 game seconds per 10.0 real seconds in a hidden tab. |
+| 9 | (new) Stampede started a third of a second after its effect played, and was cancelled outright if it began on the edge line. | It starts at once, and only stops when it runs into an edge. |
+
+### Found by an independent review
+
+Halfway through the night a second agent read the four arena files cold, with no brief beyond "find real bugs", and ran
+its own thousand fights. Everything it called a definite bug is fixed:
+
+| # | What | Fix |
+|---|---|---|
+| 10 | A monster could be on the floor twice. Scooped and, in the same step, freed by a clash, it was added to the list again before it had left it: for about nine seconds it moved, attacked and charged at double speed and was hit twice by every area move. Seen in 1 fight in 600. | `drop()` checks before adding. |
+| 11 | Rock Slide's falling rocks changed two settings on a material borrowed from a shared pool and never put them back. After the first Rock Slide, the next six things to borrow one (move outlines, the Toxic Pool, the ice block on a frozen monster) drew solid instead of see-through. | Rocks use a lit material of their own kind; nothing changes a pooled material. |
+| 12 | Monsters were left behind in memory after a fight: the ones riding a ball at the end, and (when a fight was skipped) everything that fell during the skipped stretch. With the models on, each is a skeleton, an animation mixer and a material. | Every fighter made is tracked until it is let go, and `destroy()` lets go of whatever is left. |
+| 13 | A monster freed from a ball that had just rolled off was stunned for 0.4 s on the very edge, and a stunned monster has no grip there: about 1 in 25 fell straight off again. | Freed monsters are "busy", not stunned, and are put a little further in. |
+| 14 | A rally's bonus (faster wind-up, 20% harder) survived the wind-up being broken and applied to that monster's next move, however much later. | Cleared when a wind-up breaks. |
+| 15 | The fight stops dead at the last knockout, but for the next six seconds the screen still drew it: shots hung in the air, telegraphs stayed on the floor, stunned monsters kept wobbling. | Entering the finish lets go of everything in mid-air or half wound up. |
+| 16 | `skip()` on the fight itself did not refuse a multiplayer fight (only the game's own key handler did). | It refuses. |
+
+And one it called "suspicious": the fight used `Math.hypot`, `Math.exp`, `Math.cbrt`, `Math.log`, `**` and the trig
+functions, none of which are guaranteed to give the same last bit in every browser. Two tabs of one browser cannot show
+that, and the old arena had the same weakness. A fight replayed on Chrome and on Firefox could drift apart. The fight now
+uses only adding, multiplying, dividing and square roots (exact everywhere), with its own short `sin`, `cos`, decay and
+cube root built from those. **Not verified across two different browsers**: that needs a Chrome player and a Firefox or
+Safari player in one room.
 
 ## Checked
 

@@ -56,6 +56,12 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
   const cry = (spec, vol) => { if (quiet) return; try { if (sfx && sfx.cry) sfx.cry(spec, vol); } catch (e) { /* no audio */ } };
   if (!buildActor) buildActor = (spec, k) => { const mesh = buildMesh(spec, k), root = new THREE.Group(); root.add(mesh); return { root, rigged: false, play: () => 0, update() {}, flash() {}, dispose() {} }; };
 
+  // Every actor made is kept track of until it is let go, so destroy() can be sure of leaving none behind: not the
+  // scooped ones riding a ball, nor ones that fell while a fight was being skipped, nor one whose model is still loading.
+  const actors = new Set(), makeActor = buildActor;
+  buildActor = (spec, k) => { const a = makeActor(spec, k); actors.add(a); return a; };
+  const freeActor = (a) => { if (!actors.delete(a)) return; a.root.removeFromParent(); a.dispose(); };
+
   // ---- the fight
   plans = plans || planTeams(teams, arena, specOf);
   const sim = createSim({ arena, rand: dice || Math.random, input, teams: teams.map((tm, k) => ({ roster: plans[k].roster, backing: plans[k].backing, ballD: tm.ballD, human: tm.human })) });
@@ -200,7 +206,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     const actor = made || buildActor(u.spec, u.team);
     if (!made) { actor.root.scale.setScalar(0.0001); actor.root.traverse((o) => { if (o.isMesh) o.castShadow = true; }); scene.add(actor.root); }
     actor.root.rotation.order = 'YXZ';                              // turn to face first, then lean: so a lean is always forwards
-    const v = u.v = { u, actor, pop: 0, delay: 0, fall: -1, land: 1, lunge: 0, kick: 0, flash: 0, flashCol: 0xffffff, squash: 0, yaw: u.yaw, y: 0, lag: 1, phase: vr() * 6.28, tele: null, ice: null, lift: 0, glow: 0, tumble: 0, cheer: 0, hop: null, bar: 0, lean: 0 };
+    const v = u.v = { u, actor, pop: 0, delay: 0, fall: -1, land: 1, lunge: 0, kick: 0, flash: 0, flashCol: 0xffffff, squash: 0, yaw: u.yaw, y: 0, lag: 1, phase: vr() * 6.28, tele: null, ice: null, lift: 0, tumble: 0, hop: null, bar: 0, lean: 0 };
     views.push(v);
     return v;
   }
@@ -327,16 +333,15 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     }
     if (w.move === 'rock') for (let i = 0; i < 6; i++) {        // the rocks are already on their way down
       const a = vr() * 6.28, d = Math.sqrt(vr()) * w.size * 0.8, x = w.tx + Math.cos(a) * d, z = w.tz + Math.sin(a) * d, s = (0.7 + vr() * 0.9) * K, start = L * 0.5 + i * 2, delay = vr() * 0.12;
-      const h = fx.hold('rock', { color: 0x8f7c5c, opacity: 1 }, (t, dt, m) => { const f = clamp((w.t - delay) / (w.dur - delay), 0, 1); m.position.set(x, s * 0.4 + start * (1 - f * f), z); m.rotation.set(t * 5, t * 3, 0); m.scale.setScalar(s); });
-      h.mesh.material.transparent = false; h.mesh.material.depthWrite = true; holds.push(h);
+      holds.push(fx.hold('rock', { color: 0x8f7c5c, opacity: 1, solid: true }, (t, dt, m) => { const f = clamp((w.t - delay) / (w.dur - delay), 0, 1); m.position.set(x, s * 0.4 + start * (1 - f * f), z); m.rotation.set(t * 5, t * 3, 0); m.scale.setScalar(s); }));
     }
-    v.tele = holds; v.glow = 1;
+    v.tele = holds;
     tone(300, 900, w.dur, 'sine', 0.05); v.actor.play('special', { dur: w.dur + 0.45 });
   }
   // ...and the move itself
   function fireFx(e) {
     const u = e.u, w = e.w, M = w.M, c = hexOf(w.move), g = glowOf(w.move), v = u.v, my = u.h * 0.55;
-    if (v) { dropTele(v); v.glow = 0; v.kick = 0.25; }
+    if (v) { dropTele(v); v.kick = 0.25; }
     const s = SND[w.move] || SND.normal; tone(s[1] * 0.8, s[2] * 0.6, s[3] * 2.4, s[0], 0.2); tone(s[1] * 1.6, s[2] * 1.2, s[3] * 1.4, s[0], 0.1, 0.03);
     cry(u.spec, 0.1);
     switch (M.shape) {
@@ -410,7 +415,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
       if (!w) {
         const lob = s.type === 'rock' || s.type === 'ground', solid = lob || s.type === 'grass' || s.type === 'bug' || s.type === 'poison' || s.type === 'ice';
         const size = (0.34 + s.u.h * 0.1) * K;
-        w = { h: fx.hold(lob ? 'rock' : s.type === 'ice' || s.type === 'grass' || s.type === 'bug' ? 'shard' : 'sph', { color: solid ? hexOf(s.type) : glowOf(s.type), opacity: 1, lit: !solid }, () => {}), d0: Math.hypot(s.t.x - s.sx, s.t.z - s.sz) || 1, y0: s.u.h * 0.6, lob, size, solid };
+        w = { h: fx.hold(lob ? 'rock' : s.type === 'ice' || s.type === 'grass' || s.type === 'bug' ? 'shard' : 'sph', { color: solid ? hexOf(s.type) : glowOf(s.type), opacity: 1, lit: !solid, solid }, () => {}), d0: Math.hypot(s.t.x - s.sx, s.t.z - s.sz) || 1, y0: s.u.h * 0.6, lob, size, solid };
         shotViews.set(s, w);
       }
       const f = clamp(1 - Math.hypot(s.t.x - s.x, s.t.z - s.z) / w.d0, 0, 1), y = w.y0 + (s.t.h * 0.5 - w.y0) * f + (w.lob ? Math.sin(f * Math.PI) * (2 + w.d0 * 0.18) : 0), m = w.h.mesh;
@@ -458,7 +463,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
         else {                                                 // gone: stars on the floor, a splash far below
           if (gy === 0) { fx.star(d.x, u.h * 0.5, d.z, { size: u.h * 0.45 + 0.7 * K, color: 0xffd23f, five: true, life: 0.5, spin: 3, lit: false }); fx.burst(d.x, u.h * 0.4, d.z, 12, 0xfff2b0, 6, 0.35 * K, 0.6); }
           else { fx.puff(d.x, -DROP + 0.3, d.z, 14, arena.detail, 6, 0.6 * K, 0.9, -12, 9); fx.ring(d.x, d.z, { r0: 0.5, r1: 4 * K, color: 0xffffff, y: -DROP + 0.1, life: 0.6, lit: false, opacity: 0.6 }); tone(160, 70, 0.3, 'sine', 0.1); }
-          root.removeFromParent(); d.v.actor.dispose(); dying.splice(i, 1); continue;
+          freeActor(d.v.actor); dying.splice(i, 1); continue;
         }
       }
       d.scale = Math.max(0.35, 1 - d.t * 0.35);
@@ -507,7 +512,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
       case 'ring': launch(e, true); break;
       case 'wind': telegraph(e.u, e.w); break;
       case 'fire': fireFx(e); break;
-      case 'break': { const u = e.u, v = u.v; if (v) { dropTele(v); v.glow = 0; v.squash = 0.35; v.actor.play('hurt'); } for (let i = 0; i < 8; i++) { const a = vr() * 6.283; fx.shard(u.x, u.h * 0.7, u.z, Math.cos(a) * 5, 4 + vr() * 5, Math.sin(a) * 5, { size: 0.35 * K, color: hexOf(e.move), life: 0.6 }); } fx.ring(u.x, u.z, { r0: u.r * 2, r1: u.r * 0.4, color: 0xffffff, life: 0.25 }); tone(900, 180, 0.22, 'square', 0.12); break; }
+      case 'break': { const u = e.u, v = u.v; if (v) { dropTele(v); v.squash = 0.35; v.actor.play('hurt'); } for (let i = 0; i < 8; i++) { const a = vr() * 6.283; fx.shard(u.x, u.h * 0.7, u.z, Math.cos(a) * 5, 4 + vr() * 5, Math.sin(a) * 5, { size: 0.35 * K, color: hexOf(e.move), life: 0.6 }); } fx.ring(u.x, u.z, { r0: u.r * 2, r1: u.r * 0.4, color: 0xffffff, life: 0.25 }); tone(900, 180, 0.22, 'square', 0.12); break; }
       case 'sting': { const t = e.t; fx.slash(t.x, t.h * (0.3 + 0.12 * e.i), t.z, e.u.yaw + e.i * 1.3, { size: clamp(t.h * 0.6, 0.8, 3), color: 0xe8ff9a, life: 0.14 }); if (e.u.v) e.u.v.lunge = 0.14; break; }
       case 'thrown': for (const t of e.hits) { if (t.v) t.v.lift = 0; fx.flash(t.x, t.h * 0.5, t.z, { r: t.h * 0.8, color: 0xffc2dc, life: 0.3 }); } tone(1500, 300, 0.3, 'sine', 0.16); bump(0.3); break;
       case 'rushend': fx.puff(e.u.x, 0.2, e.u.z, 8, 0xf5efe0, 5, 0.4, 0.4); break;
@@ -577,7 +582,6 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
   });
   const showH = (spec) => clamp(sim.hOf(spec) * 1.7, L * 0.085, L * 0.17);
   const lineSpot = (c, j) => { const tx = -c.cz * Math.SQRT1_2, tz = c.cx * Math.SQRT1_2, off = (j - (c.n - 1) / 2) * L * 0.105; return [c.cx * L * 0.345 + tx * off, c.cz * L * 0.345 + tz * off]; };
-  const freeActor = (a) => { a.root.removeFromParent(); a.dispose(); };
   const newActor = (spec, k) => { const a = buildActor(spec, k); a.root.scale.setScalar(0.0001); a.root.traverse((o) => { if (o.isMesh) o.castShadow = true; }); scene.add(a.root); return a; };
   function showcase(dt) {
     for (const c of show) {
@@ -690,6 +694,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     hud.big = el('div', 'ar-big', root); hud.sub = el('div', 'ar-pill ar-sub', root);
     hud.skip = el('div', 'ar-pill ar-skip', root, 'Hold Enter to skip<i></i>'); if (noSkip) hud.skip.style.display = 'none';
     hud.skipFill = hud.skip.lastChild;
+    if (myTeam >= 0) hud.keys = el('div', 'ar-pill ar-keys', root, '<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> roll <span></span> <kbd>Shift</kbd> dash');      // gone after the first dash
     if (phase !== 'merge') root.classList.add('ar-fighting');
   }
   function big(text, anim, small) { if (!hud) return; hud.big.textContent = text; hud.big.classList.toggle('ar-small', !!small); hud.big.classList.remove('ar-punch', 'ar-stay'); replay(hud.big, anim); }
@@ -698,6 +703,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     if (!hud) return;
     const t = sim.time, left = Math.max(0, Math.ceil(TUNE.RAMP_AT - t)), hot = sim.ramp > 1;
     setText(hud.clock, hot ? '×' + sim.ramp.toFixed(1) : Math.floor(left / 60) + ':' + String(left % 60).padStart(2, '0'));
+    if (hud.keys && !hud.keysGone && (sim.balls[myTeam].dashCd > 0 || sim.balls[myTeam].gone || t > 14)) { hud.keysGone = true; hud.keys.classList.add('ar-gone'); }
     const low = phase === 'fight' && !hot && left <= 5;
     if (hud.low !== low) { hud.low = low; hud.clock.classList.toggle('ar-low', low); }
     if (low && left !== lowTick) { lowTick = left; tone(1000, 1000, 0.05, 'square', 0.1); }
@@ -734,7 +740,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
   // ---- drawing
   function bar(mesh, n, x, y, z, w, hgt, c) { s3.set(w, hgt, 1); m4.compose(v3.set(x, y, z), camQ, s3); mesh.setMatrixAt(n, m4); if (c) mesh.setColorAt(n, c); }
   function view(dt, fdt) {                                      // dt: this frame; fdt: the same, slowed for hit-stop and the finale
-    const cheerTeam = cheering ? winner() : -1, fight = phase === 'fight' || phase === 'finish';
+    const cheerTeam = cheering ? winner() : -1, fight = phase === 'fight' || phase === 'finish', live = !sim.finished;      // live: the fight is still going (after it, nobody is stunned, tumbling or winding up)
     let n = 0, na = 0, nb = 0, ns = 0, nm = 0;
     for (let i = views.length - 1; i >= 0; i--) {
       const v = views[i], u = v.u, h = u.h, A = v.actor;
@@ -758,26 +764,26 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
       let y = u.air ? h * (0.28 + 0.06 * Math.sin(T * 3 + v.phase)) : u.moving ? Math.abs(Math.sin(T * 10 + v.phase)) * h * 0.09 : 0;
       if (u.lifted > 0 || v.lift > 0) { v.lift = Math.max(0, v.lift - fdt); y += h * 0.9 * Math.sin(clamp(1 - Math.max(u.lifted, 0) / 0.9, 0, 1) * Math.PI * 0.5); if (vr() < 0.5) fx.spark(u.x + (vr() - 0.5) * h, y + vr() * h, u.z + (vr() - 0.5) * h, 0, 2, 0, 0xffc2dc, 0.25 * K, 0.3, 0, true); }
       if (u.team === cheerTeam) y += Math.abs(Math.sin(T * 7 + v.phase)) * Math.min(h * 0.5, 1.4);
-      if (u.launched > 0) { v.tumble += fdt * 14; y += Math.abs(Math.sin(v.tumble)) * h * 0.18; } else v.tumble = 0;
+      if (u.launched > 0 && live) { v.tumble += fdt * 14; y += Math.abs(Math.sin(v.tumble)) * h * 0.18; } else v.tumble = 0;
       v.y = y + fallY;
       let dy = u.yaw - v.yaw; dy = Math.atan2(Math.sin(dy), Math.cos(dy)); v.yaw += dy * Math.min(1, fdt * 14);
       let px = u.x, pz = u.z;
       if (v.hop) { const q = v.hop; q.t += dt; const g = clamp(q.t / q.dur, 0, 1), e = smooth(g); px = q.x + (u.x - q.x) * e; pz = q.z + (u.z - q.z) * e; v.y += Math.sin(g * Math.PI) * h * 0.9; if (g >= 1) { v.hop = null; v.land = 0; fx.puff(u.x, 0.15, u.z, 5, 0xf5efe0, 3, 0.3, 0.4); } }
       A.root.position.set(px + Math.sin(v.yaw) * lu, v.y, pz + Math.cos(v.yaw) * lu);
       // lean: into a run, into a swing, back from a blow; reeling when stunned, head over heels when knocked flying
-      const wob = u.stun > 0 && !u.frozen ? Math.sin(T * 40) * 0.3 : 0;
+      const reel = live && u.stun > 0 && !u.frozen, wob = reel ? Math.sin(T * 40) * 0.3 : 0;
       v.lean += ((u.moving ? 0.16 : 0) + (v.lunge > 0 ? 0.3 : 0) - v.squash * 1.1 - v.lean) * Math.min(1, fdt * 14);
-      A.root.rotation.set(u.launched > 0 ? -0.5 * Math.sin(v.tumble) : v.lean, v.yaw + wob, u.stun > 0 && !u.frozen ? Math.sin(T * 31) * 0.18 : 0);
+      A.root.rotation.set(u.launched > 0 && live ? -0.5 * Math.sin(v.tumble) : v.lean, v.yaw + wob, reel ? Math.sin(T * 31) * 0.18 : 0);
       const breathe = A.rigged || u.moving ? 0 : Math.sin(T * 2.6 + v.phase) * 0.025;      // (the generated critters have no clips: let them breathe)
-      const landSq = v.land < 1 ? Math.sin(v.land * Math.PI) * 0.28 * (1 - v.land) * 2 : 0, sq = v.squash + landSq - breathe, grow = (u.wind ? 1 + 0.08 * Math.sin(T * 34) * clamp(u.wind.t / u.wind.dur, 0, 1) : 1) * (v.pop < 1 ? backOut(v.pop) : 1) * h;
+      const landSq = v.land < 1 ? Math.sin(v.land * Math.PI) * 0.28 * (1 - v.land) * 2 : 0, sq = v.squash + landSq - breathe, grow = (u.wind && live ? 1 + 0.08 * Math.sin(T * 34) * clamp(u.wind.t / u.wind.dur, 0, 1) : 1) * (v.pop < 1 ? backOut(v.pop) : 1) * h;
       A.root.scale.set(grow * (1 + sq * 0.5), Math.max(0.0001, grow * (1 - sq)), grow * (1 + sq * 0.5));
       // glow: winding up in its type's colour, or the flash of being hit
-      if (u.wind) { const k = clamp(u.wind.t / u.wind.dur, 0, 1), c = hexOf(u.wind.move); A.flash(0.25 + 0.55 * k * (0.7 + 0.3 * Math.sin(T * 30)), c); if (vr() < 0.5 + k * 0.5) { const a = vr() * 6.283, d = h * 1.2 + 0.8; fx.spark(u.x + Math.cos(a) * d, vr() * h * 1.2, u.z + Math.sin(a) * d, -Math.cos(a) * d / 0.3, 0, -Math.sin(a) * d / 0.3, vr() < 0.5 ? c : glowOf(u.wind.move), 0.3 * K, 0.3, 0, true); } }
-      else if (v.flash > 0) A.flash(Math.min(1, v.flash * 6), v.flashCol); else if (u.frozen) A.flash(0.5, 0x6fd8ff); else A.flash(0);
-      if (u.frozen && !v.ice) { const s = h * 1.15; v.ice = fx.hold('shard', { color: 0xbff2ff, opacity: 0.55 }, (t, dtt, m) => { m.position.set(u.x, h * 0.55, u.z); m.scale.set(s, s * 1.3, s); m.rotation.y = 0.6; }); }
-      else if (!u.frozen && v.ice) { v.ice.release(0.2); v.ice = null; for (let j = 0; j < 6; j++) { const a = vr() * 6.283; fx.shard(u.x, h * 0.6, u.z, Math.cos(a) * 4, 4 + vr() * 3, Math.sin(a) * 4, { size: 0.3 * K, color: 0xbff2ff, life: 0.5, opacity: 0.8 }); } }
+      if (u.wind && live) { const k = clamp(u.wind.t / u.wind.dur, 0, 1), c = hexOf(u.wind.move); A.flash(0.25 + 0.55 * k * (0.7 + 0.3 * Math.sin(T * 30)), c); if (vr() < 0.5 + k * 0.5) { const a = vr() * 6.283, d = h * 1.2 + 0.8; fx.spark(u.x + Math.cos(a) * d, vr() * h * 1.2, u.z + Math.sin(a) * d, -Math.cos(a) * d / 0.3, 0, -Math.sin(a) * d / 0.3, vr() < 0.5 ? c : glowOf(u.wind.move), 0.3 * K, 0.3, 0, true); } }
+      else if (v.flash > 0) A.flash(Math.min(1, v.flash * 6), v.flashCol); else if (u.frozen && live) A.flash(0.5, 0x6fd8ff); else A.flash(0);
+      if (u.frozen && live && !v.ice) { const s = h * 1.15; v.ice = fx.hold('shard', { color: 0xbff2ff, opacity: 0.55 }, (t, dtt, m) => { m.position.set(u.x, h * 0.55, u.z); m.scale.set(s, s * 1.3, s); m.rotation.y = 0.6; }); }
+      else if (!(u.frozen && live) && v.ice) { v.ice.release(0.2); v.ice = null; for (let j = 0; j < 6; j++) { const a = vr() * 6.283; fx.shard(u.x, h * 0.6, u.z, Math.cos(a) * 4, 4 + vr() * 3, Math.sin(a) * 4, { size: 0.3 * K, color: 0xbff2ff, life: 0.5, opacity: 0.8 }); } }
       if (u.rush && vr() < 0.8) fx.spark(u.x - u.rush.dx * u.r, 0.2, u.z - u.rush.dz * u.r, (vr() - 0.5) * 3, 1 + vr() * 2, (vr() - 0.5) * 3, 0xf5efe0, 0.4 * K, 0.4);
-      A.update(u.frozen ? 0 : fdt * (u.moving && !A.rigged ? 1 : 1));
+      A.update(u.frozen && live ? 0 : fdt);
       if (v.pop <= 0 || fallY > h * 2 || n >= RN) continue;
       // ring, aura, bars
       const s = Math.max(0.55, u.r * 1.4);
@@ -817,7 +823,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     for (const m of [ringMesh, auraMesh, barBg, barLag, barFill, barCharge, starMesh, markMesh]) { m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true; }
     drawDying(fdt); drawLeaving(dt);
     for (let i = timed.length - 1; i >= 0; i--) { timed[i].t -= fdt; if (timed[i].t <= 0) { timed[i].h.release(0.2); timed.splice(i, 1); } }
-    if (fight) drawFlying(fdt);
+    if (fight && live) drawFlying(fdt);
     // balls
     for (const w of ballViews) {
       const b = w.b, sp = Math.hypot(b.vx, b.vz), R = b.R, tm = teams[b.team];
@@ -885,6 +891,15 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     if (w >= 0) { const s = isMe(teams[w]) ? 1 : 0.8; [523, 659, 784, 1047].forEach((f, i) => tone(f * s, f * s, i === 3 ? 0.5 : 0.14, 'square', 0.16, i * 0.13)); for (const v of views) if (v.u.team === w && v.u.alive) v.actor.play('entrance', { dur: 1.4 }); }
   }
   function finishNow() { phase = 'done'; finished = true; }
+  // The fight has stopped where the last knockout left it. What was in mid-air or half wound up is let go, so the
+  // survivors are not left frozen in a pose with a telegraph under them while the winner is announced.
+  function settle() {
+    for (const v of views) dropTele(v);
+    for (const w of shotViews.values()) w.h.release(0.15); shotViews.clear();
+    for (const w of waveViews.values()) w.g.removeFromParent(); waveViews.clear();
+    for (const w of poolViews.values()) { w.a.release(0.4); w.b.release(0.4); } poolViews.clear();
+    for (const t of timed) t.h.release(0.2); timed.length = 0;
+  }
   function beginDrop() {
     phase = 'drop'; pt = 0; endShowcase(true);
     if (hud) hud.root.classList.add('ar-fighting');
@@ -919,7 +934,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
       } else if (phase === 'fight') {
         sim.step(dt); drain();
         if (sim.frozen) fdt = dt * 0.08;
-        if (sim.finished) { phase = 'finish'; pt = 0; tone(1400, 1400, 0.5, 'square', 0.16); tone(1400, 900, 0.3, 'square', 0.16, 0.5); bump(0.5); }
+        if (sim.finished) { phase = 'finish'; pt = 0; settle(); tone(1400, 1400, 0.5, 'square', 0.16); tone(1400, 900, 0.3, 'square', 0.16, 0.5); bump(0.5); }
       } else if (phase === 'finish') {
         if (pt < FREEZE) fdt = dt * SLOWMO;                     // the last knockout, slowly
         else if (!cheering) celebrate();
@@ -932,12 +947,12 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     status() { const st = sim.status(); st.forEach((s, k) => { s.brought = plans[k].before; s.merged = plans[k].after; s.bench = plans[k].bench; }); return st; },
     result() { return sim.result(); },
     skip() {                                                    // play the rest out instantly: 30 Hz, every ball CPU-driven, no effects
-      if (destroyed || finished) return;
+      if (destroyed || finished || noSkip) return;                // (a multiplayer fight is stepped by its host: skipping one copy would part it from the rest)
       quiet = true; fx.quiet = true; sim.auto = true;
       endShowcase(false); for (const q of leaving) freeActor(q.actor); leaving.length = 0;
       for (let i = 0; i < 9000 && !sim.finished; i++) { sim.step(1 / 30); sim.events.length = 0; }
-      for (const d of dying) { d.v.actor.root.removeFromParent(); d.v.actor.dispose(); } dying.length = 0;
-      for (const v of views.slice()) { if (!v.u.alive) { v.actor.root.removeFromParent(); forget(v); } else { v.fall = -1; v.pop = 1; v.delay = 0; dropTele(v); } }
+      for (const d of dying) freeActor(d.v.actor); dying.length = 0;
+      for (const v of views.slice()) { if (!v.u.alive) { forget(v); freeActor(v.actor); } else { v.fall = -1; v.pop = 1; v.delay = 0; v.hop = null; dropTele(v); } }
       for (const u of sim.field) { const v = ensure(u); v.fall = -1; v.pop = 1; }
       sim.balls.forEach((b, k) => { if (b.gone) { ballViews[k].fallen = true; ballViews[k].group.visible = false; ballViews[k].ring.visible = false; if (hud) hud.panels[k].root.classList.add('ar-noball'); } dimBall(ballViews[k], b.teamOut); });
       fx.clear(); for (const w of shotViews.values()) w.h.release(0); shotViews.clear();
@@ -948,8 +963,8 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     destroy() {
       if (destroyed) return; destroyed = true;
       if (hud) { hud.root.remove(); hud = null; }
-      endShowcase(false); for (const q of leaving) q.actor.dispose();
-      for (const v of views) v.actor.dispose(); for (const d of dying) d.v.actor.dispose();
+      endShowcase(false);
+      for (const a of [...actors]) freeActor(a);
       fx.dispose();
       for (const m of mats.values()) m.dispose(); for (const o of owned) o.dispose();
       for (const m of [ringMesh, auraMesh, barBg, barLag, barFill, barCharge, starMesh, markMesh, guideMesh]) m.dispose();

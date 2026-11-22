@@ -65,7 +65,7 @@ export function createFx({ scene, camera, L }) {
       m.userData.kind = kind; owned.push(m);
     }
     m.color.set(color); m.opacity = opacity;
-    return m;
+    return m;                                                   // (nothing else about a pooled material may be changed by its user)
   }
   const give = (m) => { free[m.userData.kind].push(m); };
 
@@ -190,9 +190,9 @@ export function createFx({ scene, camera, L }) {
       }
     },
     // a shape that stays until released: returns { mesh, set(fn), release(fade) }
-    hold(kind, { color = 0xffffff, opacity = 0.5, lit = false, arc = 0.6, parent = scene } = {}, tick) {
+    hold(kind, { color = 0xffffff, opacity = 0.5, lit = false, solid = false, arc = 0.6, parent = scene } = {}, tick) {      // solid: a lit, shaded thing (a rock) rather than a flat glow
       const geo = kind === 'wedge' ? wedge(arc) : GEO[kind];
-      const a = add(geo, mat(kind === 'shardLam' ? 'lam' : lit ? 'add' : 'norm', color, opacity), Infinity, tick || (() => {}), parent);
+      const a = add(geo, mat(solid ? 'lam' : lit ? 'add' : 'norm', color, opacity), Infinity, tick || (() => {}), parent);
       a.mesh.renderOrder = 1;
       return { mesh: a.mesh, act: a, release(fade = 0.15) { if (a.done || a.fading) return; a.fading = true; const o = a.mesh.material.opacity, old = a.tick; a.hold = false; a.t = 0; a.life = fade; a.tick = (k, dt, m) => { old(1, dt, m); m.material.opacity = o * (1 - k); }; } };
     },

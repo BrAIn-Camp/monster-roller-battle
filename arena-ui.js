@@ -71,6 +71,10 @@ const STYLE = `
 @keyframes ar-bump{0%{transform:scale(1)}40%{transform:scale(1.08)}100%{transform:scale(1)}}
 .ar-ballx{display:none;float:right;width:1em;height:1em;border-radius:50%;border:2px solid #2b2540;margin-left:.3em;background:linear-gradient(135deg,transparent 42%,#c22 42%,#c22 58%,transparent 58%),#ddd}
 .ar-noball .ar-ballx{display:inline-block}
+.ar-keys{position:absolute;left:50%;bottom:1em;transform:translateX(-50%);font-size:.82em;white-space:nowrap;transition:opacity .5s}
+.ar-keys.ar-gone{opacity:0}
+.ar-keys kbd{display:inline-block;min-width:1.5em;margin:0 .1em;padding:0 .35em;border:2px solid #2b2540;border-bottom-width:4px;border-radius:.4em;background:#fff;font:inherit;text-align:center}
+.ar-keys span{display:inline-block;width:.9em}
 .ar-clock.ar-hot{background:#ff5a3a;color:#fff;animation:ar-pulse .45s ease-in-out infinite alternate}
 @keyframes ar-pulse{from{transform:scale(1)}to{transform:scale(1.14)}}
 @keyframes ar-punch{0%{opacity:0;transform:translate(-50%,-50%) scale(2.8)}18%{opacity:1;transform:translate(-50%,-50%) scale(.88)}30%{transform:translate(-50%,-50%) scale(1.1)}42%{transform:translate(-50%,-50%) scale(1)}78%{opacity:1;transform:translate(-50%,-50%) scale(1)}100%{opacity:0;transform:translate(-50%,-50%) scale(.8)}}
