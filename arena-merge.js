@@ -145,8 +145,8 @@ export function planArmy(army, { specOf, teamIndex = 0, limit = SQUAD } = {}) {
   const ringOf = (k) => (EVOLVES[k.dex] || k.stars < MAX_STARS ? Math.min(0.97, have(k) / MERGE_SIZE) : 1);
   const goalOf = (k) => {
     const n = EVOLVES[k.dex];
-    if (n) return { spec: makeSpec(specOf, Array.isArray(n) ? pickBranch(n, branchN) : n, k.scale, 0, k.titan), stars: 0 };
-    return k.stars < MAX_STARS ? { spec: makeSpec(specOf, k.dex, k.scale, k.stars + 1, k.titan), stars: k.stars + 1 } : null;
+    if (n) { const dex = Array.isArray(n) ? pickBranch(n, branchN) : n; return { spec: makeSpec(specOf, dex, k.scale, 0, k.titan), stars: 0, kind: keyOf(dex, k.scale, k.titan, k.stars) }; }
+    return k.stars < MAX_STARS ? { spec: makeSpec(specOf, k.dex, k.scale, k.stars + 1, k.titan), stars: k.stars + 1, kind: keyOf(k.dex, k.scale, k.titan, k.stars + 1) } : null;
   };
 
   // ---- the roster: one entry per monster, strongest first; the first `limit` fight

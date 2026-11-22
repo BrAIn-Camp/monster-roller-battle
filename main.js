@@ -7,6 +7,8 @@ import { buildCritterGeometry, critterMaterial } from './critters/kit.js';
 import * as LOCAL from './critters/local-mode.js';   // the local Stadium-model build; inert while its switch is off
 import { createBattle, power } from './battle.js';
 import { EVENTS } from './events.js';
+import { planArmy } from './arena-merge.js';
+import { createSquadHud } from './squad-hud.js';
 import { openRoom, openPublicRoom, cleanCode } from './net.js';
 import crittersA from './critters/critters_1.js';
 import crittersB from './critters/critters_2.js';
@@ -834,13 +836,71 @@ function updateHud() {
   $('timer').textContent = S.mode === 'timed' ? fmtTime(Math.max(0, S.timeLeft)) : 'Free roam';
   let html = '';
   if (S.mode === 'timed') {                     // standings, biggest ball first
-    const rows = allBalls().map((b) => ({ tm: TEAMS[b.team], name: seatLabel(b.team), d: b.d, army: b.army, me: b === S })).sort((a, b) => b.d - a.d);
+    const rows = allBalls().map((b) => ({ tm: TEAMS[b.team], name: seatLabel(b.team), d: b.d, army: b.army, me: b === S, best: bestOf[b.team] })).sort((a, b) => b.d - a.d);
     const big = Math.max(rows[0].d, 1);
-    rows.forEach((r, i) => { html += `<div class="sb${r.me ? ' me' : ''}"><i class="rk">${i + 1}</i><b style="color:${r.tm.css}">${r.name}</b><span class="szbar"><u style="width:${(r.d / big * 100).toFixed(0)}%;background:${r.tm.css}"></u></span><em>${fmtSize(r.d)}</em><span class="cr">${r.army.length}</span></div>`; });
+    rows.forEach((r, i) => { html += `<div class="sb${r.me ? ' me' : ''}"><i class="rk">${i + 1}</i><b style="color:${r.tm.css}">${r.name}</b>${bestChip(r.best)}<span class="szbar"><u style="width:${(r.d / big * 100).toFixed(0)}%;background:${r.tm.css}"></u></span><em>${fmtSize(r.d)}</em><span class="cr">${r.army.length}</span></div>`; });
     html = '<div class="sbhead"><span>Standings</span><span>size</span><span>critters</span></div>' + html;
   }
   $('goals').style.display = html ? '' : 'none';
   if ($('goals').innerHTML !== html) $('goals').innerHTML = html;
+}
+
+// ---------- the six (squad-hud.js): the player's best six monsters as they stand after merging, and what the rest of
+// the collection adds to them. Worked out again whenever the army changes; the arena uses the very same sum. ----------
+const faces = new Map();                      // slot -> portrait
+let faceR = null, squad = null, squadOn = null, squadRun = null, squadSig = -1, squadT = 0, squadStale = false, bestT = 0;
+const bestOf = [];                            // each team's strongest monster, for the standings
+function renderFace(inst) {                   // a portrait of a Stadium model (the generated critters already have theirs: thumbs)
+  if (!faceR) {
+    faceR = { r: new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true }), sc: new THREE.Scene(), cam: new THREE.PerspectiveCamera(30, 1, 0.05, 80) };
+    faceR.r.setSize(112, 112);
+    faceR.sc.add(new THREE.HemisphereLight(0xffffff, 0x8899aa, 2.2));
+    const dl = new THREE.DirectionalLight(0xffffff, 1.6); dl.position.set(2, 3, 4); faceR.sc.add(dl);
+  }
+  const { r, sc, cam } = faceR;
+  sc.add(inst.root); inst.update(0);
+  // (measured on the posed model, bone by bone: the plain box of a skinned mesh is its rest pose and can be far too big)
+  inst.root.updateMatrixWorld(true);
+  const b = new THREE.Box3().setFromObject(inst.root, true), c = b.getCenter(new V3()), sz = b.getSize(new V3()), s = Math.max(sz.x, sz.y, sz.z * 0.8);
+  cam.position.set(c.x + s * 0.85, c.y + s * 0.45, c.z + s * 1.7); cam.lookAt(c);
+  r.render(sc, cam);
+  const url = r.domElement.toDataURL();
+  sc.remove(inst.root); inst.dispose();
+  return url;
+}
+function faceOf(spec) {
+  const b = baseOf(spec);
+  if (!faces.has(b.dex)) {
+    faces.set(b.dex, thumbs[b.id] || '');
+    LOCAL.dexModel(b.dex).then((l) => { if (!l) return; try { faces.set(b.dex, renderFace(LOCAL.dexInstance(l))); squadStale = true; } catch (e) { console.warn('portrait', b.dex, e); } });
+  }
+  return faces.get(b.dex);
+}
+const armySig = (army) => { let s = army.length * 7919; for (const sp of army) s = (s + sp.dex * 131 + Math.round(sp.height * 100)) | 0; return s; };
+const bestChip = (r) => (r ? `<span class="bestm" title="${r.spec.name}"><img alt="" src="${faceOf(r.spec)}">${r.stars ? `<i>${'★'.repeat(r.stars)}</i>` : ''}</span>` : '<span class="bestm"></span>');
+function tickSquad(dt) {
+  if (!squad) squad = createSquadHud({ root: $('hud'), faceOf, typeColor: (t) => TYPE_COLORS[t] || '#bbb',
+    origin: () => { tmpV.set(S.x, S.y, S.z).project(camera); return { x: (tmpV.x + 1) / 2 * innerWidth, y: (1 - tmpV.y) / 2 * innerHeight }; },
+    sfx: {
+      evolve: (stars) => { [659, 784, 988, 1319].forEach((f, i) => tone(f, f * 1.01, i === 3 ? 0.32 : 0.1, 'triangle', 0.14, i * 0.075)); tone(1976, 2637, 0.25, 'sine', 0.06 + stars * 0.02, 0.3); },
+      back: () => tone(330, 165, 0.22, 'triangle', 0.1),
+      ping: (i) => tone(1175 + i * 110, 1568 + i * 110, 0.07, 'sine', 0.045),
+    } });
+  const on = S.mode === 'timed';
+  if (squadOn !== on) { squadOn = on; squad.show(on); $('dexpop').classList.toggle('beside', on); }
+  if (!on) return;
+  if (squadRun !== S.runSeen) { squadRun = S.runSeen; squadSig = -1; squad.reset(); bestOf.length = 0; bestT = 0; }
+  if (squadStale) { squadStale = false; squad.refresh(); }
+  if ((squadT -= dt) <= 0) {
+    squadT = 0.1;
+    const sig = armySig(S.army);
+    if (sig !== squadSig) { const quiet = squadSig === -1; squadSig = sig; squad.set(planArmy(S.army, { specOf, teamIndex: S.team }), { quiet }); }
+  }
+  if ((bestT -= dt) <= 0) {                   // rivals' strongest, twice a second
+    bestT = 0.5;
+    for (const b of allBalls()) bestOf[b.team] = (b === S && squad.plan ? squad.plan : planArmy(b.army, { specOf, teamIndex: b.team, limit: 1 })).roster[0] || null;
+  }
+  squad.step(dt);
 }
 
 function showArea(name) { const el = $('area'); el.textContent = name; el.classList.remove('show'); void el.offsetWidth; el.classList.add('show'); }
@@ -1510,6 +1570,7 @@ function updateTags() {
       const a = Math.atan2(dy, dx), m = 56, hw = innerWidth / 2 - m, hh = innerHeight / 2 - m;
       const kx = Math.min(hw / Math.abs(Math.cos(a) || 1e-6), hh / Math.abs(Math.sin(a) || 1e-6));
       sx = innerWidth / 2 + Math.cos(a) * kx; sy = innerHeight / 2 + Math.sin(a) * kx;
+      if (squadOn) sx = Math.min(sx, innerWidth - 70 - Math.max(40, Math.min(68, innerHeight * 0.084)) * 1.7);       // (the six have the right edge)
       el.className = 'tag edge'; el.innerHTML = `<b style="display:inline-block;transform:rotate(${(a + Math.PI / 2).toFixed(2)}rad)">▲</b> ${tm.name} ${Math.round(dist)} m`;
     }
     el.style.display = 'block'; el.style.left = sx.toFixed(0) + 'px'; el.style.top = sy.toFixed(0) + 'px'; el.style.background = tm.css;
@@ -2648,6 +2709,7 @@ function update(dt) {
   if (S.mode === 'timed' && !frozen) { S.timeLeft -= dt; tickMatch(dt); if (S.timeLeft <= 0 && S.state === 'play' && !NET.client) timeUp(); }
   if (NET.on) netTick(dt);
   updateHud();
+  tickSquad(dt);
 }
 
 S.step = update; S.groundAt = groundAt; S.T = T;   // debug hooks

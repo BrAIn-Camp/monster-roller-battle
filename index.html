@@ -33,11 +33,14 @@
   #timer { position: absolute; left: 50%; top: 16px; transform: translateX(-50%); font-size: 26px; font-weight: 800; min-width: 80px; text-align: center; }
   #goals { position: absolute; left: 16px; top: 16px; font-size: 13px; font-weight: 700; padding: 6px 10px 8px; min-width: 250px; }
   .sbhead { display: grid; grid-template-columns: 1fr 62px 50px; gap: 0 4px; padding: 0 4px; font-size: 9px; font-weight: 800; letter-spacing: 1.5px; text-transform: uppercase; opacity: .55; text-align: right; margin-bottom: 2px; } .sbhead span:first-child { text-align: left; }
-  .sb { display: grid; grid-template-columns: 20px 54px 1fr 62px 50px; align-items: center; gap: 0 4px; padding: 2px 4px; border-radius: 9px; white-space: nowrap; }
+  .sb { display: grid; grid-template-columns: 20px 54px 26px 1fr 62px 50px; align-items: center; gap: 0 4px; padding: 2px 4px; border-radius: 9px; white-space: nowrap; }
   .sb.me { background: #ffe9a8; outline: 2px solid #2b2540; }
   .sb .rk { font-style: normal; font-weight: 800; width: 18px; height: 18px; line-height: 18px; text-align: center; border-radius: 50%; background: #2b2540; color: #fff; font-size: 11px; }
   .sb .szbar { height: 9px; border: 2px solid #2b2540; border-radius: 6px; background: #fff; overflow: hidden; } .sb .szbar u { display: block; height: 100%; transition: width .3s; }
   .sb em { font-style: normal; text-align: right; font-weight: 800; } .sb .cr { text-align: right; opacity: .8; }
+  .sb .bestm { position: relative; width: 24px; height: 24px; border-radius: 50%; border: 2px solid #2b2540; background: #fff; overflow: hidden; box-sizing: border-box; } .sb .bestm:empty { visibility: hidden; }
+  .sb .bestm img { position: absolute; left: -10%; top: -10%; width: 120%; height: 120%; object-fit: contain; }
+  .sb .bestm i { position: absolute; left: 0; right: 0; bottom: -3px; font-style: normal; font-size: 8px; line-height: 1; text-align: center; color: #ffd23f; -webkit-text-stroke: 2px #2b2540; paint-order: stroke fill; letter-spacing: -1px; }
   #goals .done { color: #2f8a3f; }
   #pick { position: absolute; left: 50%; bottom: 142px; transform: translateX(-50%); font-size: 18px; font-weight: 800; opacity: 0; white-space: nowrap; }
   #pick.show { animation: pop 1.6s ease-out; }
@@ -46,6 +49,7 @@
   #hudMute { position: absolute; right: 16px; bottom: 16px; font-size: 12px; font-weight: 700; padding: 4px 10px; margin: 0; pointer-events: auto; box-shadow: 0 2px 0 #2b2540; }
   #dexpop { position: absolute; right: 16px; top: 16px; width: 176px; text-align: center; opacity: 0; transform: translateX(40px); transition: opacity .25s, transform .25s; font-size: 13px; font-weight: 700; padding: 8px 10px 10px; }
   #dexpop.show { opacity: 1; transform: none; }
+  #dexpop.beside { right: calc(clamp(40px, 8.4vh, 68px) * 1.7 + 28px); }      /* the six (squad-hud.js) have the right edge */
   #dexpop canvas { width: 150px; height: 150px; display: block; margin: 0 auto; }
   #dexpop .nm { font-size: 16px; font-weight: 800; }
   #dexpop .meta { font-weight: 600; opacity: .75; font-size: 12px; }
