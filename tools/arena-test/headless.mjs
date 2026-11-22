@@ -100,6 +100,14 @@ if (flag('smoke') || true) {
     const c = fight(99, { armies, arena, dt: 1 / 60 });
     if (flag('verbose') || flag('smoke')) console.log(`${arena.id.padEnd(7)} ${a.res.seconds.toFixed(1)}s (${c.res.seconds.toFixed(1)}s at 60 Hz) winner ${a.res.winner}${a.res.timedOut ? ' ON TIME' : ''} ko ${a.tally.ko} ring ${a.tally.ring} balls out ${a.tally.ballout} specials ${a.tally.fire} broken ${a.tally.breaks} rallies ${a.tally.rally} scoops ${a.tally.scoop} rams ${a.tally.ram}`);
   }
+  // merging never loses or invents a critter: what went into the roster adds up to what was brought
+  for (let i = 0; i < 300; i++) {
+    const army = makeArmy(rnd, 1 + Math.floor(rnd() * 260)), p = MERGE.planArmy(army, { arena: ARENAS[i % 8], specOf, teamIndex: i % 4 });
+    const made = p.roster.reduce((n, r) => n + r.made, 0);
+    if (made !== army.length || p.after !== p.roster.length || p.before !== army.length) { console.error(`FAIL merge: ${army.length} critters became a roster made of ${made}`); process.exitCode = 1; break; }
+    if (p.roster.some((r) => !(r.boost >= 1 && r.boost <= MERGE.MAX_BOOST) || r.stars > MERGE.MAX_STARS)) { console.error('FAIL merge: a boost or star count is out of range'); process.exitCode = 1; break; }
+    for (let j = 1; j < p.roster.length; j++) if (p.roster[j].value > p.roster[j - 1].value + 1e-9) { console.error('FAIL merge: roster is not strongest first'); process.exitCode = 1; break; }
+  }
   // degenerate armies must not break it
   for (const sizes of [[0, 0, 0, 0], [1, 0, 0, 0], [1, 1, 0, 0], [3, 400, 1, 0]]) {
     const armies = sizes.map((n) => makeArmy(rnd, n)), r = fight(5, { armies, arena: ARENAS[0], check: true });

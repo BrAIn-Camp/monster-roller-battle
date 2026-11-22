@@ -48,6 +48,41 @@ built, the decisions taken without you, and every bug or rough edge found along 
 | 1 | (new) The Stampede move pushed a rival ball every step it overlapped, not once: balls reached 400 m/s, and a ram at that speed drew a white ring 90 m wide over the whole screen. | The push happens once per charge; ball speed and ram distance are capped. |
 | 2 | (existing, local build) Effect flipbook textures (fire tails, gas) were marked for upload before their file had arrived, so the renderer logged a warning every frame until it did. | `texFor` in `critters/stadium.js` no longer marks them; the loader does when the file lands. |
 | 3 | (existing) Space both dashed and skipped in the arena. | Hold Enter to skip (see decisions). |
+| 4 | (new) A monster that fights at range never got close enough to use a ring-shaped signature move (Bloom Drain, Earthshaker): Venusaur simply never fired. | With a full charge it closes in first. |
+| 5 | (new) Sinking the surroundings below the platform also buried the lava pools and sea foam under the ground. | Ground lowered to where it was. |
+| 6 | (new) Every fight built its own copies of the effect shapes and never freed them. | Built once and shared. |
+| 7 | (existing) The arena had no music at all: the round's tune stops at "TIME UP". | A fight tune from the same synth (waiting / fighting / sudden death). |
+
+## Checked
+
+- `node tools/arena-test/headless.mjs smoke`: every arena, positions finite on every step, the same seed gives the same
+  fight twice, degenerate armies (none, one team only, 3 against 400), and 300 random armies through the merger with the
+  bookkeeping checked (what goes into the roster adds up to what was brought).
+- Two browser tabs in a `?net=local` room: both played the arena fight from the host's steps and ended with the same
+  winner, time and top fighter. No "ended differently" warning on the client.
+- The whole round in the browser, single player: wheel, merge intro, drop, fight, finish, results. No console errors.
+- Skipping during the intro and mid-fight, leaving mid-fight, three fights in a row, resizing the window.
+- The stand-in build (`?models=0` on the test page): generated critters fight with the same moves and effects.
+- Cost: about 4 ms a frame for the fight and its drawing with 48 animated models on the floor (test page, this machine).
+
+## Balance (headless, 800 fights, armies of 14 to 195 critters)
+
+| Measure | Result |
+|---|---|
+| Decided by knockout | 100% (none reached the 150 s safety net) |
+| Length | median 53 s; one in ten under 42 s, one in ten over 62 s |
+| First knockout | about 5 s in |
+| Knockouts that are ring-outs | 28% |
+| Signature moves per fight | about 80 (of which about 21 are rallies by the CPU balls) |
+| Balls lost per fight | 1.1 of 4 (CPU) |
+| The strongest army wins | 50% (2nd strongest 29%, 3rd 14%, 4th 7%) |
+| Wins by seat, identical armies | 24 / 28 / 24 / 23% over 600 fights |
+| Between arenas | 49 to 54 s, ring-outs 26 to 32% |
+
+What was changed to get there: health x1.5 (fights were over in 40 s, before sudden death ever started), signature moves
+charge in 17 s rather than 11 (there were 120 a fight), and 2 s between a ball's rallies.
+
+Run it yourself: `node tools/arena-test/headless.mjs 400`. Try a number without editing: `... tune=RAMP_AT:60,HP_SCALE:12`.
 
 ## Still to do / known rough edges
 
