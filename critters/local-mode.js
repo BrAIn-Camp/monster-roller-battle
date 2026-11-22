@@ -20,7 +20,7 @@
 import * as THREE from 'three';
 import { loadStadium, makeStadiumInstance, stadiumMeta } from './stadium.js';
 
-export const LOCAL_MODELS = false;
+export const LOCAL_MODELS = true;
 
 // ---------------------------------------------------------------- state
 let on = false;                 // LOCAL_MODELS *and* the models are actually present
