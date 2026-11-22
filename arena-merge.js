@@ -44,10 +44,11 @@ export const MAX_BOOST = 3.2;
 //   how much: a budget of bonus, 6 x BONUS_AVG x S / (S + BONUS_HALF), where S is the six totals added together. The
 //             first critters count most and every one after a little less. BONUS_HALF is about a hundred ordinary
 //             critters, so a big haul gets half of all there is.
-//   where:    the budget is shared between the six stats by the SQUARE of each stat's share of S. A collection
-//             spread evenly gets the same on every stat (at most BONUS_AVG); one that leans towards fast critters
-//             gets much more Speed and less of the rest, up to BONUS_STAT_MAX on one stat. So what a player
-//             chooses to roll up shows as a shape, and no collection can fill every corner.
+//   where:    the budget is shared between the six stats by the SQUARE of how far each stat's share of S is above
+//             or below what an ordinary mix of critters gives it (USUAL). An ordinary mix gets the same on every
+//             stat (at most BONUS_AVG); one that leans towards fast critters gets much more Speed and less of the
+//             rest, up to BONUS_STAT_MAX on one stat. So what a player chooses to roll up shows as a shape, no
+//             collection can fill every corner, and two teams rarely come out best at the same thing.
 // All six stats rising together multiply up (more health, more damage, less damage taken, more attacks): +9% on
 // each wins as often as a team made 30% stronger outright, which is what a large, even haul is meant to be worth
 // (measured: node tools/arena-test/headless.mjs bonus).
@@ -60,13 +61,31 @@ const statsOf = (spec) => STATS[spec.dex] || DEF;
 export function power(spec) { const b = statsOf(spec); return (b[0] + b[1] + b[2] + b[3] + b[4] + b[5]) * Math.sqrt(spec.height) / 100; }
 // Health x damage, in the arena's own terms (see unitStats in arena-sim.js): both scale with the root of height.
 export function strength(spec, boost = 1) { const b = statsOf(spec); return b[0] * Math.max(b[1], b[3]) * spec.height * boost * boost; }
+// What one of every species together would add to each stat, as a share of the whole (times six, so 1 is an even
+// share). Critters as a whole lean towards Attack and Speed; measuring a collection against this, rather than
+// against an even split, is what lets a lean of the player's own making show.
+const USUAL = (() => {
+  const t = [0, 0, 0, 0, 0, 0]; let S = 0;
+  for (const dex of Object.keys(STATS)) {
+    const b = STATS[dex]; let sum = 0, cubes = 0;
+    for (let i = 0; i < 6; i++) { sum += b[i]; cubes += b[i] * b[i] * b[i]; }
+    for (let i = 0; i < 6; i++) { const v = b[i] * b[i] * b[i] / cubes * sum; t[i] += v; S += v; }
+  }
+  return t.map((v) => v / S * 6);
+})();
 // The share added to each stat by spare critters whose stats add up to `spare`.
 export function teamBonus(spare) {
   let S = 0, W = 0;
   for (let i = 0; i < 6; i++) S += spare[i] > 0 ? spare[i] : 0;
   if (!(S > 0)) return [0, 0, 0, 0, 0, 0];
-  const budget = 6 * BONUS_AVG * S / (S + BONUS_HALF), w = spare.map((v) => { const q = v > 0 ? v / S : 0; W += q * q; return q * q; });
+  const budget = 6 * BONUS_AVG * S / (S + BONUS_HALF), w = spare.map((v, i) => { const q = v > 0 ? v / S / USUAL[i] : 0; W += q * q; return q * q; });
   return w.map((q) => Math.min(BONUS_STAT_MAX, budget * q / W));
+}
+// One number for what a bonus is worth in a fight: how much stronger it makes the six (0.3 = 30% stronger). Health
+// and damage count in full; taking less and striking more often count for about half as much each. It is for
+// showing, not for deciding anything; it agrees with the measured worth of an even bonus (9% on each is about 30%).
+export function teamPower(bonus) {
+  return (1 + bonus[0]) * (1 + (bonus[1] + bonus[3]) / 2) * Math.sqrt((1 + (bonus[2] + bonus[4]) / 2) * (1 + bonus[5])) - 1;
 }
 // What one critter adds to `spare` when it is not in a fighter: its stat total (times the root of its height),
 // shared out by the cube of each stat, so that it goes mostly to what that critter is best at. A fast critter

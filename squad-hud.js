@@ -16,7 +16,7 @@
 //   .step(dt)    once a frame       .reset()   a new round       .show(on)       .refresh()  redraw the portraits
 //
 // The hexagon is also drawn before the arena fight (arena-battle.js), so its drawing is exported: hexSvg().
-import { BONUS_STAT_MAX, SQUAD } from './arena-merge.js';
+import { BONUS_STAT_MAX, SQUAD, teamPower } from './arena-merge.js';
 
 export const STAT_COL = ['#ff5a5a', '#ff9d42', '#f2c230', '#5aa2ff', '#4fc98a', '#ff7ab8'];      // HP, Attack, Defence, Sp. Atk, Sp. Def, Speed
 const STAT_ICON = [                                             // a heart, a sword, a shield, a spark, a ward, an arrow
@@ -43,9 +43,14 @@ export function hexSvg() {
   for (const [x, y] of AX) s += `<line class="hx-guide" x1="0" y1="0" x2="${(R_OUT * x).toFixed(1)}" y2="${(R_OUT * y).toFixed(1)}"/>`;
   s += `<polygon class="hx-fill" points="${hexPts(R_IN)}"/>`;
   AX.forEach(([x, y], i) => { s += `<g class="hx-ico" data-i="${i}" transform="translate(${(R_ICON * x).toFixed(1)} ${(R_ICON * y).toFixed(1)})"><g><circle r="8" fill="${STAT_COL[i]}"/><g transform="translate(-5.400 -5.400) scale(.45)" fill="#fff">${STAT_ICON[i]}</g></g></g>`; });
-  return s + '</svg>';
+  return s + '<text class="hx-num" x="0" y="5.5" text-anchor="middle"></text></svg>';
 }
-export function hexDraw(svg, values) { svg.querySelector('.hx-fill').setAttribute('points', hexPts(values.map(radius))); }
+// values: 0..1 per corner (from hexValues). text: what to write in the middle (the team's power), if anything.
+export function hexDraw(svg, values, text) {
+  svg.querySelector('.hx-fill').setAttribute('points', hexPts(values.map(radius)));
+  if (text !== undefined) { const t = svg.querySelector('.hx-num'); if (t.textContent !== text) t.textContent = text; }
+}
+export const powerText = (bonus) => { const p = Math.round(teamPower(bonus) * 100); return p > 0 ? '+' + p + '%' : ''; };
 // The frame is the most ONE stat can ever be given, which an even collection never comes near: so what is drawn is a
 // shape, not a bar that fills. (On a slight curve, so that the first few critters already show.)
 export const hexValues = (bonus) => bonus.map((b) => Math.pow(Math.max(0, Math.min(1, b / BONUS_STAT_MAX)), 0.75));
@@ -54,6 +59,7 @@ export const HEX_STYLE = `
 .hx-guide { fill: none; stroke: rgba(43,37,64,.16); stroke-width: 1; }
 .hx-fill { fill: rgba(255,181,46,.78); stroke: ${DARK}; stroke-width: 2; stroke-linejoin: round; }
 .hx-ico circle { stroke: ${DARK}; stroke-width: 2; }
+.hx-num { font: 800 15px "Trebuchet MS", "Segoe UI", sans-serif; fill: #fff; stroke: ${DARK}; stroke-width: 4.5px; paint-order: stroke fill; stroke-linejoin: round; }
 .hx-ico > g { transform-box: fill-box; transform-origin: center; }
 .hx-ico.ping > g { animation: hxping .5s cubic-bezier(.2,1.6,.4,1); }
 @keyframes hxping { 0% { transform: scale(1); } 30% { transform: scale(1.75); filter: brightness(1.5) drop-shadow(0 0 5px #fff); } 100% { transform: scale(1); } }`;
@@ -100,7 +106,7 @@ export function createSquadHud({ root, faceOf, typeColor = () => '#ccc', origin 
   for (let i = 0; i < SQUAD; i++) el('div', 'sq-slot', cardsEl).style.top = `calc(var(--c) * ${(i * 1.12).toFixed(2)})`;
   const hexEl = el('div', 'sq-hex', box, hexSvg()), hexSvgEl = hexEl.firstChild, icons = [...hexEl.querySelectorAll('.hx-ico')];
   const cards = new Map();            // id -> card
-  let shown = null, hexNow = [0, 0, 0, 0, 0, 0], hexTo = [0, 0, 0, 0, 0, 0], sparks = 0, visible = true, laterN = 0;
+  let shown = null, hexNow = [0, 0, 0, 0, 0, 0], hexTo = [0, 0, 0, 0, 0, 0], sparks = 0, visible = true, laterN = 0, powNow = '', powNext = '';
   const pulse = (node, cls) => { node.classList.remove(cls); void node.offsetWidth; node.classList.add(cls); };
 
   function makeCard(id) {
@@ -175,12 +181,13 @@ export function createSquadHud({ root, faceOf, typeColor = () => '#ccc', origin 
     for (const c of gone) { cards.delete(c.id); c.root.classList.add('out'); setTimeout(() => c.root.remove(), 320); }
     // ---- what the rest of the collection adds
     const to = hexValues(plan.bonus), grew = [];
+    powNext = powerText(plan.bonus);
     if (old && !quiet) to.forEach((v, i) => { if (v > hexTo[i] + 1e-4) grew.push([v - hexTo[i], i]); });
     grew.sort((a, b) => b[0] - a[0]);
     // ---- sparks: to the card that was fed, else to the corners that grew most. What they feed moves when they land.
-    const n = ++laterN, rings = () => { if (n !== laterN) return; roster.forEach((r, i) => { const c = cards.get(ids[i]); if (c) setRing(c, r.ring); }); };
-    const hex = () => { if (n === laterN) hexTo = to; };
-    if (quiet) { rings(); hexTo = to; hexNow = to.slice(); hexDraw(hexSvgEl, hexNow); return; }
+    const n = ++laterN, showPow = () => { if (powNow !== powNext) { powNow = powNext; hexDraw(hexSvgEl, hexNow, powNow); } }, rings = () => { if (n !== laterN) return; roster.forEach((r, i) => { const c = cards.get(ids[i]); if (c) setRing(c, r.ring); }); };
+    const hex = () => { if (n === laterN) { hexTo = to; showPow(); } };
+    if (quiet) { rings(); hexTo = to; hexNow = to.slice(); showPow(); hexDraw(hexSvgEl, hexNow); return; }
     if (evolved) { if (sfx.evolve) sfx.evolve(evolved.stars || 0); setTimeout(rings, 420); } else if (fed.length) { const c = fed[0]; spark(c.root, '#ffd23f', () => { rings(); pulse(c.root, 'fed'); }); } else rings();
     if (lost && sfx.back) sfx.back();
     if (grew.length && !evolved && !fed.length) {
@@ -198,7 +205,7 @@ export function createSquadHud({ root, faceOf, typeColor = () => '#ccc', origin 
       if (moved) hexDraw(hexSvgEl, hexNow);
     },
     refresh() { for (const c of cards.values()) if (c.entry) paint(c, c.entry); },
-    reset() { for (const c of cards.values()) c.root.remove(); cards.clear(); shown = null; laterN++; hexNow = [0, 0, 0, 0, 0, 0]; hexTo = [0, 0, 0, 0, 0, 0]; hexDraw(hexSvgEl, hexNow); },
+    reset() { for (const c of cards.values()) c.root.remove(); cards.clear(); shown = null; laterN++; hexNow = [0, 0, 0, 0, 0, 0]; hexTo = [0, 0, 0, 0, 0, 0]; powNow = powNext = ''; hexDraw(hexSvgEl, hexNow, ''); },
     show(on) { if (visible !== on) { visible = on; box.style.display = on ? '' : 'none'; } },
     get plan() { return shown; },
     el: box,

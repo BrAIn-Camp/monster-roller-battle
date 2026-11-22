@@ -48,7 +48,7 @@ const STYLE = `
 .ar-pop.ar-on{animation:ar-rise 1.2s ease-out both}
 .ar-skip{position:absolute;right:15.5em;bottom:1em;font-size:.8em;background:#bfe7ff;overflow:hidden;opacity:.85}
 .ar-skip i{position:absolute;left:0;bottom:0;height:.28em;width:0;background:#2b2540}
-.ar-team{width:12.5em}
+.ar-team{width:15em}
 .ar-tname{white-space:nowrap}
 .ar-tally{display:flex;align-items:center;justify-content:center;gap:.45em;font-size:1.55em;margin:.1em 0 0}
 .ar-tally .ar-to{color:#b07a00}
@@ -67,16 +67,15 @@ const STYLE = `
 .ar-pip.ar-out{background:#2b2540!important;opacity:.3;transform:scale(.72)}
 .ar-pip.ar-sc{background:#fff!important}
 .ar-bench{font-size:.68em;line-height:1;align-self:center;margin-left:.2em;padding:.12em .4em;border-radius:.6em;background:#2b2540;color:#fff;opacity:.75}
-.ar-team{min-height:3.7em}.ar-tname{padding-right:3em}
+.ar-team{min-height:4.4em}
 .ar-hex{position:absolute;right:.45em;bottom:.3em;width:3em}
 .ar-hex svg{display:block;width:100%;overflow:visible}
 .ar-hex .hx-ico,.ar-hex .hx-guide{display:none}
-.ar-fighting .ar-tname{padding-right:0}
 .ar-pips{margin-right:3.3em;min-height:1.7em;align-items:center}
-.ar-fighting .ar-tname{padding-right:4.6em}.ar-fighting .ar-ko{margin-right:0}
+.ar-pips{margin-right:8em}
 .ar-hexdone svg{animation:ar-hexdone .6s ease-out}
 @keyframes ar-hexdone{0%{filter:none;transform:scale(1)}30%{filter:brightness(1.35) drop-shadow(0 0 .5em #ffe169);transform:scale(1.13)}100%{filter:none;transform:scale(1)}}
-.ar-cer{position:absolute;top:7.8em;width:57%;padding:.55em .8em .7em;border-width:4px;background:rgba(255,250,240,.97);box-shadow:0 6px 0 rgba(43,37,64,.4),0 0 0 4px var(--tc);opacity:0;transform:scale(.8);transition:opacity .2s,transform .22s cubic-bezier(.3,1.4,.5,1);z-index:2}
+.ar-cer{position:absolute;top:7em;width:58%;font-size:1.1em;padding:.55em .8em .7em;border-width:4px;background:rgba(255,250,240,.97);box-shadow:0 6px 0 rgba(43,37,64,.4),0 0 0 4px var(--tc);opacity:0;transform:scale(.8);transition:opacity .2s,transform .22s cubic-bezier(.3,1.4,.5,1);z-index:2}
 .ar-cer.ar-on{opacity:1;transform:none}
 .ar-cer.ar-l{left:2.5%}.ar-cer.ar-r{right:2.5%}
 .ar-cer-head{display:flex;align-items:center;font-size:1.3em;line-height:1.2}
@@ -95,9 +94,16 @@ const STYLE = `
 .ar-cer-pc b{display:block;font-size:1.25em;min-height:1em}
 .ar-cer-pc.ar-top b{font-size:1.7em;animation:ar-lit .35s ease-out}
 .ar-pc0{left:50%;top:.75em}.ar-pc1{left:88%;top:23%}.ar-pc2{left:88%;top:55%}.ar-pc3{left:50%;top:calc(100% - 4.4em)}.ar-pc4{left:12%;top:55%}.ar-pc5{left:12%;top:23%}
-.ar-cer-best{position:absolute;left:50%;bottom:.25em;transform:translateX(-50%) scale(.3);opacity:0;display:flex;align-items:center;gap:.3em;white-space:nowrap;background:var(--sc);color:#fff;border:3px solid #2b2540;border-radius:1em;padding:.1em .7em .1em .25em;font-size:1.25em;box-shadow:0 3px 0 rgba(43,37,64,.4);text-shadow:0 1px 0 rgba(0,0,0,.4);transition:opacity .15s,transform .25s cubic-bezier(.3,1.7,.5,1)}
+.ar-cer-best{position:absolute;left:50%;bottom:.25em;transform:translateX(-50%) scale(.3);opacity:0;display:flex;align-items:center;gap:.4em;white-space:nowrap;background:#2b2540;color:#ffe169;border:3px solid #2b2540;border-radius:1em;padding:.1em .7em .1em .25em;font-size:1.25em;box-shadow:0 3px 0 rgba(43,37,64,.4);text-shadow:0 1px 0 rgba(0,0,0,.4);transition:opacity .15s,transform .25s cubic-bezier(.3,1.7,.5,1)}
 .ar-cer-best.ar-on{opacity:1;transform:translateX(-50%) scale(1)}
-.ar-cer-best span{text-transform:uppercase;letter-spacing:.04em}
+.ar-cer-best{padding:.1em .8em}.ar-cer-best span{text-transform:uppercase;letter-spacing:.06em;color:#fff;font-size:.8em}.ar-cer-best b{font-size:1.25em}
+.ar-cer-hexw .hx-num{font-size:17px}
+.ar-hex .hx-num{display:none}
+.ar-root:not(.ar-fighting) .ar-clock{visibility:hidden}
+.ar-call{animation:ar-call .5s cubic-bezier(.3,1.5,.5,1)}@keyframes ar-call{0%{transform:scale(1)}35%{transform:scale(1.22);box-shadow:0 0 0 5px #ffe169,0 4px 0 rgba(43,37,64,.35)}100%{transform:scale(1)}}
+.ar-cer-f s{position:absolute;left:-.7em;top:-.5em;width:1.9em;height:1.9em;border-radius:24%;border:2px solid #2b2540;background-size:116%;background-position:center;background-repeat:no-repeat;text-decoration:none;box-shadow:0 2px 0 rgba(43,37,64,.35)}
+.ar-cer-f s b{position:absolute;right:-.5em;bottom:-.35em;font-size:.78em;line-height:1;color:#fff;-webkit-text-stroke:3px #2b2540;paint-order:stroke fill}
+.ar-cer-f.ar-wait s{opacity:.25}
 .st-ico{width:1.5em;height:1.5em;flex:none;vertical-align:middle}
 .ar-cer-six{display:flex;justify-content:center;gap:.9em;margin-top:.5em;padding-bottom:1em}
 .ar-cer-f{position:relative;width:4.2em;height:4.2em;border-radius:50%;border:3px solid #2b2540;box-shadow:0 3px 0 rgba(43,37,64,.35);transition:filter .2s}
@@ -112,9 +118,10 @@ const STYLE = `
 .ar-cerpop{animation:ar-cerpop .3s ease-out}@keyframes ar-cerpop{0%{transform:scale(1)}40%{transform:scale(1.025)}100%{transform:scale(1)}}
 .ar-spk{position:fixed;left:0;top:0;width:.85em;height:.85em;border-radius:50%;border:2px solid #2b2540;box-shadow:0 0 .5em .1em rgba(255,255,255,.9);z-index:5}
 .ar-badge{position:fixed;left:0;top:0;display:flex;align-items:center;gap:.15em;font-style:normal;font-size:1.9em;white-space:nowrap;color:#fff;-webkit-text-stroke:5px #2b2540;paint-order:stroke fill;z-index:6;filter:drop-shadow(0 3px 0 rgba(43,37,64,.4))}
-.ar-best{display:none;position:absolute;right:3.6em;bottom:.45em;align-items:center;gap:.15em;font-size:1.05em;line-height:1;-webkit-text-stroke:3px #2b2540;paint-order:stroke fill}
+.ar-best{display:none;position:absolute;right:3.7em;bottom:.5em;align-items:center;gap:.2em;font-size:1.05em;line-height:1;color:#ffe169;-webkit-text-stroke:3px #2b2540;paint-order:stroke fill}
+.ar-best small{font-size:.85em;color:#fff;background:#2b2540;border-radius:.6em;padding:.12em .45em;-webkit-text-stroke:0;margin-right:.15em}
 .ar-best.ar-on{display:flex;animation:ar-lit .35s ease-out}
-.ar-fighting .ar-best{bottom:auto;top:.35em;right:.6em}
+.ar-fighting .ar-best small{display:none}
 .ar-six{display:inline-flex;gap:.22em;align-items:center;vertical-align:middle}
 .ar-six i{width:.8em;height:.8em;border-radius:50%;border:2px solid #2b2540}
 .ar-six b{font-size:1.15em;line-height:.8;color:#ffd23f;-webkit-text-stroke:3px #2b2540;paint-order:stroke fill}

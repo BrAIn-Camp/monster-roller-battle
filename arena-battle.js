@@ -9,21 +9,21 @@
 //   countdown -> 3, 2, 1, GO     fight -> sim.step()     finish -> slow-motion last knockout, then the cheer
 import * as THREE from 'three';
 import { createSim, TUNE, CORNERS } from './arena-sim.js';
-import { planArmy, teamBonus, STAT_NAMES } from './arena-merge.js';
-import { hexSvg, hexDraw, hexValues, statIcon, STAT_COL, STAT_SHORT, HEX_STYLE } from './squad-hud.js';
+import { planArmy, teamBonus, teamPower } from './arena-merge.js';
+import { hexSvg, hexDraw, hexValues, powerText, statIcon, STAT_COL, STAT_SHORT, HEX_STYLE } from './squad-hud.js';
 import { createFx, TYPE_HEX, TYPE_GLOW } from './arena-fx.js';
 import { el, setText, replay, injectStyle, isMe, teamLabel, chip, typeColor, HAS_DOM, clamp } from './arena-ui.js';
 
 // ---------- timings and looks ----------
 const LINE_AT = 0.3, LINE_STEP = 0.2;                 // the muster: when the first of a team's six steps up, and the gap to the next
-const LINE_END = 1.9;                                 // ...and when the first team's turn begins
+const LINE_END = 2.7;                                 // ...and when the first team's turn begins (time to look at one's own six)
 // A team's turn. A player's count takes four seconds (less for a small collection); a CPU team's a little over one.
-const SIX_HUMAN = 0.9, SIX_CPU = 0.3;                 // counting the critters that became the six...
-const REST_HUMAN = 3.1, REST_CPU = 0.8;               // ...and all the rest, into the hexagon
+const SIX_HUMAN = 1.0, SIX_CPU = 0.25;                // counting the critters that became the six...
+const REST_HUMAN = 3.0, REST_CPU = 0.6;               // ...and all the rest, into the hexagon
 const SETTLE = 0.25;                                  // what it came to
-const GIVE_HUMAN = 1.9, GIVE_CPU = 1.1, FLY_MS = 300; // spending it on the six, a stat at a time
-const TURN_IN = 0.35, TURN_OUT = 0.2;                 // the panel opening and closing
-const MUSTER_HOLD = 0.4;                              // a beat after the last team
+const GIVE_HUMAN = 1.9, GIVE_CPU = 0.95, FLY_MS = 300;// spending it on the six, a stat at a time
+const TURN_IN = 0.3, TURN_OUT = 0.2;                  // the panel opening and closing
+const MUSTER_HOLD = 1.5;                              // after the last team: the four are compared, weakest first
 const DROP_PHASE = 1.5, DROP_FALL = 0.42;
 const STAT_HEX = STAT_COL.map((c) => parseInt(c.slice(1), 16));
 const COUNT_STEP = 0.7;       // seconds per "3", "2", "1"
@@ -361,7 +361,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
       return { warn: noop, fire: noop, view() { for (const q of Z) { q.g.position.set(q.x, 0.1 * Math.sin(T + q.vx * 9), q.z); q.g.rotation.y = T * 0.15 + q.vx; } } };
     }
     if (kind === 'bumpers') {
-      for (const q of Z) { const r = q.r; put(GEO.cyl, lam(0xffffff), q.x, 0.3, q.z, r * 2, 0.6, r * 2); q.cap = put(GEO.sph, lam(0xe24a4a), q.x, 0.7, q.z, r * 2.3, 1.1, r * 2.3); put(GEO.thin, bas(0xffe169), q.x, 0.02, q.z, r * 1.5); }
+      for (const q of Z) { const r = q.r; put(GEO.cyl, lam(0xffffff), q.x, 0.3, q.z, r * 2, 0.6, r * 2); q.cap = put(GEO.sph, lam(0x8a5cc8), q.x, 0.7, q.z, r * 2.3, 1.1, r * 2.3); put(GEO.thin, bas(0xffffff), q.x, 0.02, q.z, r * 1.5); }      // (purple: no team's colour, so one is never taken for a ball)
       return { warn: noop, fire: noop, bumper: (q) => { tone(700, 1100, 0.1, 'square', 0.12); fx.puff(q.x, 0.8, q.z, 6, 0xffe169, 5, 0.3, 0.4); fx.ring(q.x, q.z, { r0: q.r, r1: q.r * 2.6, color: 0xffe169, life: 0.25 }); },
         view() { for (const q of Z) { const r = q.r, k = 1 + q.hit * 1.6; q.cap.scale.set(r * 2.3 * k, 1.1 / k, r * 2.3 * k); } } };
     }
@@ -654,12 +654,12 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     let top = 0; for (let i = 1; i < 6; i++) if (bonus[i] > bonus[top]) top = i;
     const sixT = (human ? SIX_HUMAN : SIX_CPU) * clamp(into.length / 12, 0.5, 1), restT = !rest.length ? 0 : (human ? REST_HUMAN : REST_CPU) * clamp(0.4 + rest.length / 50, 0.5, 1);
     muster.push({ team: k, cx, cz, face: Math.atan2(-cx, -cz), recs, lined: [], into, rest, shown: 0, run: [0, 0, 0, 0, 0, 0], bonus, top, vals: hexValues(bonus), human,
-      sixT, restT, give: !rest.length ? 0.3 : human ? GIVE_HUMAN : GIVE_CPU, gap: human ? 0.16 : 0.08, stage: 0, wave: 0, pend: [], fin: false, done: false, over: false, stand: bench.filter((q) => q.k === k), tick: 0, ui: null });
+      power: teamPower(bonus), caught: p.before, pow: 0, sixT, restT, give: !rest.length ? 0.3 : human ? GIVE_HUMAN : GIVE_CPU, gap: human ? 0.16 : 0.06, stage: 0, wave: 0, pend: [], fin: false, done: false, over: false, stand: bench.filter((q) => q.k === k), tick: 0, ui: null });
   });
   const order = muster.slice().sort((a, b) => (a.team === myTeam ? 2 : a.human ? 1 : 0) - (b.team === myTeam ? 2 : b.human ? 1 : 0) || a.team - b.team);
   const turnLen = (c) => TURN_IN + c.sixT + c.restT + SETTLE + c.give + TURN_OUT;
   const musterLen = muster.length ? LINE_END + order.reduce((s, c) => s + turnLen(c), 0) + MUSTER_HOLD : 0;
-  let turnI = -1, turnT = 0, musterCam = null, dashWas = false, endHold = 0;
+  let turnI = -1, turnT = 0, musterCam = null, dashWas = false, endHold = 0, rollCall = [];
   // two rows of three across the corner, the strongest three in front
   const lineSpot = (c, j) => {
     const n = c.recs.length, front = Math.min(3, n), row = j < front ? 0 : 1, inRow = row ? n - front : front, col = row ? j - front : j;
@@ -674,7 +674,8 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     if (!hud) return;
     const p = hud.panels[c.team];
     hexDraw(p.hex, c.vals);
-    if (c.bonus[c.top] > 0.004 && !p.best.firstChild) { p.best.innerHTML = statIcon(c.top) + '<b>' + pct(c.bonus[c.top]) + '</b>'; p.best.style.color = STAT_COL[c.top]; p.best.classList.add('ar-on'); }
+    // how many it caught, the stat it came out best at, and what all of it is worth: the three things to compare
+    if (!p.best.firstChild) { p.best.innerHTML = `<small>${c.caught}</small>` + (c.power > 0.004 ? statIcon(c.top) + '<b>' + pct(c.power) + '</b>' : ''); p.best.classList.add('ar-on'); }
   }
   // something flying across the screen from one HUD element to another (or to a point): a spark, or a badge
   let domFlying = 0;
@@ -710,8 +711,10 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     const labels = [0, 1, 2, 3, 4, 5].map((i) => { const b = el('div', 'ar-cer-pc ar-pc' + i, hexw, `<small>${STAT_SHORT[i]}</small><b></b>`); b.style.color = STAT_COL[i]; return b; });
     const banner = el('div', 'ar-cer-best', hexw, '');
     const six = el('div', 'ar-cer-six', p);
-    const faces = c.recs.map((r) => {
-      const f = el('div', 'ar-cer-f ar-wait', six, `<img alt="" src="${faceUrl(r.spec)}"><em>${'★'.repeat(r.stars || 0)}</em><u>${'<i></i>'.repeat(6)}</u>`);
+    const faces = c.recs.map((r, j) => {
+      // (a merged one also carries a small tag of what it was made of: "x9" on the little one it grew from)
+      const from = (plans[c.team].roster[j].from || []).slice().sort((a, b) => b.count - a.count)[0], made = r.made > 1 && from;
+      const f = el('div', 'ar-cer-f ar-wait', six, `<img alt="" src="${faceUrl(r.spec)}"><em>${'★'.repeat(r.stars || 0)}</em>${made ? `<s style="background-color:${typeColor(from.spec.types[0])};background-image:url(${faceUrl(from.spec)})"><b>×${r.made}</b></s>` : ''}<u>${'<i></i>'.repeat(6)}</u>`);
       f.style.background = `radial-gradient(circle at 50% 35%, #fff 0%, ${typeColor(r.spec.types[0])} 140%)`;
       return { root: f, pips: [...f.querySelectorAll('u i')], need: 0, got: 0 };
     });
@@ -740,8 +743,10 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     } else replay(t.root, 'ar-tick');
     t.n++; if (t.n > 1) t.tag.textContent = '×' + t.n;
     if (e.add) {                                                // a spare: to the corner of the hexagon it feeds
-      const top = topStat(e.add), vals = hexValues(teamBonus(c.run));
-      domFly(t.root, ui.icons[top], { color: STAT_COL[top] }, () => { if (c.ui !== ui) return; hexDraw(ui.hex, vals); replay(ui.icons[top], 'ping'); });
+      const top = topStat(e.add), now = teamBonus(c.run), vals = hexValues(now);
+      c.pow = Math.max(c.pow, teamPower(now));                    // (the number in the middle only ever climbs)
+      const text = pct(c.pow);
+      domFly(t.root, ui.icons[top], { color: STAT_COL[top] }, () => { if (c.ui !== ui) return; hexDraw(ui.hex, vals, text); replay(ui.icons[top], 'ping'); });
     } else {                                                    // one of the six's own: to its portrait, which wakes when it has them all
       const f = ui.faces[e.j];
       domFly(t.root, f.root, { color: '#ffd23f' }, () => { if (c.ui !== ui) return; f.got++; if (f.got >= f.need) { f.root.classList.remove('ar-wait'); replay(f.root, 'ar-wake'); } else replay(f.root, 'ar-fed'); });
@@ -766,10 +771,10 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
       c.stage = 1;
       if (ui) {
         for (const f of ui.faces) f.root.classList.remove('ar-wait');
-        hexDraw(ui.hex, c.vals);
+        hexDraw(ui.hex, c.vals, powerText(c.bonus));
         if (c.rest.length) {
           for (let i = 0; i < 6; i++) { ui.labels[i].lastChild.textContent = c.bonus[i] > 0.004 ? pct(c.bonus[i]) : ''; if (i === c.top) ui.labels[i].classList.add('ar-top'); }
-          ui.banner.innerHTML = statIcon(c.top) + `<span>${STAT_NAMES[c.top]}</span><b>${pct(c.bonus[c.top])}</b>`; ui.banner.style.setProperty('--sc', STAT_COL[c.top]); ui.banner.classList.add('ar-on');
+          ui.banner.innerHTML = `<span>Power</span><b>${pct(c.power)}</b>`; ui.banner.classList.add('ar-on');
           replay(ui.hex.parentNode, 'ar-hexdone');
         }
       }
@@ -836,7 +841,18 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     }
     if (pt < LINE_END) return false;
     // ---- one team at a time
-    if (turnI >= order.length) { musterCam = null; return (endHold += dt) >= MUSTER_HOLD; }
+    if (turnI >= order.length) {
+      // every team has had its turn: back to the whole floor, and the four are called out, weakest collection first
+      musterCam = null;
+      if (endHold === 0) rollCall = order.slice().sort((a, b) => a.power - b.power || a.team - b.team);
+      while (rollCall.length && endHold >= 0.25 + (order.length - rollCall.length) * 0.24) {
+        const c = rollCall.shift(), n = order.length - rollCall.length, f = 392 * 1.189 ** n;
+        if (hud) { replay(hud.panels[c.team].root, 'ar-call'); }
+        tone(f, f * 1.5, 0.14, 'triangle', c.team === myTeam ? 0.16 : 0.09);
+        for (const q of c.lined) q.kick = 1, q.col = teams[c.team].hex;
+      }
+      return (endHold += dt) >= MUSTER_HOLD;
+    }
     let c = order[turnI];
     if (turnI < 0 || turnT >= turnLen(c)) {
       if (c) endTurn(c);
@@ -844,7 +860,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
       if (!c) { musterCam = null; return false; }
       openPanel(c);
       // the camera goes to its corner, leaving room beside it for the panel (and keeping the six clear of the corner panels)
-      musterCam = { x: c.cx * L * 0.1, z: c.cz * L * (c.cz > 0 ? 0.3 : 0.2), f: 0.3 };
+      musterCam = { x: c.cx * L * 0.1, z: c.cz * L * (c.cz > 0 ? 0.3 : 0.1), f: 0.3 };
       tone(330, 494, 0.16, 'triangle', c.team === myTeam ? 0.13 : 0.06);
     }
     // a press of dash (any player's) hurries the count to its end
@@ -995,7 +1011,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
       A.update(u.frozen && live ? 0 : fdt);
       if (v.pop <= 0 || fallY > h * 2 || n >= RN) continue;
       // the gauges under it: health round the outside, the signature move inside
-      const s = Math.max(0.75, u.r * 1.8), f = clamp(u.hp / u.st.maxHp, 0, 1), ch = !fight ? 0 : u.wind ? 1 : u.charge;
+      const s = clamp(u.r * 1.8, 0.75, sim.hRef * 0.82), f = clamp(u.hp / u.st.maxHp, 0, 1), ch = !fight ? 0 : u.wind ? 1 : u.charge;      // (capped: a giant's ring would swallow its neighbours')
       v.lag = Math.max(f, v.lag - fdt * 0.45);
       hpRing.set(n, u.x, 0.02, u.z, s, f, v.lag, teamCol[u.team]);
       chRing.set(n, u.x, 0.024, u.z, s, ch, ch, ch >= 1 && Math.sin(T * 24) > 0 ? WHITE : GOLD);
