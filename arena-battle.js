@@ -29,6 +29,14 @@ const SND = {                 // [wave, from Hz, to Hz, seconds] for a hit of ea
   ice: ['sine', 1750, 1150, 0.1], fighting: ['square', 190, 85, 0.1], poison: ['sawtooth', 310, 210, 0.14], ground: ['sawtooth', 125, 55, 0.17], flying: ['sine', 880, 1320, 0.1],
   psychic: ['sine', 980, 1480, 0.16], bug: ['square', 920, 600, 0.05], rock: ['sawtooth', 155, 68, 0.14], ghost: ['sine', 300, 520, 0.2], dragon: ['sawtooth', 250, 520, 0.18],
 };
+// shapes shared by every fight (built once, never disposed)
+const GEO = {
+  box: new THREE.BoxGeometry(1, 1, 1), cyl: new THREE.CylinderGeometry(0.5, 0.5, 1, 14), cone: new THREE.ConeGeometry(0.5, 1, 10),
+  sph: new THREE.SphereGeometry(0.5, 14, 10), rock: new THREE.DodecahedronGeometry(0.5, 0),
+  disc: new THREE.CircleGeometry(1, 30).rotateX(-Math.PI / 2), ring: new THREE.RingGeometry(0.78, 1, 30).rotateX(-Math.PI / 2),
+  thin: new THREE.RingGeometry(0.9, 1, 30).rotateX(-Math.PI / 2), plane: new THREE.PlaneGeometry(1, 1), planeL: new THREE.PlaneGeometry(1, 1).translate(0.5, 0, 0),
+  unitRing: new THREE.RingGeometry(0.86, 1, 30).rotateX(-Math.PI / 2),
+};
 const backOut = (u) => 1 + 2.7 * (u - 1) ** 3 + 1.7 * (u - 1) ** 2;
 const bounceOut = (u) => { const n = 7.5625, d = 2.75; return u < 1 / d ? n * u * u : u < 2 / d ? n * (u -= 1.5 / d) * u + 0.75 : u < 2.5 / d ? n * (u -= 2.25 / d) * u + 0.9375 : n * (u -= 2.625 / d) * u + 0.984375; };
 const smooth = (u) => u * u * (3 - 2 * u);
@@ -68,12 +76,6 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
   const matOf = (Kind, tag, color, o) => { const key = tag + color + (o ? JSON.stringify(o) : ''); let m = mats.get(key); if (!m) { m = new Kind(Object.assign({ color }, o)); mats.set(key, m); } return m; };
   const lam = (color, o) => matOf(THREE.MeshLambertMaterial, 'L', color, o), bas = (color, o) => matOf(THREE.MeshBasicMaterial, 'B', color, o);
   const glass = (color, opacity) => bas(color, { transparent: true, opacity, depthWrite: false });
-  const GEO = {
-    box: new THREE.BoxGeometry(1, 1, 1), cyl: new THREE.CylinderGeometry(0.5, 0.5, 1, 14), cone: new THREE.ConeGeometry(0.5, 1, 10),
-    sph: new THREE.SphereGeometry(0.5, 14, 10), rock: new THREE.DodecahedronGeometry(0.5, 0),
-    disc: new THREE.CircleGeometry(1, 30).rotateX(-Math.PI / 2), ring: new THREE.RingGeometry(0.78, 1, 30).rotateX(-Math.PI / 2),
-    thin: new THREE.RingGeometry(0.9, 1, 30).rotateX(-Math.PI / 2), plane: new THREE.PlaneGeometry(1, 1), planeL: new THREE.PlaneGeometry(1, 1).translate(0.5, 0, 0),
-  };
   // Everything beyond the floor sits in `outside`, which is sunk by DROP: the floor is a platform and what is
   // around it is a long way down. put() sends anything placed past the edge there by itself.
   const outside = new THREE.Group(); outside.position.y = -DROP; scene.add(outside);
@@ -176,7 +178,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
   // ---- drawn in bulk: team rings, favoured auras, health bars, signature-move meters, stars, "roll through me" marks
   const RN = NT * TUNE.FIELD_CAP + 24;
   const inst = (geo, material, n = RN) => { const m = new THREE.InstancedMesh(geo, material, n); m.frustumCulled = false; m.count = 0; scene.add(m); owned.push(material); return m; };
-  const ringMesh = inst(new THREE.RingGeometry(0.86, 1, 30).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.9, depthWrite: false }));
+  const ringMesh = inst(GEO.unitRing, new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.9, depthWrite: false }));
   const auraMesh = inst(GEO.thin, new THREE.MeshBasicMaterial({ color: 0xffe169, transparent: true, opacity: 0.9, depthWrite: false, blending: THREE.AdditiveBlending }));
   const barBg = inst(GEO.plane, new THREE.MeshBasicMaterial({ color: 0x2b2540, depthTest: false, transparent: true }));
   const barLag = inst(GEO.planeL, new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false, transparent: true }));

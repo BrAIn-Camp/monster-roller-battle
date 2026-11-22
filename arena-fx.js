@@ -14,13 +14,12 @@ export const TYPE_GLOW = { normal: 0xffffff, fire: 0xffd23f, water: 0xbfe6ff, gr
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const easeOut = (k) => 1 - (1 - k) * (1 - k);
 
-export function createFx({ scene, camera, L }) {
-  const rnd = Math.random;
-  const m4 = new THREE.Matrix4(), col = new THREE.Color(), v3 = new THREE.Vector3(), q4 = new THREE.Quaternion(), s3 = new THREE.Vector3();
-  const owned = [];
-
-  // ---- shared shapes. Flat ones lie on the floor (y up); upright ones face the camera.
-  const flat = (g) => g.rotateX(-Math.PI / 2);
+// ---- shared shapes, built once and kept (every fight uses the same ones). Flat ones lie on the floor (y up);
+// upright ones face the camera.
+const flat = (g) => g.rotateX(-Math.PI / 2);
+let SHAPES = null;
+function shapes() {
+  if (SHAPES) return SHAPES;
   const star4 = (() => {                                        // a four-point impact star
     const s = new THREE.Shape(), n = 8;
     for (let i = 0; i < n; i++) { const a = i / n * Math.PI * 2, r = i % 2 ? 0.13 : 1; if (i) s.lineTo(Math.cos(a) * r, Math.sin(a) * r); else s.moveTo(Math.cos(a) * r, Math.sin(a) * r); }
@@ -36,17 +35,26 @@ export function createFx({ scene, camera, L }) {
     s.moveTo(0, 0.5); s.lineTo(0.8, -0.3); s.lineTo(0.8, -0.75); s.lineTo(0, 0.05); s.lineTo(-0.8, -0.75); s.lineTo(-0.8, -0.3); s.closePath();
     return new THREE.ShapeGeometry(s);
   })();
-  const GEO = {
+  SHAPES = {
     box: new THREE.BoxGeometry(1, 1, 1), blob: new THREE.IcosahedronGeometry(0.5, 1), sph: new THREE.SphereGeometry(0.5, 16, 12),
     ring: flat(new THREE.RingGeometry(0.84, 1, 48)), thin: flat(new THREE.RingGeometry(0.93, 1, 48)), disc: flat(new THREE.CircleGeometry(1, 40)),
-    strip: flat(new THREE.PlaneGeometry(1, 1).translate(0, 0.5, 0)),       // lies on the floor, running from the origin along -z before rotation... see hold('strip')
+    strip: flat(new THREE.PlaneGeometry(1, 1).translate(0, 0.5, 0)),       // on the floor, one unit long, running from the origin along -z (as the wedges do)
     quad: new THREE.PlaneGeometry(1, 1), star4, star5, chevron,
     crescent: new THREE.RingGeometry(0.62, 1, 20, 1, Math.PI * 0.15, Math.PI * 0.7),
     cyl: new THREE.CylinderGeometry(0.5, 0.5, 1, 14, 1, true), shard: new THREE.OctahedronGeometry(0.5, 0), rock: new THREE.DodecahedronGeometry(0.5, 0),
     cone: new THREE.ConeGeometry(0.5, 1, 10),
   };
-  const wedges = new Map();
-  const wedge = (arc) => { const key = Math.round(arc * 100); let g = wedges.get(key); if (!g) { g = flat(new THREE.CircleGeometry(1, 28, Math.PI / 2 - arc, arc * 2)); wedges.set(key, g); } return g; };
+  return SHAPES;
+}
+const wedges = new Map();
+const wedgeOf = (arc) => { const key = Math.round(arc * 100); let g = wedges.get(key); if (!g) { g = flat(new THREE.CircleGeometry(1, 28, Math.PI / 2 - arc, arc * 2)); wedges.set(key, g); } return g; };
+
+export function createFx({ scene, camera, L }) {
+  const rnd = Math.random;
+  const m4 = new THREE.Matrix4(), col = new THREE.Color(), v3 = new THREE.Vector3(), q4 = new THREE.Quaternion(), s3 = new THREE.Vector3();
+  const owned = [];
+
+  const GEO = shapes(), wedge = wedgeOf;
 
   // ---- materials: a small pool per look, so a one-shot shape can fade without touching anyone else's
   const free = { add: [], norm: [], lam: [] };
