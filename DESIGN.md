@@ -166,7 +166,8 @@ it), `arena-battle.js` (everything on screen), `arena-fx.js` (particles and effe
 
 1. *Merge.* Three of a kind become one of the next stage of their line, again and again (9 -> 3 -> 1). Three of a kind that
    cannot evolve become a starred, bigger version (up to three stars). A merged monster is worth 1.5x what went into it.
-   The strongest 20 fight (12 on the floor, 8 in reserve); the rest "back" them for up to +50% health and damage.
+   The strongest 20 fight (12 on the floor, 8 in reserve); the rest watch from a stand beside their team's corner and
+   "back" them for up to +50% health and damage (sparks fly from the stand to the fighters as they land).
    Each team's best three merges are shown at a spot in front of its corner: three spin together, flash, and one stands
    there. The results line up by the corner and walk on as the fighters they are.
 2. *Drop.* The rest of the fighters and the four balls fall in. 3, 2, 1, GO.

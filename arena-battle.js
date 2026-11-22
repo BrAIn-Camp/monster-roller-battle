@@ -184,6 +184,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
   // ---- drawn in bulk: team rings, favoured auras, health bars, signature-move meters, stars, "roll through me" marks
   const RN = NT * TUNE.FIELD_CAP + 24;
   const inst = (geo, material, n = RN) => { const m = new THREE.InstancedMesh(geo, material, n); m.frustumCulled = false; m.count = 0; scene.add(m); owned.push(material); return m; };
+  const teamColOf = (tm) => new THREE.Color(tm.hex);
   const ringMesh = inst(GEO.unitRing, new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.9, depthWrite: false }));
   const auraMesh = inst(GEO.thin, new THREE.MeshBasicMaterial({ color: 0xffe169, transparent: true, opacity: 0.9, depthWrite: false, blending: THREE.AdditiveBlending }));
   const barBg = inst(GEO.plane, new THREE.MeshBasicMaterial({ color: 0x2b2540, depthTest: false, transparent: true }));
@@ -196,6 +197,23 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
   // the rally shown, not explained
   const GUIDE = 9, guideMesh = inst(GEO.disc, new THREE.MeshBasicMaterial({ color: 0xffe169, transparent: true, opacity: 0.9, depthWrite: false }), GUIDE);
   let guideOn = myTeam >= 0 ? 1 : 0, guideTo = null;
+  // The bench: whoever did not make the roster watches from a stand beside their team's corner. They are what the
+  // "backing" is (arena-merge.js), so as the fighters drop in, sparks fly from the stand to each of them; and they
+  // jump when their team scores.
+  const BENCH_SHOWN = 36, bench = [], excite = new Array(NT).fill(0);
+  teams.forEach((tm, k) => {
+    const n = Math.min(plans[k].bench, BENCH_SHOWN);
+    if (!n) return;
+    const [cx, cz] = CORNERS[k % 4], wid = L * 0.085, len = L * 0.32, bx = cx * (half + wid * 0.5 + L * 0.12), bz = cz * half * 0.56;      // (well clear of the edge: that gap is where monsters fall)
+    put(GEO.box, lam(arena.wall), bx, -0.3, bz, wid, 0.6, len, 0, scene);
+    put(GEO.box, lam(tm.hex), bx, 0.03, bz, wid * 0.84, 0.06, len * 0.95, 0, scene);
+    put(GEO.box, lam(new THREE.Color(arena.wall).multiplyScalar(0.7).getHex()), bx, -0.6 - DROP * 0.5, bz, wid * 0.45, DROP, len * 0.45, 0, scene);
+    const rows = Math.ceil(n / 2), step = Math.min(len * 0.9 / rows, L * 0.036), light = new THREE.Color(tm.hex).lerp(new THREE.Color(0xffffff), 0.45), s = Math.min(step * 0.82, wid * 0.4);
+    for (let i = 0; i < n; i++) bench.push({ k, x: bx + ((i % 2) - 0.5) * wid * 0.46, z: bz + (Math.floor(i / 2) - (rows - 1) / 2) * step, s: s * (0.8 + srand() * 0.35), phase: srand() * 6.28, color: i % 3 ? teamColOf(tm) : light });
+  });
+  const crowd = inst(GEO.sph, new THREE.MeshLambertMaterial(), Math.max(1, bench.length));
+  bench.forEach((q, i) => crowd.setColorAt(i, q.color));
+  crowd.count = bench.length; crowd.castShadow = true;
   barBg.renderOrder = 5; barLag.renderOrder = 6; barFill.renderOrder = 7; barCharge.renderOrder = 7; starMesh.renderOrder = 8; markMesh.renderOrder = 8;
   const teamCol = teams.map((tm) => new THREE.Color(tm.hex)), GOLD = new THREE.Color(0xffd23f), DIM = new THREE.Color(0x8a86a0), WHITE = new THREE.Color(0xffffff);
 
@@ -508,8 +526,8 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
         if (e.heavy) bump(0.22);
         break;
       }
-      case 'ko': launch(e, false); break;
-      case 'ring': launch(e, true); break;
+      case 'ko': launch(e, false); if (e.team >= 0) excite[e.team] = 1; break;
+      case 'ring': launch(e, true); if (e.team >= 0) excite[e.team] = 1; break;
       case 'wind': telegraph(e.u, e.w); break;
       case 'fire': fireFx(e); break;
       case 'break': { const u = e.u, v = u.v; if (v) { dropTele(v); v.squash = 0.35; v.actor.play('hurt'); } for (let i = 0; i < 8; i++) { const a = vr() * 6.283; fx.shard(u.x, u.h * 0.7, u.z, Math.cos(a) * 5, 4 + vr() * 5, Math.sin(a) * 5, { size: 0.35 * K, color: hexOf(e.move), life: 0.6 }); } fx.ring(u.x, u.z, { r0: u.r * 2, r1: u.r * 0.4, color: 0xffffff, life: 0.25 }); tone(900, 180, 0.22, 'square', 0.12); break; }
@@ -820,6 +838,15 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
       }
     }
     guideMesh.count = ng; guideMesh.instanceMatrix.needsUpdate = true;
+    if (bench.length) {                                         // the stands: a restless crowd, on its feet when its team scores or wins
+      for (let k = 0; k < NT; k++) excite[k] = Math.max(k === cheerTeam ? 1 : 0, excite[k] - dt * 0.9);
+      for (let i = 0; i < bench.length; i++) { const q = bench[i], e = excite[q.k], hop = Math.abs(Math.sin(T * (4 + e * 5) + q.phase)) * q.s * (0.12 + e * 0.9); m4.makeScale(q.s, q.s * 1.2, q.s).setPosition(q.x, 0.06 + q.s * 0.6 + hop, q.z); crowd.setMatrixAt(i, m4); }
+      crowd.instanceMatrix.needsUpdate = true;
+      if (phase === 'drop' && pt > 0.25 && pt < 1.6 && sim.field.length) for (let j = 0; j < 3; j++) {            // their backing, sent to the fighters as they land
+        const q = bench[Math.floor(vr() * bench.length)], mates = sim.field.filter((u) => u.team === q.k), u = mates[Math.floor(vr() * mates.length)];
+        if (u) fx.spark(q.x, q.s * 1.4, q.z, (u.x - q.x) / 0.5, 7, (u.z - q.z) / 0.5, vr() < 0.5 ? teams[q.k].hex : 0xffe169, 0.34 * K, 0.5, -28, true);
+      }
+    }
     for (const m of [ringMesh, auraMesh, barBg, barLag, barFill, barCharge, starMesh, markMesh]) { m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true; }
     drawDying(fdt); drawLeaving(dt);
     for (let i = timed.length - 1; i >= 0; i--) { timed[i].t -= fdt; if (timed[i].t <= 0) { timed[i].h.release(0.2); timed.splice(i, 1); } }
@@ -967,7 +994,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
       for (const a of [...actors]) freeActor(a);
       fx.dispose();
       for (const m of mats.values()) m.dispose(); for (const o of owned) o.dispose();
-      for (const m of [ringMesh, auraMesh, barBg, barLag, barFill, barCharge, starMesh, markMesh, guideMesh]) m.dispose();
+      for (const m of [ringMesh, auraMesh, barBg, barLag, barFill, barCharge, starMesh, markMesh, guideMesh, crowd]) m.dispose();
       sun.shadow.map && sun.shadow.map.dispose();
     },
   };
