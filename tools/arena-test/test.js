@@ -157,6 +157,15 @@ function frame(now) { requestAnimationFrame(frame); tick(now); }
 // (a hidden tab gets no animation frames; ?keepalive ticks it from a timer so it can be tested in the background)
 if (Q.has('keepalive')) setInterval(() => { if (performance.now() - last > 200) tick(performance.now()); }, 33);
 window.__tick = (n = 1, dt = 1 / 60) => { for (let i = 0; i < n; i++) advance(dt); return battle && (battle.phase + ' ' + battle.sim.time.toFixed(2)); };
+// For looking closely at one thing from the console:  __look(x, y, w) shows only that part of the screen (fractions of it;
+// w = 1 for everything), __focus(monster, w) centres it on a monster, __Q is the page's options (change, then press R).
+window.__Q = Q;
+window.__look = (x, y, w) => { const c = battle.camera; if (w >= 1) c.clearViewOffset(); else c.setViewOffset(innerWidth, innerHeight, x * innerWidth, y * innerHeight, w * innerWidth, w * innerHeight); };
+window.__focus = (u, w = 0.35) => {
+  const c = battle.camera; c.clearViewOffset(); c.updateMatrixWorld();
+  const p = new THREE.Vector3(u.x, u.h * 0.5, u.z).project(c), sx = p.x * 0.5 + 0.5, sy = -p.y * 0.5 + 0.5;
+  window.__look(Math.max(0, Math.min(1 - w, sx - w / 2)), Math.max(0, Math.min(1 - w, sy - w / 2)), w);
+};
 fit();
 start(null);
 requestAnimationFrame(frame);

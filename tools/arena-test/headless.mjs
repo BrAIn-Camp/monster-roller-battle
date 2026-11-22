@@ -6,6 +6,7 @@
 //     merge      also compare each army merged against the same army unmerged
 //     verbose    one line per fight
 //     mirror     all four teams bring the same army: any difference in who wins is the seat, not the army
+//     tune=HP_SCALE:13,RAMP_AT:40   try other tuning values (the names in TUNE, arena-sim.js)
 //
 // The project's .js files are ES modules with no package.json beside them, so node will not import them where
 // they are: this copies what it needs into a scratch folder that has one.
@@ -33,6 +34,8 @@ const ARENAS = [
 ];
 
 const args = process.argv.slice(2), flag = (f) => args.includes(f), nums = args.filter((a) => /^\d+$/.test(a)).map(Number);
+// tune=HP_SCALE:13,RAMP_AT:40 tries other numbers without editing arena-sim.js
+for (const a of args) if (a.startsWith('tune=')) for (const kv of a.slice(5).split(',')) { const [k, v] = kv.split(':'); if (!(k in SIM.TUNE)) throw new Error('no such tuning value: ' + k); SIM.TUNE[k] = +v; }
 const FIGHTS = flag('smoke') ? 16 : nums[0] || 200, SEED = nums[1] || 1;
 const dice = (seed) => { let s = seed >>> 0; return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; }; };
 

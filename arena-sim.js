@@ -18,7 +18,7 @@ export const TUNE = {
   RAMP_RATE: 0.07,          // damage gains this much per second after that
   RAMP_KB: 0.6,             // and knockback this share of it
   TIME_HARD: 150,           // a safety net only: decided on health if it somehow lasts this long
-  HP_SCALE: 10, DMG_BASE: 8, DMG_RATIO: 22,
+  HP_SCALE: 15, DMG_BASE: 8, DMG_RATIO: 22,
   FAV_DMG: 1.25, FAV_TAKEN: 0.8, FAV_SPEED: 1.1,       // the edge an arena gives its three favoured types
   REINFORCE_EVERY: 0.8,     // seconds between reserves dropping in at a team's corner
   DROP_TIME: 0.8,           // a reserve cannot be hurt, or act, while it falls in
@@ -34,10 +34,10 @@ export const TUNE = {
   EDGE_GRIP: 0.8,           // a monster on its feet keeps its middle this many radii inside the edge
   EDGE_OUT: 0.3,            // and is out once its middle is this many radii past it
   AIR_SAVE: 0.085,          // flyers recover from this far past the edge (share of the arena side)
-  SPECIAL_EVERY: 11,        // seconds for a signature move to charge (quicker for fast monsters)
-  SPECIAL_HIT_GAIN: 0.035,  // and each landed hit adds this much
+  SPECIAL_EVERY: 17,        // seconds for a signature move to charge (quicker for fast monsters)
+  SPECIAL_HIT_GAIN: 0.02,   // and each landed hit adds this much
   BREAK_DIST: 0.9,          // a knock of at least this many metres breaks a wind-up
-  RALLY_CD: 9, RALLY_BALL_CD: 1.1, RALLY_POWER: 1.2, RALLY_WIND: 0.55,
+  RALLY_CD: 9, RALLY_BALL_CD: 2.0, RALLY_POWER: 1.2, RALLY_WIND: 0.55,
   RAM_MIN: 2.5, RAM_PUSH: 0.3, RAM_DMG: 0.04, RAM_IMMUNE: 1.2,
   SCOOP_RATIO: 0.4, SCOOP_GROW: 0.8, SCOOP_GULP: 0.7, SCOOP_DRAG: 0.35,
   BALL_BASE: 1.3, BALL_SPREAD: 0.55, BALL_MAX_GROW: 1.5, BALL_GRIP: 4.5,
