@@ -65,6 +65,7 @@ const STYLE = `
 .ar-pip.ar-res{opacity:.4;transform:scale(.72)}
 .ar-pip.ar-out{background:#2b2540!important;opacity:.3;transform:scale(.72)}
 .ar-pip.ar-sc{background:#fff!important}
+.ar-bench{font-size:.68em;line-height:1;align-self:center;margin-left:.2em;padding:.12em .4em;border-radius:.6em;background:#2b2540;color:#fff;opacity:.75}
 .ar-bump{animation:ar-bump .3s ease-out}
 @keyframes ar-bump{0%{transform:scale(1)}40%{transform:scale(1.08)}100%{transform:scale(1)}}
 .ar-ballx{display:none;float:right;width:1em;height:1em;border-radius:50%;border:2px solid #2b2540;margin-left:.3em;background:linear-gradient(135deg,transparent 42%,#c22 42%,#c22 58%,transparent 58%),#ddd}

@@ -23,7 +23,7 @@ export function createFx({ scene, camera, L }) {
   const flat = (g) => g.rotateX(-Math.PI / 2);
   const star4 = (() => {                                        // a four-point impact star
     const s = new THREE.Shape(), n = 8;
-    for (let i = 0; i < n; i++) { const a = i / n * Math.PI * 2, r = i % 2 ? 0.22 : 1; if (i) s.lineTo(Math.cos(a) * r, Math.sin(a) * r); else s.moveTo(Math.cos(a) * r, Math.sin(a) * r); }
+    for (let i = 0; i < n; i++) { const a = i / n * Math.PI * 2, r = i % 2 ? 0.13 : 1; if (i) s.lineTo(Math.cos(a) * r, Math.sin(a) * r); else s.moveTo(Math.cos(a) * r, Math.sin(a) * r); }
     return new THREE.ShapeGeometry(s);
   })();
   const star5 = (() => {                                        // a five-point star (merge stars, dizzy stars)

@@ -88,7 +88,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
   const bump = (s) => { if (!quiet) shake = Math.max(shake, s); };
 
   // ---- the platform: a slab with a bright lip, team corners, and the themed world far below
-  put(GEO.box, lam(arena.ground), 0, -0.3, 0, L * 9, 0.6, L * 9, 0, outside);
+  put(GEO.box, lam(arena.ground), 0, -0.6, 0, L * 9, 0.6, L * 9, 0, outside);
   const floor = put(GEO.box, lam(arena.floor), 0, -0.2, 0, L, 0.4, L, 0, scene); floor.receiveShadow = true;
   put(GEO.box, lam(arena.wall), 0, -0.4 - DROP * 0.5, 0, L - 0.3, DROP, L - 0.3, 0, scene);
   put(GEO.box, lam(new THREE.Color(arena.wall).multiplyScalar(0.7).getHex()), 0, -DROP - 0.1, 0, L * 0.86, DROP * 0.6, L * 0.86, 0, scene);
@@ -184,6 +184,10 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
   const barCharge = inst(GEO.planeL, new THREE.MeshBasicMaterial({ depthTest: false, transparent: true }));
   const starMesh = inst(fx.GEO.star5, new THREE.MeshBasicMaterial({ color: 0xffd23f, depthTest: false, transparent: true, side: THREE.DoubleSide }), RN * 3);
   const markMesh = inst(fx.GEO.chevron, new THREE.MeshBasicMaterial({ color: 0xffe169, depthTest: false, transparent: true, side: THREE.DoubleSide }), TUNE.FIELD_CAP + 4);
+  // a trail of gold dots from the player's ball to one of their own monsters, until they have rolled through one:
+  // the rally shown, not explained
+  const GUIDE = 9, guideMesh = inst(GEO.disc, new THREE.MeshBasicMaterial({ color: 0xffe169, transparent: true, opacity: 0.9, depthWrite: false }), GUIDE);
+  let guideOn = myTeam >= 0 ? 1 : 0, guideTo = null;
   barBg.renderOrder = 5; barLag.renderOrder = 6; barFill.renderOrder = 7; barCharge.renderOrder = 7; starMesh.renderOrder = 8; markMesh.renderOrder = 8;
   const teamCol = teams.map((tm) => new THREE.Color(tm.hex)), GOLD = new THREE.Color(0xffd23f), DIM = new THREE.Color(0x8a86a0), WHITE = new THREE.Color(0xffffff);
 
@@ -418,7 +422,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     const sp = ring ? Math.hypot(u.kx, u.kz) : clamp(e.dist * 3.4, 7 * K, 26 * K), dx = ring && sp > 0.5 ? u.kx / sp : e.dx, dz = ring && sp > 0.5 ? u.kz / sp : e.dz;
     const big = u.h > sim.hRef * 1.3;
     dying.push({ u, v, x: u.x, y: v.y, z: u.z, vx: dx * Math.max(sp, ring ? 3 : 0), vz: dz * Math.max(sp, ring ? 3 : 0), vy: ring ? 3 + sp * 0.12 : (7 + e.dist * 0.5) * (big ? 0.8 : 1), spin: (vr() < 0.5 ? -1 : 1) * (6 + vr() * 6), rx: 0, t: 0, ring, bounced: false, scale: 1 });
-    v.actor.play('faint', { hold: true, speed: 2.2 }); v.actor.flash(0.9, 0xffffff);
+    v.actor.play('faint', { hold: true, speed: 2.2 });
     if (ring) { tone(1300, 220, 0.6, 'sine', 0.12); fx.ring(u.x, u.z, { r0: u.r, r1: u.r + 3.5 * K, color: 0xffffff, life: 0.35 }); }
     else { fx.star(u.x, u.h * 0.7, u.z, { size: u.h * 0.8 + 1.1 * K, color: 0xfff2b0, life: 0.3, opacity: 0.9 }); fx.ring(u.x, u.z, { r0: u.r, r1: u.r + 3 * K, color: teams[u.team].hex, life: 0.4 }); fx.burst(u.x, u.h * 0.6, u.z, big ? 22 : 12, 0xffffff, 8, 0.4 * K, 0.6); tone(big ? 200 : 300, 60, big ? 0.45 : 0.3, 'triangle', big ? 0.2 : 0.12); }
     cry(u.spec, big ? 0.12 : 0.07); bump(big ? 0.35 : 0.15);
@@ -441,7 +445,8 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
       }
       d.scale = Math.max(0.35, 1 - d.t * 0.35);
       root.position.set(d.x, d.y + u.h * 0.3, d.z); root.rotation.set(d.rx, d.v.yaw, d.rx * 0.3); root.scale.setScalar(u.h * d.scale);
-      d.v.actor.flash(Math.max(0, 0.9 - d.t * 3)); d.v.actor.update(dt);
+      d.v.actor.flash(Math.max(0, 0.55 - d.t * 2.5)); d.v.actor.update(dt);
+      if (i === dying.length - 1) lastKo.set(d.x, d.y, d.z);    // (the camera follows the last one out)
       if (vr() < 0.5) fx.spark(d.x, d.y + u.h * 0.3, d.z, 0, 0, 0, 0xffffff, 0.3 * K, 0.3, 0, true);
     }
   }
@@ -656,6 +661,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
       const fill = el('i', '', el('div', 'ar-hp', p)); fill.style.background = tm.css;
       const pips = el('div', 'ar-pips', p), list = [];
       for (let i = 0; i < sim.recs[k].length; i++) { const d = el('i', 'ar-pip', pips); d.style.background = tm.css; list.push({ e: d, s: '' }); }
+      if (plan.bench > 0) el('span', 'ar-bench', pips, `+${plan.bench}`).title = `${plan.bench} more back them from the bench: +${Math.round((plan.backing - 1) * 100)}% health and damage`;
       const tally = el('div', 'ar-tally', p, plan.before > plan.after ? `<b>${plan.before}</b><span class="ar-tri"><i></i><i></i><i></i></span><b class="ar-to">${plan.after}</b>` : `<b>${plan.before}</b>`);
       hud.panels.push({ root: p, fill, pips: list, tally, n: tally.firstChild, w: -1, bench: plan.bench });
       if (!sim.recs[k].length) p.classList.add('ar-isout');
@@ -773,6 +779,17 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
       }
     }
     ringMesh.count = n; auraMesh.count = na; barBg.count = barLag.count = barFill.count = barCharge.count = nb; starMesh.count = ns; markMesh.count = nm;
+    let ng = 0;
+    if (guideOn > 0 && phase === 'fight' && myTeam >= 0) {
+      const b = sim.balls[myTeam];
+      if (b.gone || b.rallies > 0 || sim.time > 25) guideOn = Math.max(0, guideOn - dt * 2);
+      if (!guideTo || !guideTo.alive || guideTo.rallyCd > 0 || guideTo.wind) { guideTo = null; let bd = 1e9; for (const u of sim.field) { if (u.team !== myTeam || !u.alive || u.rallyCd > 0 || u.wind || u.drop > 0) continue; const d = Math.hypot(u.x - b.x, u.z - b.z); if (d < bd) { bd = d; guideTo = u; } } }
+      if (guideTo && !b.gone) {
+        const dx = guideTo.x - b.x, dz = guideTo.z - b.z, d = Math.hypot(dx, dz), a = b.R + 0.4, z = d - guideTo.r - 0.3;
+        if (z > a + 0.5) for (let i = 0; i < GUIDE; i++) { const f = ((i + (T * 1.6) % 1) / GUIDE), at = a + (z - a) * f, s = (0.16 + 0.1 * Math.sin(f * Math.PI)) * K * guideOn; m4.makeScale(s, 1, s).setPosition(b.x + dx / d * at, 0.03, b.z + dz / d * at); guideMesh.setMatrixAt(ng++, m4); }
+      }
+    }
+    guideMesh.count = ng; guideMesh.instanceMatrix.needsUpdate = true;
     for (const m of [ringMesh, auraMesh, barBg, barLag, barFill, barCharge, starMesh, markMesh]) { m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true; }
     drawDying(fdt); drawLeaving(dt);
     if (fight) drawFlying(fdt);
@@ -817,7 +834,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     // floor empties, and hard on the last knockout. Everything alive, and every ball in play, stays in frame.
     shake = Math.max(0, shake - dt * 1.6);
     let gx = 0, gz = 0, gf = 0;
-    if (phase === 'finish' && pt < FREEZE) { gx = lastKo.x; gz = lastKo.z; gf = 0.52; }
+    if (phase === 'finish' && pt < FREEZE) { gx = clamp(lastKo.x, -half * 1.15, half * 1.15); gz = clamp(lastKo.z, -half * 1.15, half * 1.15); gf = 0.46; }
     else if (phase === 'fight' || phase === 'finish') {
       let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
       const grow = (x, z, pad) => { x0 = Math.min(x0, x - pad); x1 = Math.max(x1, x + pad); z0 = Math.min(z0, z - pad); z1 = Math.max(z1, z + pad); };
@@ -910,7 +927,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
       for (const v of views) v.actor.dispose(); for (const d of dying) d.v.actor.dispose();
       fx.dispose();
       for (const m of mats.values()) m.dispose(); for (const o of owned) o.dispose();
-      for (const m of [ringMesh, auraMesh, barBg, barLag, barFill, barCharge, starMesh, markMesh]) m.dispose();
+      for (const m of [ringMesh, auraMesh, barBg, barLag, barFill, barCharge, starMesh, markMesh, guideMesh]) m.dispose();
       sun.shadow.map && sun.shadow.map.dispose();
     },
   };
