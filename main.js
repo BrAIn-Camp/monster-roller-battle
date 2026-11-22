@@ -251,6 +251,104 @@ function buildCreature(spec, fine = false) {   // fine: the detailed shape, for 
   m.castShadow = true;
   return m;
 }
+// ---------- Stadium understudies ----------
+// Generated critters are one merged mesh each and batch into a handful of instanced
+// draws. A Stadium model is 17 separate meshes and cannot join them, so 240 of them in
+// the arena would be about 4000 draw calls. Instead a small pool shadows the nearest few
+// free critters: the generated mesh is hidden and the model is drawn at its world
+// transform. The cost is capped however many critters are about, and nothing else in the
+// game has to know -- everything still talks to o.group.
+// A model is worth drawing where it can actually be told apart from the generated mesh:
+// in front of the camera, and more than a couple of dozen pixels tall. Beyond that the
+// two are the same handful of pixels and the model costs 17 draw calls to prove it.
+// So the pool is driven by on-screen size and the view frustum, not a flat distance.
+// Tuned by measurement, after the body merge took a model from 17 draw calls to 2:
+// 240 models hold a locked 60 fps with a 19 ms worst frame, where 300 gives ~280 and
+// drops to 50. Below 5px the count stops climbing -- the frustum and the critters
+// actually in view run out first -- so there is nothing to gain going lower.
+// Density varies a lot by habitat, so the cap is the thing protecting the frame rate.
+let understudyMax = 240;                // live models at once
+let understudyPx = 5;                   // smallest on-screen height worth a model
+const ACQUIRE_PER_FRAME = 8;            // spread cloning over frames so movement does not hitch
+const POOL_PER_SPECIES = 6;             // spare instances kept rather than disposed
+const understudies = new Map();         // o -> { inst, dex } | 'loading'
+const uPool = new Map();                // dex -> [spare instances]
+const uScale = new V3(), uSphere = new THREE.Sphere(), uFrustum = new THREE.Frustum(), uProj = new THREE.Matrix4();
+
+function takeInstance(dex, loaded) {
+  const spares = uPool.get(dex);
+  if (spares && spares.length) return spares.pop();
+  return makeStadiumInstance(loaded);
+}
+function dropInstance(u) {
+  scene.remove(u.inst.root);
+  const spares = uPool.get(u.dex) || [];
+  if (spares.length < POOL_PER_SPECIES) { spares.push(u.inst); uPool.set(u.dex, spares); }
+  else u.inst.dispose();
+}
+function clearUnderstudies() {
+  for (const [o, u] of understudies) {
+    if (u !== 'loading') dropInstance(u);
+    o.understudy = false;
+  }
+  understudies.clear();
+}
+function tickUnderstudies(dt) {
+  if (!STADIUM_LOOK || understudyMax <= 0) { if (understudies.size) clearUnderstudies(); return; }
+  uProj.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+  uFrustum.setFromProjectionMatrix(uProj);
+  const px = renderer.domElement.height || 1080, cam = camera.position;
+  const cand = [];
+  // Both lists, without building a third every frame: attach() splices a critter out of
+  // S.objects and into S.attached, so the ones stuck to the ball -- the closest things to
+  // the camera there are -- are only ever found in the second.
+  for (let list = 0; list < 2; list++) for (const o of (list ? S.attached : S.objects)) {
+    if (o.kind !== 'creature' || o.gone || !o.group.parent) continue;
+    // Critters stuck to the ball count too: they ride in o.group, which stick() reparents into
+    // the ball, so the world transform below follows them round. They are the nearest things
+    // there are, so they sort to the front of the budget. What they lose is the team tint
+    // setTeamLook paints on the generated mesh -- a textured model has nowhere to put it.
+    const p = o.group.position, dx = p.x - cam.x, dy = p.y - cam.y, dz = p.z - cam.z;
+    const d2 = dx * dx + dy * dy + dz * dz;
+    // a thing of height h at distance d covers about h / (1.04 * d) of the screen height at this fov
+    if (px * o.size / (1.04 * Math.sqrt(d2) + 1e-3) < understudyPx) continue;
+    uSphere.set(p, o.size);
+    if (!uFrustum.intersectsSphere(uSphere)) continue;                 // behind or beside the camera
+    cand.push({ o, d2 });
+  }
+  cand.sort((a, b) => a.d2 - b.d2);                                    // nearest first
+  const want = new Set(cand.slice(0, understudyMax).map((c) => c.o));
+  for (const [o, u] of [...understudies]) {
+    if (want.has(o)) continue;
+    if (u !== 'loading') dropInstance(u);
+    o.understudy = false;
+    understudies.delete(o);
+  }
+  let budget = ACQUIRE_PER_FRAME;
+  for (const o of want) {
+    if (understudies.has(o)) continue;
+    if (budget-- <= 0) break;
+    const dex = baseOf(o.spec).dex;
+    understudies.set(o, 'loading');
+    loadStadium(dex).then((l) => {
+      if (understudies.get(o) !== 'loading') return;                   // released while it loaded
+      if (!l) { understudies.delete(o); return; }
+      const inst = takeInstance(dex, l);
+      scene.add(inst.root);
+      understudies.set(o, { inst, dex });
+    });
+  }
+  for (const [o, u] of understudies) {
+    if (u === 'loading') continue;
+    o.understudy = true;
+    o.group.visible = false;     // the cull runs before this and would leave it on for a frame, drawing both
+    o.group.getWorldPosition(u.inst.root.position);
+    o.group.getWorldQuaternion(u.inst.root.quaternion);
+    u.inst.root.scale.copy(o.group.getWorldScale(uScale));
+    u.inst.update(dt);
+  }
+}
+
 const teamMats = TEAMS.map((tm) => new THREE.MeshLambertMaterial({ vertexColors: true, color: new THREE.Color(tm.hex).lerp(new THREE.Color(0xffffff), 0.35), emissive: tm.hex, emissiveIntensity: 0.22 }));
 function setTeamLook(o, team) { if (o.kind === 'creature') o.group.material = team === null ? critterMaterial : teamMats[team]; }
 
@@ -2522,7 +2620,7 @@ function update(dt) {
       if (o.spawnT > 0.3) continue;
     }
     const ox = p.x - S.x, oz = p.z - S.z, dist = Math.hypot(ox, oz);
-    o.group.visible = dist < (o.size * 130 + S.d * 10 + 25) * QUAL.view;      // out to where it is about half a degree across
+    o.group.visible = !o.understudy && dist < (o.size * 130 + S.d * 10 + 25) * QUAL.view;   // out to where it is about half a degree across; an understudied critter is drawn as its model instead
     const casts = QUAL.shadows && o.size > S.d * 0.07 && dist < S.d * 14 + 12 + o.size;      // shadows only fall near the ball (see aimSun), and specks need none: which batch it is drawn in (drawWorld)
     o.casts = casts;
     if (NET.client) { if (o.kind === 'creature' || o.ntx !== undefined) puppetThing(o, dt, dist); }      // the host moves the critters; here they glide to where it says
@@ -2813,6 +2911,10 @@ function openDex(all) {
 }
 globalThis.S = S;       // main.js is a module, so the console hooks below need S put somewhere reachable
 S.openDex = openDex;    // S.openDex(true) from the console shows every critter, caught or not
+S.grab = (n = 1) => { const near = S.objects.filter((o) => o.kind === 'creature' && !o.on && !o.gone)
+  .sort((a, b) => Math.hypot(a.group.position.x - S.x, a.group.position.z - S.z) - Math.hypot(b.group.position.x - S.x, b.group.position.z - S.z));
+  let k = 0; for (const o of near.slice(0, n)) { attach(o); k++; } return k + ' rolled up'; };   // S.grab(5) from the console, for testing pick-ups
+S.models = (n, px) => { understudyMax = n === undefined ? 240 : Math.max(0, n); if (px !== undefined) understudyPx = px; clearUnderstudies(); return `models: up to ${understudyMax} at once, down to ${understudyPx}px on screen`; };   // S.models(600, 4) for everything in view and ~42 fps, S.models(0) off
 S.dexPop = (n) => showDexPop(CREATURES[Math.max(1, Math.min(151, n)) - 1], true, 1);   // S.dexPop(4) from the console shows one entry's card
 
 // ---------- wiring ----------
@@ -2936,8 +3038,9 @@ function tick(now) {
   last = now;
   pollPadButtons();
   tickDexPop(dt);
-  if (S.state === 'play') update(dt);
-  else if (S.state === 'intro') tickIntro(dt);
+  if (S.state === 'play') { update(dt); tickUnderstudies(dt); }
+  else if (understudies.size) clearUnderstudies();
+  if (S.state === 'intro') tickIntro(dt);
   else if (S.state === 'countdown') tickCountdown(dt);
   else if (S.state === 'timeup') tickTimeUp(dt);
   else if (S.state === 'wheel' && wheel) tickWheel(dt);
