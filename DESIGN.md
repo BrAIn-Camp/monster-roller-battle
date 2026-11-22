@@ -92,7 +92,8 @@ The first human playtest reached 24 m against CPUs at 8-13 m, pulling ahead in t
 
 - **Sprint is gone; the dash is charged.** Hold the dash button and the ball slows to 30% speed, spins and winds up for up to 1.2 s,
   spending energy; release and it bursts (0.45-1.8 s at about 2.4-2.9 times top speed, steering dulled). A full meter is one full burst.
-  Energy refills in 8 s on its own and by 2.5% per thing rolled up; the Overcharge event makes it refill five times as fast.
+  Energy refills with time only (16 s for a full meter; rolling things up does not add to it); the Overcharge event makes it
+  refill five times as fast.
   A burst into a rival knocks twice as much off it. Running into scenery no longer knocks anything off.
 - **Base speed up 19%** to make up some of the lost sprint.
 - **Growth:** big balls get less from each thing (half at 6 m wide, was 9 m), aiming at a winner of about 15 m.
@@ -107,7 +108,7 @@ The first human playtest reached 24 m against CPUs at 8-13 m, pulling ahead in t
   trail and speed lines at the screen edges during the burst. CPU balls show the same dust, sparks, chevrons and trail, so a dash can be seen coming.
 - **Dash brought in line with weight (third pass):** a burst's speed is `dashMult(d)` times top speed (2.35x at 0.6 m, 2.2x at 3 m,
   1.9x at 8 m, 1.7x at 15 m, was 2.4x at every size) and it lasts less for heavy balls (73% as long at 15 m). Energy now refills
-  in 16 s and gains 1.25% per pick-up (both halved). The dash bar sits in the player panel with ball size, critters held and army power.
+  in 16 s (halved; the gain per pick-up was halved too, and later removed: time is the only refill). The dash bar sits in the player panel with ball size, critters held and army power.
 - **Fourth pass:** the burst falls off faster with weight (2.0x at 3 m, 1.65x at 8 m, 1.45x at 15 m; length 83%, 66%, 53%).
   HUD re-laid: the player's panel (critters, ball size with the dash gauge, army power) sits bottom centre just under the ball;
   standings are a ranked list with size bars top left; the dex card is top right; the clock, phase bar and event chip stay top centre;

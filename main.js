@@ -55,8 +55,7 @@ const RUN_STEER = 0.45;   // steering multiplier during a burst: fast, and hard 
 // A longer wind-up gives a longer, faster burst. Energy refills on its own and a little with every thing rolled up.
 const CHARGE_TIME = 1.2;  // seconds of wind-up for a full charge (which costs a full energy meter)
 const CHARGE_CRAWL = 0.3; // share of top speed while winding up
-const ENERGY_FILL = 16;   // seconds for the meter to refill on its own
-const ENERGY_PICK = 0.0125;// energy gained per thing rolled up
+const ENERGY_FILL = 16;   // seconds for the meter to refill (time is the only thing that refills it: rolling things up does not)
 const DASH_MIN = 0.2;     // the least energy needed to start a wind-up
 const burstTime = (c) => 0.45 + 1.35 * c, burstKick = (c) => 0.75 + 0.55 * c;   // by charge 0..1: seconds of burst, and its speed as a share of RUN x top speed
 const DRIVE = 1.6;        // how quickly the ball gets up to speed (per second); lower = heavier
@@ -1165,7 +1164,6 @@ function attach(o) {
   if (NET.host) netAll(['pk', S.team, o.id]);
   o.script = null; if (o.onPick) { const f = o.onPick; o.onPick = null; f(S, o); }
   sfxPickup(Math.min(1, o.size / (S.d * PICK_RATIO)));
-  S.energy = Math.min(1, S.energy + ENERGY_PICK);
   if (o.kind === 'creature') {
     const sp = o.spec;
     S.attachedCritters++;
@@ -1448,7 +1446,7 @@ function rivalAttach(R, o) {
   o.contrib = growthOf(R, o);
   R.vol3 += o.contrib; R.d = Math.cbrt(R.vol3);
   { const i = S.objects.indexOf(o); if (i >= 0) S.objects.splice(i, 1); }
-  R.attached.push(o); o.by = R.team; if (!R.remote) R.energy = Math.min(1, R.energy + ENERGY_PICK);
+  R.attached.push(o); o.by = R.team;
   if (NET.host) netAll(['pk', R.team, o.id]);
   o.script = null; if (o.onPick) { const f = o.onPick; o.onPick = null; f(R, o); }
   if (o.kind === 'creature') { R.army.push(armySpec(o)); setTeamLook(o, R.team); }
