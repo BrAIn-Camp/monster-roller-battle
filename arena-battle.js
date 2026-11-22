@@ -456,7 +456,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
       if (d.y < gy && d.vy < 0) {
         if (gy === 0 && !d.bounced) { d.bounced = true; d.y = 0; d.vy = -d.vy * 0.42; d.vx *= 0.7; d.vz *= 0.7; fx.puff(d.x, 0.2, d.z, 6, 0xf5efe0, 4, 0.4, 0.4); tone(120, 60, 0.12, 'triangle', 0.08); }
         else {                                                 // gone: stars on the floor, a splash far below
-          if (gy === 0) { fx.star(d.x, u.h * 0.5, d.z, { size: u.h * 0.6 + 0.9 * K, color: 0xffe169, five: true, life: 0.5, spin: 3 }); fx.burst(d.x, u.h * 0.4, d.z, 12, 0xfff2b0, 6, 0.35 * K, 0.6); }
+          if (gy === 0) { fx.star(d.x, u.h * 0.5, d.z, { size: u.h * 0.45 + 0.7 * K, color: 0xffd23f, five: true, life: 0.5, spin: 3, lit: false }); fx.burst(d.x, u.h * 0.4, d.z, 12, 0xfff2b0, 6, 0.35 * K, 0.6); }
           else { fx.puff(d.x, -DROP + 0.3, d.z, 14, arena.detail, 6, 0.6 * K, 0.9, -12, 9); fx.ring(d.x, d.z, { r0: 0.5, r1: 4 * K, color: 0xffffff, y: -DROP + 0.1, life: 0.6, lit: false, opacity: 0.6 }); tone(160, 70, 0.3, 'sine', 0.1); }
           root.removeFromParent(); d.v.actor.dispose(); dying.splice(i, 1); continue;
         }
