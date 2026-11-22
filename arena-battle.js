@@ -199,7 +199,8 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     if (u.v) return u.v;
     const actor = made || buildActor(u.spec, u.team);
     if (!made) { actor.root.scale.setScalar(0.0001); actor.root.traverse((o) => { if (o.isMesh) o.castShadow = true; }); scene.add(actor.root); }
-    const v = u.v = { u, actor, pop: 0, delay: 0, fall: -1, land: 1, lunge: 0, kick: 0, flash: 0, flashCol: 0xffffff, squash: 0, yaw: u.yaw, y: 0, lag: 1, phase: vr() * 6.28, tele: null, ice: null, lift: 0, glow: 0, tumble: 0, cheer: 0, hop: null, bar: 0 };
+    actor.root.rotation.order = 'YXZ';                              // turn to face first, then lean: so a lean is always forwards
+    const v = u.v = { u, actor, pop: 0, delay: 0, fall: -1, land: 1, lunge: 0, kick: 0, flash: 0, flashCol: 0xffffff, squash: 0, yaw: u.yaw, y: 0, lag: 1, phase: vr() * 6.28, tele: null, ice: null, lift: 0, glow: 0, tumble: 0, cheer: 0, hop: null, bar: 0, lean: 0 };
     views.push(v);
     return v;
   }
@@ -735,7 +736,10 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
       v.lunge = Math.max(0, v.lunge - fdt); v.kick = Math.max(0, v.kick - fdt); v.flash = Math.max(0, v.flash - fdt);
       v.squash += (0 - v.squash) * Math.min(1, fdt * 12);
       // where and how it stands
-      const lu = v.lunge > 0 ? Math.sin((1 - v.lunge / 0.24) * Math.PI) * Math.min(0.9, u.r * 1.3) : v.kick > 0 ? -Math.sin(v.kick / 0.2 * Math.PI) * 0.3 : 0;
+      // a melee swing: a short pull back, then the lunge; a ranged one: a kick backwards
+      let lu = 0;
+      if (v.lunge > 0) { const q = 1 - v.lunge / 0.24, amp = Math.min(0.95, u.r * 1.3); lu = q < 0.22 ? -Math.sin(q / 0.22 * Math.PI) * amp * 0.28 : Math.sin((q - 0.22) / 0.78 * Math.PI) * amp; }
+      else if (v.kick > 0) lu = -Math.sin(v.kick / 0.2 * Math.PI) * 0.3;
       let y = u.air ? h * (0.28 + 0.06 * Math.sin(T * 3 + v.phase)) : u.moving ? Math.abs(Math.sin(T * 10 + v.phase)) * h * 0.09 : 0;
       if (u.lifted > 0 || v.lift > 0) { v.lift = Math.max(0, v.lift - fdt); y += h * 0.9 * Math.sin(clamp(1 - Math.max(u.lifted, 0) / 0.9, 0, 1) * Math.PI * 0.5); if (vr() < 0.5) fx.spark(u.x + (vr() - 0.5) * h, y + vr() * h, u.z + (vr() - 0.5) * h, 0, 2, 0, 0xffc2dc, 0.25 * K, 0.3, 0, true); }
       if (u.team === cheerTeam) y += Math.abs(Math.sin(T * 7 + v.phase)) * Math.min(h * 0.5, 1.4);
@@ -745,9 +749,12 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
       let px = u.x, pz = u.z;
       if (v.hop) { const q = v.hop; q.t += dt; const g = clamp(q.t / q.dur, 0, 1), e = smooth(g); px = q.x + (u.x - q.x) * e; pz = q.z + (u.z - q.z) * e; v.y += Math.sin(g * Math.PI) * h * 0.9; if (g >= 1) { v.hop = null; v.land = 0; fx.puff(u.x, 0.15, u.z, 5, 0xf5efe0, 3, 0.3, 0.4); } }
       A.root.position.set(px + Math.sin(v.yaw) * lu, v.y, pz + Math.cos(v.yaw) * lu);
+      // lean: into a run, into a swing, back from a blow; reeling when stunned, head over heels when knocked flying
       const wob = u.stun > 0 && !u.frozen ? Math.sin(T * 40) * 0.3 : 0;
-      A.root.rotation.set(u.launched > 0 ? -0.5 * Math.sin(v.tumble) : 0, v.yaw + wob, u.stun > 0 && !u.frozen ? Math.sin(T * 31) * 0.18 : 0);
-      const landSq = v.land < 1 ? Math.sin(v.land * Math.PI) * 0.28 * (1 - v.land) * 2 : 0, sq = v.squash + landSq, grow = (u.wind ? 1 + 0.08 * Math.sin(T * 34) * clamp(u.wind.t / u.wind.dur, 0, 1) : 1) * (v.pop < 1 ? backOut(v.pop) : 1) * h;
+      v.lean += ((u.moving ? 0.16 : 0) + (v.lunge > 0 ? 0.3 : 0) - v.squash * 1.1 - v.lean) * Math.min(1, fdt * 14);
+      A.root.rotation.set(u.launched > 0 ? -0.5 * Math.sin(v.tumble) : v.lean, v.yaw + wob, u.stun > 0 && !u.frozen ? Math.sin(T * 31) * 0.18 : 0);
+      const breathe = A.rigged || u.moving ? 0 : Math.sin(T * 2.6 + v.phase) * 0.025;      // (the generated critters have no clips: let them breathe)
+      const landSq = v.land < 1 ? Math.sin(v.land * Math.PI) * 0.28 * (1 - v.land) * 2 : 0, sq = v.squash + landSq - breathe, grow = (u.wind ? 1 + 0.08 * Math.sin(T * 34) * clamp(u.wind.t / u.wind.dur, 0, 1) : 1) * (v.pop < 1 ? backOut(v.pop) : 1) * h;
       A.root.scale.set(grow * (1 + sq * 0.5), Math.max(0.0001, grow * (1 - sq)), grow * (1 + sq * 0.5));
       // glow: winding up in its type's colour, or the flash of being hit
       if (u.wind) { const k = clamp(u.wind.t / u.wind.dur, 0, 1), c = hexOf(u.wind.move); A.flash(0.25 + 0.55 * k * (0.7 + 0.3 * Math.sin(T * 30)), c); if (vr() < 0.5 + k * 0.5) { const a = vr() * 6.283, d = h * 1.2 + 0.8; fx.spark(u.x + Math.cos(a) * d, vr() * h * 1.2, u.z + Math.sin(a) * d, -Math.cos(a) * d / 0.3, 0, -Math.sin(a) * d / 0.3, vr() < 0.5 ? c : glowOf(u.wind.move), 0.3 * K, 0.3, 0, true); } }
