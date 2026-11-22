@@ -4,6 +4,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { BOUNDS, STARTS, BIOMES, B, PLACES, REHOME, GUESTS, R_HUB, scenery, layout, ITEMS as MAP_ITEMS, SHAPES as MAP_SHAPES } from './map.js';
 import { createTerrain, vnoise, SEA_LEVEL, SEA_MIN_D } from './terrain.js';
 import { buildCritterGeometry, critterMaterial } from './critters/kit.js';
+import { loadStadium, makeStadiumInstance, stadiumMeta } from './critters/stadium.js';
 import { createBattle, power } from './battle.js';
 import { EVENTS } from './events.js';
 import { openRoom, openPublicRoom, cleanCode } from './net.js';
@@ -433,14 +434,46 @@ function drawWorld() {
   DRAW.things = things; DRAW.batches = used;
 }
 
-// The ball: an original striped orb.
-const ball = new THREE.Group();
-const core = new THREE.Group();
-P(core, 'sph', TEAMS[0].hex, [1, 1, 1], [0, 0, 0]);
-for (const rot of [[0, 0, 0], [Math.PI / 2, 0, 0], [0, 0, Math.PI / 2]]) {
-  const ring = new THREE.Mesh(new THREE.TorusGeometry(1, 0.07, 6, 24), mat(0xffd23f));
-  ring.rotation.set(rot[0], rot[1], rot[2]); ring.castShadow = true; core.add(ring);
+// ---------- the balls ----------
+// Two looks, chosen by whether the Stadium models have been extracted on this machine.
+//   default  -- the original striped orb: a team-coloured sphere banded with rings.
+//   extracted -- a capture ball: two caps meeting at a dark seam with a latch button on
+//               the front, the upper cap in the team's colour and the lower varying per
+//               team so four of them stay apart at a glance while they tumble.
+// The capture-ball look is part of the same local-only layer as the models and the names:
+// it is never what the published build shows. See models/stadium/README.md.
+let STADIUM_LOOK = false;
+const BALL_LOWER = [0xf3ead7, 0xf3ead7, 0x3b4668, 0xe9c21f];   // cream, cream, slate, gold
+const BALL_SEAM = 0x2b2540;
+const CAP = new THREE.SphereGeometry(1, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2);
+// `own` marks the player's own ball, which wears more trim so it reads at a distance.
+function styleBall(g, k, own) {
+  g.clear();
+  if (STADIUM_LOOK) {
+    const top = new THREE.Mesh(CAP, mat(TEAMS[k].hex));
+    const low = new THREE.Mesh(CAP, mat(BALL_LOWER[k]));
+    low.rotation.x = Math.PI;
+    const seam = new THREE.Mesh(new THREE.TorusGeometry(1, 0.08, 8, 28), mat(BALL_SEAM));
+    seam.rotation.x = Math.PI / 2;
+    const rim = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.14, 18), mat(BALL_SEAM));
+    const btn = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 0.14, 16), mat(0xf7f4ec));
+    rim.rotation.x = Math.PI / 2; rim.position.z = 0.93;
+    btn.rotation.x = Math.PI / 2; btn.position.z = 0.97;
+    const parts = [top, low, seam, rim, btn];
+    if (own) { const trim = new THREE.Mesh(new THREE.TorusGeometry(1.03, 0.032, 6, 28), mat(0xffd23f)); trim.rotation.x = Math.PI / 2; parts.push(trim); }
+    for (const m of parts) { m.castShadow = true; g.add(m); }
+  } else {
+    P(g, 'sph', TEAMS[k].hex, [1, 1, 1], [0, 0, 0]);
+    for (const rot of own ? [[0, 0, 0], [Math.PI / 2, 0, 0], [0, 0, Math.PI / 2]] : [[Math.PI / 2, 0, 0]]) {
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(1, 0.07, 6, 24), mat(own ? 0xffd23f : 0xffffff));
+      ring.rotation.set(rot[0], rot[1], rot[2]); ring.castShadow = true; g.add(ring);
+    }
+  }
 }
+function buildCaptureBall(k, own) { const g = new THREE.Group(); styleBall(g, k, own); return g; }
+
+const ball = new THREE.Group();
+const core = buildCaptureBall(0, true);
 ball.add(core);
 scene.add(ball);
 
@@ -831,15 +864,32 @@ popR.setPixelRatio(1);
 const popScene = new THREE.Scene(), popSpin = new THREE.Group(), popCam = new THREE.PerspectiveCamera(30, 1, 0.1, 30);
 popScene.add(new THREE.HemisphereLight(0xffffff, 0x8899aa, 2.2), popSpin);
 { const dl = new THREE.DirectionalLight(0xffffff, 1.6); dl.position.set(2, 3, 4); popScene.add(dl); }
-let popT = 0;
+let popT = 0, popInst = null, popSeq = 0;
+// Centre whatever is in the pop-up on the origin and pull the camera back to fit it.
+// Box3 rather than geometry.boundingBox: a Stadium model is a group of several meshes.
+function framePop(obj) {
+  const b = new THREE.Box3().setFromObject(obj), c = b.getCenter(new V3()), s = b.getSize(new V3()).length();
+  obj.position.sub(c);
+  popCam.position.set(0, s * 0.45, s * 1.9); popCam.lookAt(0, 0, 0);
+}
 function showDexPop(sp, isNew, count) {
   popSpin.clear();
+  if (popInst) { popInst.dispose(); popInst = null; }
   const m = buildCreature(sp, true);
-  const b = m.geometry.boundingBox, c = b.getCenter(new V3()), s = b.getSize(new V3()).length();
-  m.position.set(-c.x, -c.y, -c.z);
   popSpin.add(m);
+  framePop(m);
   popSpin.rotation.y = 0.5;
-  popCam.position.set(0, s * 0.45, s * 1.9); popCam.lookAt(0, 0, 0);
+  // Where the player has extracted the Stadium models, swap the real one in when it
+  // arrives. The generated mesh is already on screen, so a slow load shows nothing odd,
+  // and a pop that has been replaced or has expired drops its result on the floor.
+  const seq = ++popSeq;
+  loadStadium(sp.dex).then((l) => {
+    if (!l || seq !== popSeq || popT <= 0) return;
+    popSpin.clear();
+    popInst = makeStadiumInstance(l);
+    popSpin.add(popInst.root);
+    framePop(popInst.root);
+  });
   $('dexinfo').innerHTML = `${isNew ? '<div class="new">NEW!</div>' : ''}<div class="nm">#${String(sp.dex).padStart(3, '0')} ${sp.name}</div><div class="meta">${sp.species} critter</div>${typeChips(sp)}<div class="meta">${sp.height} m · ${sp.rarity} · ${sp.temper}</div><div class="meta">lives: ${areaOfSpec(sp)} · caught ${count}</div>`;
   $('dexpop').classList.add('show');
   popT = isNew ? 5 : 3;
@@ -849,8 +899,13 @@ function tickDexPop(dt) {
   if (popT <= 0) return;
   popT -= dt;
   popSpin.rotation.y += dt * 1.6;
+  if (popInst) popInst.update(dt);
   popR.render(popScene, popCam);
-  if (popT <= 0) $('dexpop').classList.remove('show');
+  if (popT <= 0) {
+    $('dexpop').classList.remove('show');
+    if (popInst) { popInst.dispose(); popInst = null; }
+    popSpin.clear();
+  }
 }
 
 // ---------- "now rollable" announcements, and the arrow to what a challenge still needs ----------
@@ -1274,9 +1329,7 @@ function makeRivals() {
   const wedges = [0, 1, 2, 3, 4, 5, 6, 7].sort(() => rand() - 0.5);
   for (let i = 0; i < TEAMS.length; i++) {
     if (i === S.team) continue;
-    const [x, z] = STARTS[i], ballG = new THREE.Group(), coreG = new THREE.Group();
-    P(coreG, 'sph', TEAMS[i].hex, [1, 1, 1], [0, 0, 0]);
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(1, 0.07, 6, 24), mat(0xffffff)); ring.rotation.x = Math.PI / 2; coreG.add(ring);
+    const [x, z] = STARTS[i], ballG = new THREE.Group(), coreG = buildCaptureBall(i, false);
     ballG.add(coreG); scene.add(ballG);
     const figure = buildTrainer(TEAMS[i].hex); scene.add(figure);
     const y = groundAt(x, z) + START_D / 2, heading = Math.atan2(-x, -z);
@@ -1492,12 +1545,7 @@ const packTeams = (teams) => teams.map((tm) => {
 });
 const unpackTeams = (packed) => TEAMS.map((tm, i) => Object.assign({}, tm, { ballD: packed[i].d, human: !!packed[i].h, me: i === S.team,
   army: packed[i].a.filter(([id]) => SPECS[id]).flatMap(([id, h, n]) => { const sp = SPECS[id].spec, one = h ? Object.assign({}, sp, { height: h, base: baseOf(sp), giant: true, _pw: 0 }) : sp; return new Array(n || 1).fill(one); }) }));
-function buildBallFor(k) {
-  const g = new THREE.Group();
-  P(g, 'sph', TEAMS[k].hex, [1, 1, 1], [0, 0, 0]);
-  for (const rot of k === S.team ? [[0, 0, 0], [Math.PI / 2, 0, 0], [0, 0, Math.PI / 2]] : [[Math.PI / 2, 0, 0]]) { const ring = new THREE.Mesh(new THREE.TorusGeometry(1, 0.07, 6, 24), mat(k === S.team ? 0xffd23f : 0xffffff)); ring.rotation.set(rot[0], rot[1], rot[2]); g.add(ring); }
-  return g;
-}
+function buildBallFor(k) { return buildCaptureBall(k, k === S.team); }
 // The arena is decided when the round starts (so the oracle can hint at it); the wheel only reveals it.
 function pickArenas() {
   S.forecast = null;
@@ -2608,7 +2656,7 @@ const INTRO_LEN = 5.4;
 // Dress the player's ball, trainer and HUD panel in their team's colour.
 function dressPlayer() {
   const tm = TEAMS[S.team];
-  core.children[0].material = mat(tm.hex);
+  styleBall(core, S.team, true);
   scene.remove(trainer); trainer = buildTrainer(tm.hex); trainer.scale.setScalar(trainerHeight(START_D)); scene.add(trainer);
   $('size').style.borderTopColor = tm.css;
 }
@@ -2763,7 +2811,9 @@ function openDex(all) {
   $('dexcount').textContent = `${seen}/${CREATURES.length}`;
   S.state = 'dex'; show('dex');
 }
+globalThis.S = S;       // main.js is a module, so the console hooks below need S put somewhere reachable
 S.openDex = openDex;    // S.openDex(true) from the console shows every critter, caught or not
+S.dexPop = (n) => showDexPop(CREATURES[Math.max(1, Math.min(151, n)) - 1], true, 1);   // S.dexPop(4) from the console shows one entry's card
 
 // ---------- wiring ----------
 $('btnTimed').onclick = () => start('timed');
@@ -2814,6 +2864,24 @@ function resize() {
 addEventListener('resize', resize);
 applyGfx();
 makeThumbs();
+// The names in critters/*.js are placeholders for the 151 slots. Where the models have
+// been extracted, each one carries its own name, so the card stops disagreeing with the
+// model standing on it. Renaming in place is enough: every screen reads spec.name live,
+// and the dex save is keyed by spec.id, so nothing already caught is lost.
+stadiumMeta().then((meta) => {
+  if (!meta) return;                                   // no models extracted: keep the placeholders
+  STADIUM_LOOK = true;
+  styleBall(core, S.team || 0, true);
+  let n = 0;
+  CREATURES.forEach((sp, i) => {
+    const m = meta[String(sp.dex)];
+    if (!m || !m.name) return;
+    sp.name = m.name;
+    TITANS[i].name = 'Titan ' + m.name;
+    n++;
+  });
+  console.log('stadium: renamed ' + n + ' critters from the extracted models');
+});
 populate();
 toMenu();
 menuView('mvHome');

@@ -1,7 +1,13 @@
 # Model credits
 
-Every model in `models/` is released under **CC0 1.0** (public domain): free for any use, no attribution
-required. Credit is given here anyway.
+Every model distributed with this game is released under **CC0 1.0** (public domain): free for any use,
+no attribution required. Credit is given here anyway.
+
+> **One exception, and it is never distributed.** `models/stadium/` holds Pokemon Stadium (N64) battle
+> models for the dex close-ups. Those are Nintendo / Creatures / GAME FREAK assets, they are **not** CC0,
+> and they are **not** in this repository: the folder is in `.gitignore` and is generated on your own
+> machine from a cartridge you own. The game runs normally without it. Do not commit or publish it.
+> See `models/stadium/README.md`.
 
 ## Critters
 

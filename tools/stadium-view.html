@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Stadium model check</title>
+<style>
+  body { margin: 0; background: #9ad8f5; font-family: "Trebuchet MS", sans-serif; color: #2b2540; }
+  #bar { position: fixed; top: 0; left: 0; right: 0; padding: 8px; background: rgba(255,255,255,.9); font-weight: 700; }
+  canvas { display: block; }
+  #log { position: fixed; bottom: 0; left: 0; right: 0; max-height: 40%; overflow: auto; background: #fffaf0; font: 12px monospace; padding: 6px; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<div id="bar">
+  dex <input id="dex" type="number" value="4" min="1" max="151" style="width:70px">
+  <button id="go">load</button>
+  <span id="status"></span>
+</div>
+<canvas id="c"></canvas>
+<div id="log"></div>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { loadStadium, makeStadiumInstance, stadiumMeta } from '../critters/stadium.js';
+const log = (...a) => { document.getElementById('log').textContent += a.join(' ') + '\n'; console.log(...a); };
+const r = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: true });
+r.setSize(innerWidth, innerHeight - 40);
+const sc = new THREE.Scene(); sc.background = new THREE.Color(0x9ad8f5);
+const spin = new THREE.Group(); sc.add(spin);
+sc.add(new THREE.HemisphereLight(0xffffff, 0x8899aa, 2.2));
+{ const d = new THREE.DirectionalLight(0xffffff, 1.6); d.position.set(2, 3, 4); sc.add(d); }
+const cam = new THREE.PerspectiveCamera(30, (innerWidth) / (innerHeight - 40), 0.1, 30);
+let inst = null;
+async function go() {
+  const dex = +document.getElementById('dex').value;
+  document.getElementById('status').textContent = 'loading ' + dex + '...';
+  const t0 = performance.now();
+  const l = await loadStadium(dex);
+  if (!l) { log('dex', dex, '-> NULL (no model)'); document.getElementById('status').textContent = 'null'; return; }
+  if (inst) { inst.dispose(); }
+  spin.clear();
+  inst = makeStadiumInstance(l);
+  spin.add(inst.root);
+  const b = new THREE.Box3().setFromObject(inst.root), c = b.getCenter(new THREE.Vector3()), s = b.getSize(new THREE.Vector3());
+  inst.root.position.sub(c);
+  cam.position.set(0, s.length() * 0.45, s.length() * 1.9); cam.lookAt(0, 0, 0);
+  const mats = [], texes = new Set();
+  inst.root.traverse((n) => { if (n.isMesh) { mats.push(n.material.type + (n.material.map ? '+map' : '')); if (n.material.map) texes.add(n.material.map.image && n.material.map.image.width + 'x' + n.material.map.image.height); } });
+  log(`dex ${dex} ${l.entry.slug}: ${Math.round(performance.now() - t0)}ms, meshes=${mats.length}, skinned=${inst.root.children.length ? 'yes' : '?'}`);
+  log('  size', s.x.toFixed(3), s.y.toFixed(3), s.z.toFixed(3), '| clips', l.clips.length, '| anims', l.entry.anims.length);
+  log('  materials', [...new Set(mats)].join(', '));
+  log('  texture sizes', [...texes].join(', '));
+  log('  eye', JSON.stringify(l.entry.eye && { prim: l.entry.eye.prim, channel: l.entry.eye.channel, frames: Object.keys(l.entry.eye.map).length }));
+  const nearest = [];
+  inst.root.traverse((n) => { if (n.isMesh && n.material.map) nearest.push(n.material.map.magFilter === THREE.NearestFilter); });
+  log('  all maps NearestFilter:', nearest.every(Boolean), `(${nearest.length} maps)`);
+  const fx = (l.entry.fx || []).length;
+  log('  effects:', fx ? fx + ' generated prim(s): ' + [...new Set(l.entry.fx.map((f) => f.kind))].join(', ') : 'none');
+  document.getElementById('status').textContent = l.entry.slug;
+}
+document.getElementById('go').onclick = go;
+stadiumMeta().then((m) => log('meta:', m ? Object.keys(m).length + ' species' : 'MISSING'));
+let last = performance.now();
+(function loop() {
+  requestAnimationFrame(loop);
+  const now = performance.now(), dt = Math.min(0.1, (now - last) / 1000); last = now;
+  spin.rotation.y += dt * 0.8;
+  if (inst) inst.update(dt);
+  r.render(sc, cam);
+})();
+go();
+window.__go = go;
+window.__dbg = { spin, cam, scene: sc, inst: () => inst, THREE };
+</script>
+</body>
+</html>
