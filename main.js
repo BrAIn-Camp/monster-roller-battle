@@ -1648,6 +1648,7 @@ function battleRows() {
   if (!res || !st) return '';
   let h = S.battleArena ? `<tr><td>Arena</td><td>${S.battleArena.name} (favours ${S.battleArena.types.join(', ')})</td></tr>` : '';
   h += S.battleTeams.map((tm, k) => `<tr><td><span class="dot" style="background:${tm.css}"></span> ${k === S.team ? 'You' : tm.name + (tm.human ? '' : ' (CPU)')}${res.winner === k ? ' ★' : ''}</td><td>${st[k].brought !== undefined ? `${st[k].brought} critter${st[k].brought === 1 ? '' : 's'}${st[k].merged < st[k].brought ? ` merged into ${st[k].merged}` : ''}, ${st[k].alive} left standing${st[k].ballOut ? ', ball lost' : ''}` : `${st[k].all} fought, ${st[k].alive} left standing`}</td></tr>`).join('');
+  if (res.rallies && res.ringOuts) { const me = S.team, n = (v, one, many) => `${v} ${v === 1 ? one : many}`; h += `<tr><td>Your ball in the arena</td><td>${n(res.ringOuts[me], 'monster', 'monsters')} rammed off the edge, ${n(res.rallies[me], 'rally', 'rallies')}</td></tr>`; }
   if (res.mvp) h += `<tr><td>Top fighter</td><td>${res.mvp.name} (${res.mvp.team === S.team ? 'yours' : TEAMS[res.mvp.team].name}), ${res.mvp.kills} knock-outs</td></tr>`;
   if (res.timedOut) h += '<tr><td colspan="2">Decided on remaining health after the time limit.</td></tr>';
   return h;

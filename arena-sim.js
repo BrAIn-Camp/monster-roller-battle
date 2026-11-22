@@ -303,7 +303,7 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
         else if (W.s === 2) {
           W.p += speed * dt;
           for (const u of field) if (!u.fav && !u.air && u.alive && Math.abs(u.x * W.dx + u.z * W.dz - W.p) < 1.6 + u.r) shove(u, W.dx * speed * 0.55 * dt, W.dz * speed * 0.55 * dt);
-          for (const b of balls) if (!b.gone && Math.abs(b.x * W.dx + b.z * W.dz - W.p) < 1.6 + b.R * 0.5) { b.vx += W.dx * 30 * dt; b.vz += W.dz * 30 * dt; }
+          for (const b of balls) if (!b.gone && Math.abs(b.x * W.dx + b.z * W.dz - W.p) < 1.6 + b.R * 0.5) { b.vx += W.dx * 22 * dt; b.vz += W.dz * 22 * dt; }
           if (W.p > half + 2) { W.s = 0; W.t = 6 + rand() * 4; }
         }
       };
@@ -332,7 +332,7 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
         for (const b of balls) { if (b.gone) continue; const dx = b.x - q.x, dz = b.z - q.z, d = hyp(dx, dz) || 0.01; if (d < r + b.R) { const sp = Math.max(hyp(b.vx, b.vz) * 1.05, topSpeed0 * 1.1); b.x = q.x + dx / d * (r + b.R); b.z = q.z + dz / d * (r + b.R); b.vx = dx / d * sp; b.vz = dz / d * sp; b.dashT = 0; q.hit = 0.25; emit({ e: 'bumper', q, b }); } }
         for (const u of field) { const dx = u.x - q.x, dz = u.z - q.z, d = hyp(dx, dz) || 0.01; if (d < r + u.r) { u.x = q.x + dx / d * (r + u.r); u.z = q.z + dz / d * (r + u.r); if (u.launched > 0 && q.hit <= 0) { const sp = hyp(u.kx, u.kz) * 1.1 + 4; u.kx = dx / d * sp; u.kz = dz / d * sp; u.launched = Math.max(u.launched, 0.4); q.hit = 0.25; emit({ e: 'bumper', q, b: null }); } } }
       } };
-    } else if (kind === 'ice') { H.grip = 1.6; H.top = 1.1; }    // Frost Rink: balls slide
+    } else if (kind === 'ice') { H.grip = 2.2; H.top = 1.08; }   // Frost Rink: balls slide (but with no walls, not so far that stopping is hopeless)
     return H;
   })();
 
@@ -774,7 +774,7 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
     status() { tally(); return teams.map((tm, k) => ({ alive: stat[k].alive, all: recs[k].length, hp: maxHpAll[k] ? clamp(stat[k].hp / maxHpAll[k], 0, 1) : 0, scooped: balls[k].cargo.length, favoured: stat[k].fav, ballOut: balls[k].gone })); },
     result() {
       const mvp = everyone.reduce((a, u) => (!a || u.dmg > a.dmg ? u : a), null);
-      return { winner, timedOut, seconds: fought, scoops: balls.map((b) => b.scoops), rams: balls.map((b) => b.rams), rallies: balls.map((b) => b.rallies),
+      return { winner, timedOut, seconds: fought, scoops: balls.map((b) => b.scoops), rams: balls.map((b) => b.rams), rallies: balls.map((b) => b.rallies), ringOuts: balls.map((b) => b.ringOuts),
         mvp: mvp && mvp.dmg > 0 ? { name: mvp.spec.name, dex: mvp.spec.dex, team: mvp.team, damage: Math.round(mvp.dmg), kills: mvp.kills } : null };
     },
   };
