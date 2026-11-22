@@ -508,7 +508,11 @@ function setMuted(m) {
 function audio() {
   if (!ac) {
     const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return null;
-    ac = new AC(); master = ac.createGain(); master.gain.value = save.muted ? 0 : 1; master.connect(ac.destination);
+    ac = new AC(); master = ac.createGain(); master.gain.value = save.muted ? 0 : 1;
+    // A limiter before the speakers: every sound is its own oscillator, and a dozen at once (an arena fight) added up
+    // past full volume and crackled. Quiet passages go through untouched.
+    try { const lim = ac.createDynamicsCompressor(); lim.threshold.value = -10; lim.knee.value = 8; lim.ratio.value = 12; lim.attack.value = 0.003; lim.release.value = 0.12; master.connect(lim); lim.connect(ac.destination); }
+    catch (e) { master.connect(ac.destination); }
   }
   if (ac.state === 'suspended') ac.resume();
   return ac;

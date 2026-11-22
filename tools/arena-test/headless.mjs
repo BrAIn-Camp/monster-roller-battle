@@ -5,6 +5,7 @@
 //     smoke      a handful of fights with sanity checks on every step (positions finite, nothing stuck)
 //     merge      also compare each army merged against the same army unmerged
 //     verbose    one line per fight
+//     moves      a table of the signature moves: how often each is used and what one use is worth
 //     mirror     all four teams bring the same army: any difference in who wins is the seat, not the army
 //     tune=HP_SCALE:13,RAMP_AT:40   try other tuning values (the names in TUNE, arena-sim.js)
 //
@@ -37,6 +38,7 @@ const args = process.argv.slice(2), flag = (f) => args.includes(f), nums = args.
 // tune=HP_SCALE:13,RAMP_AT:40 tries other numbers without editing arena-sim.js
 for (const a of args) if (a.startsWith('tune=')) for (const kv of a.slice(5).split(',')) { const [k, v] = kv.split(':'); if (!(k in SIM.TUNE)) throw new Error('no such tuning value: ' + k); SIM.TUNE[k] = +v; }
 const FIGHTS = flag('smoke') ? 16 : nums[0] || 200, SEED = nums[1] || 1;
+const MOVE = {};                                            // per signature move: uses and what they did (for the `moves` table)
 const dice = (seed) => { let s = seed >>> 0; return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; }; };
 
 // An army the way a round produces one: mostly common critters from two or three habitats, a few rarer ones.
@@ -67,9 +69,14 @@ function fight(seed, { armies, arena, unmerged = -1, check = false, dt = 1 / 30 
     sim.step(dt); steps++;
     for (const e of sim.events) {
       if (e.e === 'ko') { tally.ko++; if (tally.firstKo < 0) tally.firstKo = sim.time; }
-      else if (e.e === 'ring') { tally.ring++; if (!e.by && e.team >= 0) tally.ringByBall++; if (tally.firstKo < 0) tally.firstKo = sim.time; }
+      else if (e.e === 'ring') { tally.ring++; if (e.t._sp && sim.time - e.t._spT < 2 && MOVE[e.t._sp]) MOVE[e.t._sp].ring++; if (!e.by && e.team >= 0) tally.ringByBall++; if (tally.firstKo < 0) tally.firstKo = sim.time; }
       else if (e.e === 'ballout') tally.ballout++;
-      else if (e.e === 'fire') tally.fire++;
+      else if (e.e === 'fire') { tally.fire++; const m = MOVE[e.w.move] || (MOVE[e.w.move] = { uses: 0, dmg: 0, ko: 0, ring: 0, hits: 0 }); m.uses++; }
+      else if (e.e === 'hit' && (e.special || e.pool) && e.u) {              // what a signature move did: health taken (in whole monsters), knockouts, and ring-outs soon after
+        const m = MOVE[e.type] || (MOVE[e.type] = { uses: 0, dmg: 0, ko: 0, ring: 0, hits: 0 });
+        m.hits++; m.dmg += Math.min(1, e.dmg / e.t.st.maxHp); if (e.t.hp <= 0) m.ko++;
+        e.t._sp = e.type; e.t._spT = sim.time;
+      }
       else if (e.e === 'break') tally.breaks++;
       else if (e.e === 'rally') tally.rally++;
       else if (e.e === 'scoop') tally.scoop++;
@@ -152,3 +159,8 @@ console.log(`  wins by seat             ${A.seatWin.map((w) => pct(w, A.n)).join
 console.log(`  winner's monsters left   median ${q(A.left, 0.5)}`);
 console.log('  by arena                 ' + Object.entries(A.byArena).map(([id, b]) => `${id} ${(b.len / b.n).toFixed(0)}s ring ${pct(b.ring, b.ring + b.ko)} ballsOut ${(b.ballout / b.n).toFixed(1)} mostFavWins ${pct(b.favWin, b.n)}`).join('\n                           '));
 if (mergeCmp.n) console.log(`  merged beats unmerged    ${pct(mergeCmp.win, mergeCmp.n)} of ${mergeCmp.n} mirror matches`);
+if (flag('moves')) {
+  console.log('\n  signature moves          uses/fight   foes hit   health taken   knockouts   ring-outs   (the last three per use; health in whole monsters)');
+  for (const [type, m] of Object.entries(MOVE).sort((a, b) => (b[1].dmg + b[1].ko + b[1].ring) / b[1].uses - (a[1].dmg + a[1].ko + a[1].ring) / a[1].uses))
+    console.log(`    ${(SIM.MOVES[type].name + ' (' + type + ')').padEnd(26)} ${(m.uses / A.n).toFixed(1).padStart(6)} ${(m.hits / m.uses).toFixed(2).padStart(10)} ${(m.dmg / m.uses).toFixed(2).padStart(12)} ${(m.ko / m.uses).toFixed(2).padStart(12)} ${(m.ring / m.uses).toFixed(2).padStart(11)}`);
+}

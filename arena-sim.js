@@ -81,20 +81,20 @@ export const isFavoured = (arena, spec) => spec.types.some((t) => arena.types.in
 //   rush   the user itself charges down a line
 export const MOVES = {
   fire:     { name: 'Flame Burst',   shape: 'cone',   reach: 7.5, arc: 0.62, power: 1.7, kb: 2.2, wind: 0.85 },
-  water:    { name: 'Tidal Surge',   shape: 'wave',   reach: 12, width: 2.4, power: 1.0, kb: 1.0, carry: 0.75, wind: 0.9 },
-  electric: { name: 'Chain Bolt',    shape: 'chain',  reach: 8.5, jumps: 4, power: 1.35, kb: 0.5, stun: 0.7, wind: 0.6 },
+  water:    { name: 'Tidal Surge',   shape: 'wave',   reach: 11, width: 2.4, power: 1.1, kb: 0.9, carry: 0.5, wind: 0.9 },
+  electric: { name: 'Chain Bolt',    shape: 'chain',  reach: 8.5, jumps: 4, power: 1.6, kb: 0.5, stun: 0.7, wind: 0.6 },
   grass:    { name: 'Bloom Drain',   shape: 'nova',   size: 4.6, power: 1.25, kb: 1.2, heal: 0.6, wind: 0.8 },
   ice:      { name: 'Deep Freeze',   shape: 'blast',  reach: 9, size: 3.3, power: 1.2, kb: 0.3, stun: 1.7, frozen: true, wind: 0.9 },
-  fighting: { name: 'Sky Uppercut',  shape: 'strike', reach: 5, power: 2.3, kb: 5.0, wind: 0.6 },
+  fighting: { name: 'Sky Uppercut',  shape: 'strike', reach: 5, power: 3.2, kb: 5.0, wind: 0.6 },
   poison:   { name: 'Toxic Pool',    shape: 'pool',   reach: 8.5, size: 3.4, power: 0.42, ticks: 5, every: 0.8, slow: 0.6, wind: 0.7 },
   ground:   { name: 'Earthshaker',   shape: 'nova',   size: 5.6, power: 1.5, kb: 1.8, stun: 0.5, grounded: true, wind: 1.0 },
   flying:   { name: 'Whirlwind',     shape: 'blast',  reach: 9, size: 4.0, power: 0.9, kb: 4.4, away: true, wind: 0.7 },
   psychic:  { name: 'Mind Throw',    shape: 'throw',  reach: 9, size: 3.0, count: 3, lift: 0.9, power: 1.3, kb: 5.0, wind: 0.8 },
-  bug:      { name: 'Swarm Sting',   shape: 'flurry', reach: 4, hits: 5, every: 0.16, power: 0.5, kb: 0.5, wind: 0.5 },
+  bug:      { name: 'Swarm Sting',   shape: 'flurry', reach: 4, hits: 5, every: 0.16, power: 0.75, kb: 0.5, wind: 0.5 },
   rock:     { name: 'Rock Slide',    shape: 'blast',  reach: 9.5, size: 3.5, power: 2.0, kb: 1.6, stun: 0.8, wind: 1.1 },
-  ghost:    { name: 'Shadow Strike', shape: 'strike', reach: 13, blink: true, power: 2.2, kb: 2.4, wind: 0.7 },
-  dragon:   { name: 'Dragon Beam',   shape: 'beam',   reach: 14, width: 1.7, power: 2.0, kb: 2.6, wind: 1.0 },
-  normal:   { name: 'Stampede',      shape: 'rush',   reach: 10, width: 1.2, power: 1.5, kb: 3.2, speed: 0.75, wind: 0.6 },
+  ghost:    { name: 'Shadow Strike', shape: 'strike', reach: 13, blink: true, power: 3.0, kb: 2.4, wind: 0.7 },
+  dragon:   { name: 'Dragon Beam',   shape: 'beam',   reach: 14, width: 1.7, power: 2.0, kb: 2.2, wind: 1.0 },
+  normal:   { name: 'Stampede',      shape: 'rush',   reach: 10, width: 1.2, power: 1.8, kb: 3.2, speed: 0.75, wind: 0.6 },
 };
 // which of a monster's types its signature move comes from: the first, unless that is "normal" and it has another
 export const moveTypeOf = (spec) => (spec.types[0] === 'normal' && spec.types[1] && MOVES[spec.types[1]] ? spec.types[1] : MOVES[spec.types[0]] ? spec.types[0] : 'normal');
@@ -221,7 +221,7 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
     let dx = o.dx, dz = o.dz;
     if (dx === undefined) { dx = src ? t.x - src.x : 0; dz = src ? t.z - src.z : 0; }
     const heavy = dist > 1.6 * K || share > 0.3;
-    emit({ e: 'hit', u: src, t, dmg, eff: o.eff === undefined ? 1 : o.eff, type: o.type || 'normal', heavy, special: !!o.special, dist });
+    emit({ e: 'hit', u: src, t, dmg, eff: o.eff === undefined ? 1 : o.eff, type: o.type || 'normal', heavy, special: !!o.special, pool: !!o.pool, dist });
     if (t.hp <= 0) { knockOut(t, src, dx, dz, Math.max(dist, 1.2 * K), 'ko'); return dmg; }
     if (o.stun) stunUnit(t, o.stun, o.frozen);
     if (dist > 0.02) knock(t, dx, dz, dist);
@@ -449,7 +449,7 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
       const P = pools[i]; P.t -= dt; P.life -= dt;
       if (P.t <= 0 && P.left > 0) {
         P.t += P.every; P.left--;
-        foes(P.team, (v) => { if (hyp(v.x - P.x, v.z - P.z) < P.r + v.r) { v.slow = Math.max(v.slow, P.every + 0.1); if (P.u) strike(P.u, v, P.power, { type: P.type, kb: 0, special: false }); } });
+        foes(P.team, (v) => { if (hyp(v.x - P.x, v.z - P.z) < P.r + v.r) { v.slow = Math.max(v.slow, P.every + 0.1); if (P.u) strike(P.u, v, P.power, { type: P.type, kb: 0, special: false, pool: true }); } });
       }
       if (P.life <= 0) pools.splice(i, 1);
     }

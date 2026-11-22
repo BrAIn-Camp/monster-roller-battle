@@ -177,8 +177,8 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
 
   // ---- effects and sound
   const fx = createFx({ scene, camera, L });
-  let sndBudget = 0;                                            // so forty hits in one frame are not forty beeps
-  const hitSound = (type, vol, pitch = 1) => { if (sndBudget <= 0) return; sndBudget--; const s = SND[type] || SND.normal; tone(s[1] * pitch, s[2] * pitch, s[3], s[0], vol); };
+  let sndBudget = 0;                                            // hit sounds are rationed (about 14 a second, 3 at once), so a pile-up is not a wall of beeps
+  const hitSound = (type, vol, pitch = 1) => { if (sndBudget < 1) return; sndBudget--; const s = SND[type] || SND.normal; tone(s[1] * pitch, s[2] * pitch, s[3], s[0], vol); };
   const hexOf = (type) => TYPE_HEX[type] || 0xffffff, glowOf = (type) => TYPE_GLOW[type] || 0xffffff;
 
   // ---- drawn in bulk: team rings, favoured auras, health bars, signature-move meters, stars, "roll through me" marks
@@ -751,7 +751,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
         if (v.delay > 0) { v.delay -= dt; A.root.scale.setScalar(0.0001); continue; }
         v.fall += dt; const g = clamp(v.fall / (v.fallDur || DROP_FALL), 0, 1);
         fallY = (1 - g * g) * L * 0.55; v.pop = 1;
-        if (g >= 1) { v.fall = -1; v.land = 0; fx.puff(u.x, 0.15, u.z, h > sim.hRef * 1.3 ? 12 : 6, 0xf5efe0, 3 + h, 0.3 + h * 0.08, 0.45); fx.ring(u.x, u.z, { r0: u.r, r1: u.r * 2.4 + 0.6, color: 0xffffff, life: 0.25, opacity: 0.7 }); if (sndBudget-- > 0) tone(clamp(260 / Math.sqrt(h), 60, 320), 50, 0.12, 'triangle', 0.1); if (h > sim.hRef * 1.5) bump(0.15); A.play('entrance', { dur: 0.8 }); }
+        if (g >= 1) { v.fall = -1; v.land = 0; fx.puff(u.x, 0.15, u.z, h > sim.hRef * 1.3 ? 12 : 6, 0xf5efe0, 3 + h, 0.3 + h * 0.08, 0.45); fx.ring(u.x, u.z, { r0: u.r, r1: u.r * 2.4 + 0.6, color: 0xffffff, life: 0.25, opacity: 0.7 }); if (sndBudget >= 1) { sndBudget--; tone(clamp(260 / Math.sqrt(h), 60, 320), 50, 0.12, 'triangle', 0.1); } if (h > sim.hRef * 1.5) bump(0.15); A.play('entrance', { dur: 0.8 }); }
       } else if (v.pop < 1) v.pop = Math.min(1, v.pop + dt / 0.25);
       if (v.land < 1) v.land = Math.min(1, v.land + dt / 0.3);
       v.lunge = Math.max(0, v.lunge - fdt); v.kick = Math.max(0, v.kick - fdt); v.flash = Math.max(0, v.flash - fdt);
@@ -920,7 +920,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     get balls() { return sim.balls; },
     step(dt) {
       if (destroyed || finished) return;
-      T += dt; pt += dt; sndBudget = 5;
+      T += dt; pt += dt; sndBudget = Math.min(3, sndBudget + dt * 14);
       let fdt = dt;
       if (phase === 'merge') { showcase(dt); if (pt >= mergeLen) beginDrop(); }
       else if (phase === 'drop') { if (pt >= DROP_PHASE) { phase = 'countdown'; pt = 0; countN = -1; } }
