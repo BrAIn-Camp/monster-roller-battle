@@ -46,7 +46,7 @@ const STYLE = `
 .ar-flag small{display:block;font-size:.72em;font-weight:700}
 .ar-pop{position:absolute;transform:translate(-50%,-50%);color:#fff;font-size:.95em;padding:.05em .6em;border-radius:.7em;border:2px solid #2b2540;white-space:nowrap;opacity:0;text-shadow:0 1px 0 rgba(0,0,0,.35)}
 .ar-pop.ar-on{animation:ar-rise 1.2s ease-out both}
-.ar-skip{position:absolute;right:15.5em;bottom:1em;font-size:.8em;background:#bfe7ff;overflow:hidden;opacity:.85}
+.ar-skip{position:absolute;right:17.2em;bottom:1em;font-size:.8em;background:#bfe7ff;overflow:hidden;opacity:.85}
 .ar-skip i{position:absolute;left:0;bottom:0;height:.28em;width:0;background:#2b2540}
 .ar-team{width:15em}
 .ar-tname{white-space:nowrap}
@@ -90,7 +90,7 @@ const STYLE = `
 .ar-cer-hexw>svg{display:block;width:100%;overflow:visible}
 .ar-cer-hexw .hx-ico circle{stroke-width:1.6}
 .ar-cer-pc{position:absolute;line-height:1;white-space:nowrap;text-align:center;transform:translate(-50%,-50%);-webkit-text-stroke:3px #2b2540;paint-order:stroke fill}
-.ar-cer-pc small{display:block;font-size:.72em;letter-spacing:.04em;-webkit-text-stroke:2.5px #2b2540}
+.ar-cer-pc small{display:block;font-size:.72em;letter-spacing:.04em;-webkit-text-stroke:2.5px #2b2540;margin-bottom:.28em}
 .ar-cer-pc b{display:block;font-size:1.25em;min-height:1em}
 .ar-cer-pc.ar-top b{font-size:1.7em;animation:ar-lit .35s ease-out}
 .ar-pc0{left:50%;top:.75em}.ar-pc1{left:88%;top:23%}.ar-pc2{left:88%;top:55%}.ar-pc3{left:50%;top:calc(100% - 4.4em)}.ar-pc4{left:12%;top:55%}.ar-pc5{left:12%;top:23%}
@@ -103,9 +103,19 @@ const STYLE = `
 .ar-call{animation:ar-call .5s cubic-bezier(.3,1.5,.5,1)}@keyframes ar-call{0%{transform:scale(1)}35%{transform:scale(1.22);box-shadow:0 0 0 5px #ffe169,0 4px 0 rgba(43,37,64,.35)}100%{transform:scale(1)}}
 .ar-cer-f s{position:absolute;left:-.7em;top:-.5em;width:1.9em;height:1.9em;border-radius:24%;border:2px solid #2b2540;background-size:116%;background-position:center;background-repeat:no-repeat;text-decoration:none;box-shadow:0 2px 0 rgba(43,37,64,.35)}
 .ar-cer-f s b{position:absolute;right:-.5em;bottom:-.35em;font-size:.78em;line-height:1;color:#fff;-webkit-text-stroke:3px #2b2540;paint-order:stroke fill}
-.ar-cer-f.ar-wait s{opacity:.25}
+.ar-cer-f.ar-wait s{opacity:0}.ar-wake s{animation:ar-lit .45s ease-out .1s both}
+.ar-rank{position:absolute;left:50%;top:21%;transform:translateX(-50%) scale(.85);display:flex;gap:1.3em;align-items:flex-end;padding:1em 1.8em .8em;border-width:4px;background:rgba(255,250,240,.97);opacity:0;transition:opacity .2s,transform .25s cubic-bezier(.3,1.4,.5,1);z-index:2;font-size:1.15em}
+.ar-rank.ar-on{opacity:1;transform:translateX(-50%)}
+.ar-rk{display:flex;flex-direction:column;align-items:center;justify-content:flex-end;width:5em}
+.ar-rk b{font-size:1.5em;line-height:1.1;color:var(--tc);-webkit-text-stroke:4px #2b2540;paint-order:stroke fill;opacity:0;transform:scale(.3);transition:opacity .15s calc(var(--d) + .3s),transform .3s cubic-bezier(.3,1.7,.5,1) calc(var(--d) + .3s)}
+.ar-rank.ar-on .ar-rk b{opacity:1;transform:none}
+.ar-rk i{display:block;width:100%;height:0;background:var(--tc);border:3px solid #2b2540;border-bottom-width:0;border-radius:.6em .6em 0 0;transition:height .45s cubic-bezier(.3,1.3,.5,1) var(--d)}
+.ar-rank.ar-on .ar-rk i{height:var(--h)}
+.ar-rk span{width:100%;text-align:center;border-top:3px solid #2b2540;padding-top:.25em;white-space:nowrap}
+.ar-rk small{font-size:.8em;color:#fff;background:#2b2540;border-radius:.6em;padding:.05em .55em;margin-top:.15em}
+.ar-rk.ar-me span{background:#ffe169;border-radius:0 0 .5em .5em}
 .st-ico{width:1.5em;height:1.5em;flex:none;vertical-align:middle}
-.ar-cer-six{display:flex;justify-content:center;gap:.9em;margin-top:.5em;padding-bottom:1em}
+.ar-cer-six{display:flex;justify-content:center;gap:1em;margin-top:.6em;padding-bottom:.3em}
 .ar-cer-f{position:relative;width:4.2em;height:4.2em;border-radius:50%;border:3px solid #2b2540;box-shadow:0 3px 0 rgba(43,37,64,.35);transition:filter .2s}
 .ar-cer-f img{position:absolute;inset:-4%;width:108%;height:108%;object-fit:contain;border-radius:50%;transition:filter .2s}
 .ar-cer-f.ar-wait{background:#d8d4e0!important}.ar-cer-f.ar-wait img{filter:brightness(0) opacity(.3)}.ar-cer-f.ar-wait em{opacity:0}

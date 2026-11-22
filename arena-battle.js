@@ -18,12 +18,12 @@ import { el, setText, replay, injectStyle, isMe, teamLabel, chip, typeColor, HAS
 const LINE_AT = 0.3, LINE_STEP = 0.2;                 // the muster: when the first of a team's six steps up, and the gap to the next
 const LINE_END = 2.7;                                 // ...and when the first team's turn begins (time to look at one's own six)
 // A team's turn. A player's count takes four seconds (less for a small collection); a CPU team's a little over one.
-const SIX_HUMAN = 1.0, SIX_CPU = 0.25;                // counting the critters that became the six...
-const REST_HUMAN = 3.0, REST_CPU = 0.6;               // ...and all the rest, into the hexagon
+const SIX_HUMAN = 1.0, SIX_CPU = 0.15;                // counting the critters that became the six...
+const REST_HUMAN = 3.0, REST_CPU = 0.45;              // ...and all the rest, into the hexagon
 const SETTLE = 0.25;                                  // what it came to
-const GIVE_HUMAN = 1.9, GIVE_CPU = 0.95, FLY_MS = 300;// spending it on the six, a stat at a time
-const TURN_IN = 0.3, TURN_OUT = 0.2;                  // the panel opening and closing
-const MUSTER_HOLD = 1.5;                              // after the last team: the four are compared, weakest first
+const GIVE_HUMAN = 1.9, GIVE_CPU = 0.7, FLY_MS = 300; // spending it on the six, a stat at a time
+const TURN_IN = 0.3, TURN_OUT = 0.15;                 // the panel opening and closing
+const MUSTER_HOLD = 2.5;                              // after the last team: the four side by side, weakest first
 const DROP_PHASE = 1.5, DROP_FALL = 0.42;
 const STAT_HEX = STAT_COL.map((c) => parseInt(c.slice(1), 16));
 const COUNT_STEP = 0.7;       // seconds per "3", "2", "1"
@@ -641,8 +641,8 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
   //      - Then the hexagon is spent on the six: one stat at a time, a badge with that bonus on it flies from its
   //        corner to the six on the floor, who take it with a flash in its colour; at the last they flare and roar.
   //      What the team came out with stays on its corner panel for the fight, so the four can be compared.
-  // CPU teams go first and are quick about it; players get the full count, the one at this screen last. A press of
-  // the dash button hurries a count along. Then they walk on: the monsters that lined up are the very ones that fight.
+  // CPU teams go first and are quick about it; players get the full count. A press of the dash button hurries a
+  // count along. Then they walk on: the monsters that lined up are the very ones that fight.
   const muster = [];
   plans.forEach((p, k) => {
     const recs = sim.recs[k];
@@ -654,12 +654,15 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     let top = 0; for (let i = 1; i < 6; i++) if (bonus[i] > bonus[top]) top = i;
     const sixT = (human ? SIX_HUMAN : SIX_CPU) * clamp(into.length / 12, 0.5, 1), restT = !rest.length ? 0 : (human ? REST_HUMAN : REST_CPU) * clamp(0.4 + rest.length / 50, 0.5, 1);
     muster.push({ team: k, cx, cz, face: Math.atan2(-cx, -cz), recs, lined: [], into, rest, shown: 0, run: [0, 0, 0, 0, 0, 0], bonus, top, vals: hexValues(bonus), human,
-      power: teamPower(bonus), caught: p.before, pow: 0, sixT, restT, give: !rest.length ? 0.3 : human ? GIVE_HUMAN : GIVE_CPU, gap: human ? 0.16 : 0.06, stage: 0, wave: 0, pend: [], fin: false, done: false, over: false, stand: bench.filter((q) => q.k === k), tick: 0, ui: null });
+      power: teamPower(bonus), caught: p.before, pow: 0, sixT, restT, give: !rest.length ? 0.3 : human ? GIVE_HUMAN : GIVE_CPU, gap: human ? 0.16 : 0.035, stage: 0, wave: 0, pend: [], fin: false, done: false, over: false, stand: bench.filter((q) => q.k === k), tick: 0, ui: null });
   });
-  const order = muster.slice().sort((a, b) => (a.team === myTeam ? 2 : a.human ? 1 : 0) - (b.team === myTeam ? 2 : b.human ? 1 : 0) || a.team - b.team);
+  // (The order, and how long each turn takes, must come out the same on every machine in a multiplayer game: the fight
+  // starts when the muster ends, and every machine has to start it on the same step. So nothing here may depend on
+  // which player is at this screen: CPU teams by seat, then players by seat.)
+  const order = muster.slice().sort((a, b) => (a.human ? 1 : 0) - (b.human ? 1 : 0) || a.team - b.team);
   const turnLen = (c) => TURN_IN + c.sixT + c.restT + SETTLE + c.give + TURN_OUT;
   const musterLen = muster.length ? LINE_END + order.reduce((s, c) => s + turnLen(c), 0) + MUSTER_HOLD : 0;
-  let turnI = -1, turnT = 0, musterCam = null, dashWas = false, endHold = 0, rollCall = [];
+  let turnI = -1, turnT = 0, musterCam = null, dashWas = false, endHold = 0, rollCall = [], rankEl = null;
   // two rows of three across the corner, the strongest three in front
   const lineSpot = (c, j) => {
     const n = c.recs.length, front = Math.min(3, n), row = j < front ? 0 : 1, inRow = row ? n - front : front, col = row ? j - front : j;
@@ -714,9 +717,9 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     const faces = c.recs.map((r, j) => {
       // (a merged one also carries a small tag of what it was made of: "x9" on the little one it grew from)
       const from = (plans[c.team].roster[j].from || []).slice().sort((a, b) => b.count - a.count)[0], made = r.made > 1 && from;
-      const f = el('div', 'ar-cer-f ar-wait', six, `<img alt="" src="${faceUrl(r.spec)}"><em>${'★'.repeat(r.stars || 0)}</em>${made ? `<s style="background-color:${typeColor(from.spec.types[0])};background-image:url(${faceUrl(from.spec)})"><b>×${r.made}</b></s>` : ''}<u>${'<i></i>'.repeat(6)}</u>`);
+      const f = el('div', 'ar-cer-f ar-wait', six, `<img alt="" src="${faceUrl(r.spec)}"><em>${'★'.repeat(r.stars || 0)}</em>${made ? `<s style="background-color:${typeColor(from.spec.types[0])};background-image:url(${faceUrl(from.spec)})"><b>×${r.made}</b></s>` : ''}`);
       f.style.background = `radial-gradient(circle at 50% 35%, #fff 0%, ${typeColor(r.spec.types[0])} 140%)`;
-      return { root: f, pips: [...f.querySelectorAll('u i')], need: 0, got: 0 };
+      return { root: f, need: 0, got: 0 };
     });
     for (const e of c.into) faces[e.j].need++;
     c.ui = { root: p, count, grid, tiles: new Map(), hex: hexw.firstChild, icons: [...hexw.querySelectorAll('.hx-ico')], labels, banner, faces, n: 0 };
@@ -786,11 +789,12 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
       while (c.wave < 6 && tg >= c.wave * c.gap) {
         const i = c.wave++;
         if (c.bonus[i] <= 0.004) continue;
-        if (ui) { replay(ui.icons[i], 'ping'); domFly(ui.icons[i], sixOnScreen(c), { ms: FLY_MS, cls: 'ar-badge', html: statIcon(i) + '<b>' + pct(c.bonus[i]) + '</b>' }); ui.faces.forEach((f) => { f.pips[i].style.background = STAT_COL[i]; replay(f.pips[i], 'ar-lit'); }); }
+        if (ui) { replay(ui.icons[i], 'ping'); domFly(ui.icons[i], sixOnScreen(c), { ms: FLY_MS, cls: 'ar-badge', html: statIcon(i) + '<b>' + pct(c.bonus[i]) + '</b>' }); }
         c.pend.push({ at: turnT + FLY_MS / 1000, i });
       }
       for (let n = c.pend.length - 1; n >= 0; n--) if (turnT >= c.pend[n].at) {            // ...it lands
         const i = c.pend.splice(n, 1)[0].i;
+        if (ui) for (const f of ui.faces) { f.root.style.boxShadow = `0 0 0 3px ${STAT_COL[i]}, 0 3px 0 rgba(43,37,64,.35)`; replay(f.root, 'ar-fed'); }      // (their portraits take it too)
         for (const q of c.lined) {
           q.kick = 1; q.col = STAT_HEX[i];
           fx.ring(q.x, q.z, { r0: 0.2, r1: q.h * 0.75 + 0.9, color: STAT_HEX[i], life: 0.34, opacity: 0.95, thin: true });
@@ -844,8 +848,15 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     if (turnI >= order.length) {
       // every team has had its turn: back to the whole floor, and the four are called out, weakest collection first
       musterCam = null;
-      if (endHold === 0) rollCall = order.slice().sort((a, b) => a.power - b.power || a.team - b.team);
-      while (rollCall.length && endHold >= 0.25 + (order.length - rollCall.length) * 0.24) {
+      if (endHold === 0) {
+        rollCall = order.slice().sort((a, b) => a.power - b.power || a.team - b.team);
+        if (hud) {                                              // a bar each, as tall as its Power: who collected best is plain to see
+          const max = Math.max(0.01, ...rollCall.map((c) => c.power));
+          rankEl = el('div', 'ar-rank ar-pill', hud.root, rollCall.map((c, i) => `<div class="ar-rk${c.team === myTeam ? ' ar-me' : ''}" style="--tc:${teams[c.team].css};--h:${(1.2 + 8.8 * c.power / max).toFixed(2)}em;--d:${(0.25 + i * 0.3).toFixed(2)}s"><b>${c.power > 0.004 ? pct(c.power) : '+0%'}</b><i></i><span>${teamLabel(teams[c.team])}</span><small>${c.caught}</small></div>`).join(''));
+          void rankEl.offsetWidth; rankEl.classList.add('ar-on');
+        }
+      }
+      while (rollCall.length && endHold >= 0.25 + (order.length - rollCall.length) * 0.3) {
         const c = rollCall.shift(), n = order.length - rollCall.length, f = 392 * 1.189 ** n;
         if (hud) { replay(hud.panels[c.team].root, 'ar-call'); }
         tone(f, f * 1.5, 0.14, 'triangle', c.team === myTeam ? 0.16 : 0.09);
@@ -875,6 +886,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
   // The muster is over: whoever lined up is handed to the fight as the monster they are (adopt), or let go.
   function endMuster(adopt) {
     musterCam = null;
+    if (rankEl) { const r = rankEl; rankEl = null; r.classList.remove('ar-on'); setTimeout(() => r.remove(), 250); }
     for (const c of muster) {
       if (c.over) continue;
       c.over = true; c.done = true; crown(c); closePanel(c);

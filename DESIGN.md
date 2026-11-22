@@ -175,10 +175,14 @@ each stat, so it goes mostly to what that critter is best at: fast critters feed
 totals decide two things:
 - *How much.* A budget of 6 x 18% x S / (S + 31200), where S is the six totals added together: the first critters count
   most, and about 100 spares earns half of all there is.
-- *Where.* The budget is shared between the stats by the square of each stat's share. An even collection gets the same on
-  every stat (never more than +18%); one that leans towards fast critters gets far more Speed and less of the rest, up to
-  +30% on a single stat. So a collection has a shape, and no hexagon can be filled: the frame is the +30% that only one
-  stat can reach.
+- *Where.* The budget is shared between the stats by the square of how far each stat's share is above or below what an
+  ordinary mix of critters gives it (critters as a whole lean towards Attack and Speed, so without that every team came out
+  "best at Speed"). An ordinary mix gets the same on every stat (never more than +18%); one that leans towards fast
+  critters gets far more Speed and less of the rest, up to +30% on a single stat. So a collection has a shape, and no
+  hexagon can be filled: the frame is the +30% that only one stat can reach.
+- *One number to show for it.* `teamPower` turns the six bonuses into how much stronger they make the six: health and
+  damage in full, taking less and striking more often at about half each. +9% on everything is Power +30%. It is drawn in
+  the middle of the hexagon on the round's HUD and in the ceremony, and decides nothing itself.
 A large, even haul (+9% on each) wins as often as a team made 30% stronger outright
 (`node tools/arena-test/headless.mjs bonus` measures it).
 
@@ -197,23 +201,31 @@ Normal and Hard): a critter they already carry one or two of seems nearer to the
 
 **The order of things.** The arena is chosen when the round starts so the oracle can hint at it. The wheel reveals it. Then:
 
-1. *Muster*, the ceremony (about 17 s with one player and three CPU teams; hold Enter skips the fight, a press of dash
+1. *Muster*, the ceremony (about 18 s with one player and three CPU teams; hold Enter skips the fight, a press of dash
    hurries a count). Every team's six step up by their corner, strongest first, in two rows of three. Then each team takes a
-   turn: CPU teams first and quickly (3 s each), players after with the full count, the one at this screen last. The camera
-   goes to the team's corner and a panel opens beside it:
+   turn: CPU teams first and quickly (under 2 s each), then players by seat with the full count. The order and every
+   duration are the same on every machine in a multiplayer game, because the fight must start on the same step everywhere.
+   The camera goes to the team's corner and a panel opens beside it:
    - *the count* (4 s for a player, less for a small collection): everything the team rolled up, a species to a tile with a
      tally on it. First the critters that became its six: they fly to the six portraits, which start as silhouettes and come
      to life as they fill, so nine little ones are seen to have become the big one. Then all the rest: each sends a spark to
      the corner of the hexagon it feeds, and the hexagon takes its shape as they land. The number at the top is everything
      the team caught.
-   - *what it came to*: the bonus appears on every corner (each named), and the team's best stat is announced by name.
-     Numbers are held back until here because a stat's share can fall while the count is still going.
+     A Power figure in the middle of the hexagon climbs with every one counted. A fighter that was merged carries a small
+     tag of what it grew from ("x9" on a Charmander beside the Charizard).
+   - *what it came to*: the bonus appears on every corner (each named, the best one larger), and Power is announced.
+     The corner numbers are held back until here because one stat's share can fall while the count is still going.
    - *the hand-over*: one stat at a time, a badge with that bonus on it flies from its corner to the six on the floor, who
-     take it with a flash in its colour; their portraits light a pip for each. At the last they flare and roar.
-   The team's hexagon and its best stat ("Speed +30%") stay on its corner panel for the fight, so the four can be compared.
-   This is the second version. The first counted only the spares, showed no names or numbers anyone could read and gave
-   every team five seconds; three role-played players (a child, a competitive player, an adult with a small haul) scored it
-   5/10 for excitement and 3 to 5 for clarity, and all three asked why the count did not match what they had caught.
+     take it with a flash in its colour. At the last they flare and roar.
+   After the last turn the camera pulls back and the four are put side by side: a bar each, as tall as its Power, with what
+   it caught underneath, rising weakest first. Each corner card keeps its best stat's badge and its Power for the fight.
+   This is the third version, shaped by role-played players (a child, a competitive player, an adult with a small haul).
+   The first counted only the spares, showed no names or numbers anyone could read and gave every team five seconds: 5/10
+   for excitement, 3 to 5 for clarity, and all three asked why the count did not match what they had caught. The second
+   fixed the count but every team headlined "Speed +10%" and "+11% for ninety critters" read as nothing. The third scored
+   6 for excitement, 4 for clarity and 5 for "my effort was honoured" (from 5, 3 and 4), and asked for a real comparison at
+   the end, which is the bars. These reviewers saw stepped still frames at 800 x 600 with no sound, so motion, sound and
+   small type are judged harshly or not at all; a person should watch it.
 2. *Drop.* The six hop to their places and the four balls fall in. 3, 2, 1, GO.
 3. *Fight.* See below. Six a side, all on the floor from the start; nobody waits in reserve.
 4. *Finish.* The last knockout plays in slow motion with the camera pushed in, then the winners cheer.
