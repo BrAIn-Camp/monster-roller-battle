@@ -305,6 +305,8 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     return { warn: noop, fire: noop, view: noop };
   })();
 
+  const timed = [];                                             // held shapes with a time to live: [{ h, t }]
+  const holdFor = (h, t) => { timed.push({ h, t }); };
   // ---- signature moves: the telegraph on the floor while one winds up...
   const stripYaw = (dx, dz) => Math.atan2(dx, dz) + Math.PI;   // the strip and wedge shapes run along -z
   function telegraph(u, w) {
@@ -365,7 +367,11 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
         fx.ring(x, z, { r0: w.size * 0.3, r1: w.size * 1.15, color: c, opacity: 1, life: 0.45 }); fx.disc(x, z, { r0: w.size * 0.5, r1: w.size, color: g, life: 0.3 });
         if (w.move === 'ice') { fx.flash(x, 1, z, { r: w.size * 0.9, color: 0xd8f6ff, life: 0.3 }); for (let i = 0; i < 12; i++) { const a = vr() * 6.283; fx.shard(x, 0.5, z, Math.cos(a) * (4 + vr() * 6), 5 + vr() * 6, Math.sin(a) * (4 + vr() * 6), { size: (0.4 + vr() * 0.5) * K, color: 0xbff2ff, life: 0.8, opacity: 0.85 }); } fx.burst(x, 1, z, 24, 0xffffff, 9, 0.35 * K, 0.6); tone(2200, 900, 0.35, 'sine', 0.16); bump(0.25); }
         else if (w.move === 'rock') { for (let i = 0; i < 10; i++) { const a = vr() * 6.283; fx.shard(x + Math.cos(a) * w.size * 0.4, 0.4, z + Math.sin(a) * w.size * 0.4, Math.cos(a) * (3 + vr() * 6), 6 + vr() * 6, Math.sin(a) * (3 + vr() * 6), { size: (0.5 + vr() * 0.7) * K, color: 0x8f7c5c, rock: true, life: 1 }); } fx.puff(x, 0.3, z, 26, 0xcfb98a, 9, 0.6 * K, 0.8, -6, 2); bump(0.5); tone(90, 40, 0.5, 'sawtooth', 0.24); }
-        else { for (let i = 0; i < 60; i++) { const a = vr() * 6.283, d = w.size * (0.2 + vr() * 0.8), sp = 9 + vr() * 6; fx.spark(x + Math.cos(a) * d, 0.2 + vr() * 1, z + Math.sin(a) * d, -Math.sin(a) * sp + w.dx * 5, 2 + vr() * 6, Math.cos(a) * sp + w.dz * 5, vr() < 0.5 ? 0xffffff : c, (0.3 + vr() * 0.4) * K, 0.7, 0, true, 1.2); } tone(500, 1400, 0.5, 'sine', 0.12); bump(0.25); }
+        else {                                                  // a whirlwind: rings climbing a funnel, and everything in it spinning out
+          for (let i = 0; i < 60; i++) { const a = vr() * 6.283, d = w.size * (0.2 + vr() * 0.8), sp = 9 + vr() * 6; fx.spark(x + Math.cos(a) * d, 0.2 + vr() * 1, z + Math.sin(a) * d, -Math.sin(a) * sp + w.dx * 5, 2 + vr() * 6, Math.cos(a) * sp + w.dz * 5, vr() < 0.5 ? 0xffffff : c, (0.3 + vr() * 0.4) * K, 0.7, 0, true, 1.2); }
+          for (let i = 0; i < 6; i++) fx.ring(x + w.dx * i * 0.35, z + w.dz * i * 0.35, { r0: w.size * 0.15, r1: w.size * (0.35 + i * 0.13), y: 0.3 + i * 0.75 * K, color: i % 2 ? 0xffffff : c, life: 0.4 + i * 0.07, opacity: 0.8, thin: i % 2 === 1 });
+          tone(500, 1400, 0.5, 'sine', 0.12); bump(0.25);
+        }
         break;
       }
       case 'pool': fx.puff(w.tx, 0.3, w.tz, 20, c, 6, 0.5 * K, 0.7, -8, 4); fx.ring(w.tx, w.tz, { r0: 0.5, r1: w.size, color: c, life: 0.4 }); tone(260, 140, 0.4, 'sawtooth', 0.12); break;
@@ -382,7 +388,16 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
         bump(0.4);
         break;
       }
-      case 'throw': for (const t of e.hits) { fx.ring(t.x, t.z, { r0: t.r * 2, r1: t.r * 0.6, color: c, life: 0.5 }); if (t.v) t.v.lift = M.lift; } tone(600, 1500, M.lift, 'sine', 0.12); break;
+      case 'throw':                                             // each one caught: a line from the user's mind to it, and a ring that holds it up
+        for (const t of e.hits) {
+          fx.beam(u.x, u.h * 0.9, u.z, t.x, t.h * 0.6, t.z, { w: 0.22 * K, life: 0.3, color: c, core: 0xffffff, grow: 0.05 });
+          fx.ring(t.x, t.z, { r0: t.r * 2.2, r1: t.r * 0.7, color: c, life: 0.35, opacity: 1 });
+          const h = fx.hold('thin', { color: g, opacity: 0.9, lit: true }, (tt, dt, m) => { const s = (t.r + 0.5) * (1 + 0.08 * Math.sin(tt * 18)); m.position.set(t.x, 0.05, t.z); m.scale.set(s, 1, s); m.rotation.y = tt * 3; });
+          holdFor(h, M.lift);
+          if (t.v) t.v.lift = M.lift;
+        }
+        tone(600, 1500, M.lift, 'sine', 0.12);
+        break;
       case 'rush': fx.puff(u.x, 0.2, u.z, 12, 0xf5efe0, 6, 0.5, 0.5); fx.ring(u.x, u.z, { r0: u.r, r1: u.r + 3 * K, color: 0xffffff, life: 0.3 }); tone(200, 500, 0.3, 'sawtooth', 0.14); break;
       default: break;
     }
@@ -801,6 +816,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     guideMesh.count = ng; guideMesh.instanceMatrix.needsUpdate = true;
     for (const m of [ringMesh, auraMesh, barBg, barLag, barFill, barCharge, starMesh, markMesh]) { m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true; }
     drawDying(fdt); drawLeaving(dt);
+    for (let i = timed.length - 1; i >= 0; i--) { timed[i].t -= fdt; if (timed[i].t <= 0) { timed[i].h.release(0.2); timed.splice(i, 1); } }
     if (fight) drawFlying(fdt);
     // balls
     for (const w of ballViews) {
