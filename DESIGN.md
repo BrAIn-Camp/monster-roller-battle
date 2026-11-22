@@ -201,20 +201,22 @@ Normal and Hard): a critter they already carry one or two of seems nearer to the
 
 **The order of things.** The arena is chosen when the round starts so the oracle can hint at it. The wheel reveals it. Then:
 
-1. *Muster*, the ceremony (about 18 s with one player and three CPU teams; hold Enter skips the fight, a press of dash
+1. *Muster*, the ceremony (about 23 s with one player and three CPU teams; hold Enter skips the fight, a press of dash
    hurries a count). Every team's six step up by their corner, strongest first, in two rows of three. Then each team takes a
-   turn: CPU teams first and quickly (under 2 s each), then players by seat with the full count. The order and every
+   turn: CPU teams first and quickly (under 3 s each), then players by seat with the full count (9 s). The order and every
    duration are the same on every machine in a multiplayer game, because the fight must start on the same step everywhere.
-   The camera goes to the team's corner and a panel opens beside it:
-   - *the count* (4 s for a player, less for a small collection): everything the team rolled up, a species to a tile with a
+   The camera goes to the team's corner and a panel opens beside it. The hexagon is the largest thing on it, because it is
+   what the whole round's collecting came to:
+   - *the count* (5 s for a player, less for a small collection): everything the team rolled up, a species to a tile with a
      tally on it. First the critters that became its six: they fly to the six portraits, which start as silhouettes and come
      to life as they fill, so nine little ones are seen to have become the big one. Then all the rest: each sends a spark to
      the corner of the hexagon it feeds, and the hexagon takes its shape as they land. The number at the top is everything
      the team caught.
      A Power figure in the middle of the hexagon climbs with every one counted. A fighter that was merged carries a small
      tag of what it grew from ("x9" on a Charmander beside the Charizard).
-   - *what it came to*: the bonus appears on every corner (each named, the best one larger), and Power is announced.
-     The corner numbers are held back until here because one stat's share can fall while the count is still going.
+   - *what it came to* (1 s): the bonus appears on each corner in turn, clockwise from the top (each named, the best one
+     larger), then the Power in the middle turns gold. The corner numbers are held back until here because one stat's
+     share can fall while the count is still going.
    - *the hand-over*: one stat at a time, a badge with that bonus on it flies from its corner to the six on the floor, who
      take it with a flash in its colour. At the last they flare and roar.
    After the last turn the camera pulls back and the four are put side by side: a bar each, as tall as its Power, with what

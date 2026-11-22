@@ -18,12 +18,13 @@ import { el, setText, replay, injectStyle, isMe, teamLabel, chip, typeColor, HAS
 const LINE_AT = 0.3, LINE_STEP = 0.2;                 // the muster: when the first of a team's six steps up, and the gap to the next
 const LINE_END = 2.7;                                 // ...and when the first team's turn begins (time to look at one's own six)
 // A team's turn. A player's count takes four seconds (less for a small collection); a CPU team's a little over one.
-const SIX_HUMAN = 1.0, SIX_CPU = 0.15;                // counting the critters that became the six...
-const REST_HUMAN = 3.0, REST_CPU = 0.45;              // ...and all the rest, into the hexagon
-const SETTLE = 0.25;                                  // what it came to
-const GIVE_HUMAN = 1.9, GIVE_CPU = 0.7, FLY_MS = 300; // spending it on the six, a stat at a time
+const SIX_HUMAN = 1.2, SIX_CPU = 0.2;                 // counting the critters that became the six...
+const REST_HUMAN = 3.8, REST_CPU = 0.7;               // ...and all the rest, into the hexagon
+const SETTLE_HUMAN = 1.0, SETTLE_CPU = 0.45;          // what it came to: a number on each corner in turn, then Power
+const SAY_HUMAN = 0.1, SAY_CPU = 0.03;                // (the time between one corner's number and the next)
+const GIVE_HUMAN = 2.5, GIVE_CPU = 0.9, FLY_MS = 300; // spending it on the six, a stat at a time
 const TURN_IN = 0.3, TURN_OUT = 0.15;                 // the panel opening and closing
-const MUSTER_HOLD = 2.5;                              // after the last team: the four side by side, weakest first
+const MUSTER_HOLD = 3.0;                              // after the last team: the four side by side, weakest first
 const DROP_PHASE = 1.5, DROP_FALL = 0.42;
 const STAT_HEX = STAT_COL.map((c) => parseInt(c.slice(1), 16));
 const COUNT_STEP = 0.7;       // seconds per "3", "2", "1"
@@ -654,13 +655,13 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     let top = 0; for (let i = 1; i < 6; i++) if (bonus[i] > bonus[top]) top = i;
     const sixT = (human ? SIX_HUMAN : SIX_CPU) * clamp(into.length / 12, 0.5, 1), restT = !rest.length ? 0 : (human ? REST_HUMAN : REST_CPU) * clamp(0.4 + rest.length / 50, 0.5, 1);
     muster.push({ team: k, cx, cz, face: Math.atan2(-cx, -cz), recs, lined: [], into, rest, shown: 0, run: [0, 0, 0, 0, 0, 0], bonus, top, vals: hexValues(bonus), human,
-      power: teamPower(bonus), caught: p.before, pow: 0, sixT, restT, give: !rest.length ? 0.3 : human ? GIVE_HUMAN : GIVE_CPU, gap: human ? 0.16 : 0.035, stage: 0, wave: 0, pend: [], fin: false, done: false, over: false, stand: bench.filter((q) => q.k === k), tick: 0, ui: null });
+      power: teamPower(bonus), caught: p.before, pow: 0, sixT, restT, settle: !rest.length ? 0.25 : human ? SETTLE_HUMAN : SETTLE_CPU, say: human ? SAY_HUMAN : SAY_CPU, said: 0, give: !rest.length ? 0.3 : human ? GIVE_HUMAN : GIVE_CPU, gap: human ? 0.24 : 0.05, stage: 0, wave: 0, pend: [], fin: false, done: false, over: false, stand: bench.filter((q) => q.k === k), tick: 0, ui: null });
   });
   // (The order, and how long each turn takes, must come out the same on every machine in a multiplayer game: the fight
   // starts when the muster ends, and every machine has to start it on the same step. So nothing here may depend on
   // which player is at this screen: CPU teams by seat, then players by seat.)
   const order = muster.slice().sort((a, b) => (a.human ? 1 : 0) - (b.human ? 1 : 0) || a.team - b.team);
-  const turnLen = (c) => TURN_IN + c.sixT + c.restT + SETTLE + c.give + TURN_OUT;
+  const turnLen = (c) => TURN_IN + c.sixT + c.restT + c.settle + c.give + TURN_OUT;
   const musterLen = muster.length ? LINE_END + order.reduce((s, c) => s + turnLen(c), 0) + MUSTER_HOLD : 0;
   let turnI = -1, turnT = 0, musterCam = null, dashWas = false, endHold = 0, rollCall = [], rankEl = null;
   // two rows of three across the corner, the strongest three in front
@@ -710,9 +711,10 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     const tm = teams[c.team], p = el('div', `ar-cer ar-pill ${c.cx < 0 ? 'ar-r' : 'ar-l'}`, hud.root);
     p.style.setProperty('--tc', tm.css);
     const head = el('div', 'ar-cer-head', p, `<i class="ar-dot" style="background:${tm.css}"></i>${teamLabel(tm)}`), count = el('span', 'ar-cer-n', head, '0');
-    const body = el('div', 'ar-cer-body', p), grid = el('div', 'ar-cer-grid', body), hexw = el('div', 'ar-cer-hexw', body, hexSvg());
-    const labels = [0, 1, 2, 3, 4, 5].map((i) => { const b = el('div', 'ar-cer-pc ar-pc' + i, hexw, `<small>${STAT_SHORT[i]}</small><b></b>`); b.style.color = STAT_COL[i]; return b; });
-    const banner = el('div', 'ar-cer-best', hexw, '');
+    // (the hexagon is the largest thing on the panel: it is what the whole round's collecting came to)
+    const body = el('div', 'ar-cer-body', p), grid = el('div', 'ar-cer-grid', body), hexw = el('div', 'ar-cer-hexw', body), hexb = el('div', 'ar-cer-hexb', hexw, hexSvg());
+    const labels = [0, 1, 2, 3, 4, 5].map((i) => { const b = el('div', 'ar-cer-pc ar-pc' + i, hexb, `<small>${STAT_SHORT[i]}</small><b></b>`); b.style.color = STAT_COL[i]; return b; });
+    if (c.rest.length) el('div', 'ar-cer-pw', hexb, 'Power');
     const six = el('div', 'ar-cer-six', p);
     const faces = c.recs.map((r, j) => {
       // (a merged one also carries a small tag of what it was made of: "x9" on the little one it grew from)
@@ -722,7 +724,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
       return { root: f, need: 0, got: 0 };
     });
     for (const e of c.into) faces[e.j].need++;
-    c.ui = { root: p, count, grid, tiles: new Map(), hex: hexw.firstChild, icons: [...hexw.querySelectorAll('.hx-ico')], labels, banner, faces, n: 0 };
+    c.ui = { root: p, count, grid, tiles: new Map(), hex: hexb.firstChild, box: hexb, icons: [...hexb.querySelectorAll('.hx-ico')], labels, faces, n: 0 };
     // one tile per species, as big as will fit
     const kinds = new Set(); for (const e of c.into) kinds.add(e.spec); for (const e of c.rest) kinds.add(e.spec);
     const W = grid.clientWidth || 300, H = grid.clientHeight || 200, N = Math.max(1, kinds.size);
@@ -768,23 +770,27 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
       if (made && (c.tick -= dt) <= 0) { c.tick = 0.055; const g = c.shown / all; tone(380 + 1100 * g, 420 + 1250 * g, 0.05, 'triangle', mine ? 0.085 : 0.04); }
       if (made && c.stand.length && c.shown > c.into.length) for (let i = 0; i < Math.min(made, 3); i++) { const q = c.stand[Math.floor(vr() * c.stand.length)]; fx.spark(q.x, q.s * 1.5, q.z, (vr() - 0.5) * 2, 9 + vr() * 5, (vr() - 0.5) * 2, STAT_HEX[Math.floor(vr() * 6)], (0.3 + vr() * 0.14) * K, 0.6, -12, true); }
     }
-    // ---- what it came to: a number on every corner, and the best of them by name
+    // ---- what it came to: a number on each corner in turn, clockwise from the top (the best of them larger), then Power
     const ts = t - c.sixT - c.restT;
     if (ts >= 0 && c.stage < 1) {
       c.stage = 1;
-      if (ui) {
-        for (const f of ui.faces) f.root.classList.remove('ar-wait');
-        hexDraw(ui.hex, c.vals, powerText(c.bonus));
-        if (c.rest.length) {
-          for (let i = 0; i < 6; i++) { ui.labels[i].lastChild.textContent = c.bonus[i] > 0.004 ? pct(c.bonus[i]) : ''; if (i === c.top) ui.labels[i].classList.add('ar-top'); }
-          ui.banner.innerHTML = `<span>Power</span><b>${pct(c.power)}</b>`; ui.banner.classList.add('ar-on');
-          replay(ui.hex.parentNode, 'ar-hexdone');
-        }
+      if (ui) { for (const f of ui.faces) f.root.classList.remove('ar-wait'); hexDraw(ui.hex, c.vals, powerText(c.bonus)); }
+    }
+    if (c.stage === 1 && c.rest.length) {
+      while (c.said < 6 && ts >= c.said * c.say) {
+        const i = c.said++;
+        if (c.bonus[i] <= 0.004) continue;
+        if (ui) { ui.labels[i].lastChild.textContent = pct(c.bonus[i]); ui.labels[i].classList.add(i === c.top ? 'ar-top' : 'ar-said'); replay(ui.icons[i], 'ping'); }
+        const f = 587 * 1.122 ** i; tone(f, f * 1.26, 0.07, 'triangle', mine ? 0.1 : 0.035);
       }
-      if (c.rest.length) { tone(523, 784, 0.16, 'triangle', mine ? 0.15 : 0.06); tone(1047, 1568, 0.22, 'triangle', mine ? 0.13 : 0.05, 0.1); }
+      if (c.said >= 6 && ts >= 6 * c.say + 0.08) {
+        c.stage = 2;
+        if (ui) { ui.box.classList.add('ar-done'); replay(ui.box, 'ar-hexdone'); }
+        tone(523, 784, 0.16, 'triangle', mine ? 0.15 : 0.06); tone(1047, 1568, 0.22, 'triangle', mine ? 0.13 : 0.05, 0.1);
+      }
     }
     // ---- the hexagon is spent on the six, a stat at a time: a badge flies to them, and they take it
-    const tg = ts - SETTLE;
+    const tg = ts - c.settle;
     if (tg >= 0 && c.rest.length) {
       while (c.wave < 6 && tg >= c.wave * c.gap) {
         const i = c.wave++;
