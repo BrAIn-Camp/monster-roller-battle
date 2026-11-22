@@ -16,7 +16,7 @@
 //   .step(dt)    once a frame       .reset()   a new round       .show(on)       .refresh()  redraw the portraits
 //
 // The hexagon is also drawn before the arena fight (arena-battle.js), so its drawing is exported: hexSvg().
-import { BONUS_MAX, SQUAD } from './arena-merge.js';
+import { BONUS_STAT_MAX, SQUAD } from './arena-merge.js';
 
 export const STAT_COL = ['#ff5a5a', '#ff9d42', '#f2c230', '#5aa2ff', '#4fc98a', '#ff7ab8'];      // HP, Attack, Defence, Sp. Atk, Sp. Def, Speed
 const STAT_ICON = [                                             // a heart, a sword, a shield, a spark, a ward, an arrow
@@ -33,7 +33,7 @@ const R_IN = 5, R_OUT = 39, R_ICON = 49;
 const hexPts = (r) => AX.map(([x, y], i) => ((Array.isArray(r) ? r[i] : r) * x).toFixed(1) + ',' + ((Array.isArray(r) ? r[i] : r) * y).toFixed(1)).join(' ');
 const radius = (v) => R_IN + (R_OUT - R_IN) * Math.max(0, Math.min(1, v));
 
-// The hexagon as an SVG string, and a function to move it. Values are 0..1 (a bonus divided by BONUS_MAX).
+// The hexagon as an SVG string, and a function to move it. Values are 0..1 (from hexValues).
 export function hexSvg() {
   let s = `<svg viewBox="-60 -60 120 120"><polygon class="hx-plate" points="${hexPts(R_OUT + 5)}"/>`;
   s += `<polygon class="hx-guide" points="${hexPts(radius(0.5))}"/><polygon class="hx-guide" points="${hexPts(radius(1))}"/>`;
@@ -43,8 +43,9 @@ export function hexSvg() {
   return s + '</svg>';
 }
 export function hexDraw(svg, values) { svg.querySelector('.hx-fill').setAttribute('points', hexPts(values.map(radius))); }
-// (drawn on a curve, so the first few critters already show: a tenth of the way is drawn a quarter of the way out)
-export const hexValues = (bonus) => bonus.map((b) => Math.pow(Math.max(0, Math.min(1, b / BONUS_MAX)), 0.6));
+// The frame is the most ONE stat can ever be given, which an even collection never comes near: so what is drawn is a
+// shape, not a bar that fills. (On a slight curve, so that the first few critters already show.)
+export const hexValues = (bonus) => bonus.map((b) => Math.pow(Math.max(0, Math.min(1, b / BONUS_STAT_MAX)), 0.75));
 export const HEX_STYLE = `
 .hx-plate { fill: rgba(255,250,240,.93); stroke: ${DARK}; stroke-width: 2.6; stroke-linejoin: round; }
 .hx-guide { fill: none; stroke: rgba(43,37,64,.16); stroke-width: 1; }

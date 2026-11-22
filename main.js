@@ -1606,7 +1606,7 @@ function planBattle(teams, arena) {
   S.battlePlans = null;
   if (!ARENA || !ARENA.planTeams || !arena) return;
   const plans = ARENA.planTeams(teams, arena, specOf), dexes = new Set();
-  for (const p of plans) for (const r of p.roster) { dexes.add(baseOf(r.spec).dex); faceOf(r.spec); }      // (and their portraits, for the results)
+  for (const p of plans) { for (const r of p.roster) { dexes.add(baseOf(r.spec).dex); faceOf(r.spec); } for (const q of p.spareList) faceOf(q.spec); }      // (and everyone's portraits, for the ceremony and the results)
   LOCAL.preload([...dexes]);
   S.battlePlans = { arena, plans };
 }
@@ -1670,7 +1670,7 @@ function startBattle(arena) {
     // a fighter is the generated critter in its team's colour, or (local build) its model once that has loaded
     const buildActor = (spec, k) => LOCAL.arenaActor(baseOf(spec).dex, buildMesh(spec, k));
     const plans = S.battlePlans && S.battlePlans.arena === arena ? S.battlePlans.plans : undefined;
-    battle = ARENA.createBattle({ arena, teams, specOf, plans, buildActor, buildBall: buildBallFor, buildTrainer: (k) => buildTrainer(TEAMS[k].hex), poseTrainer, sfx: { tone, cry },
+    battle = ARENA.createBattle({ arena, teams, specOf, plans, buildActor, buildBall: buildBallFor, buildTrainer: (k) => buildTrainer(TEAMS[k].hex), poseTrainer, portrait: faceOf, sfx: { tone, cry },
       input: NET.on ? (k) => NET.arenaIn[k] : readStick, rand: NET.on ? seeded(NET.battleSeed) : undefined, noSkip: NET.on });
     battle.modern = true;
     if (battle.resize) battle.resize(innerWidth / innerHeight);

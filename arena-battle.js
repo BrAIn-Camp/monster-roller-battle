@@ -3,20 +3,25 @@
 // this file only watches it (sim.events, and the positions of things) and draws. Nothing here uses the fight's
 // dice, so drawing can never put two machines out of step.
 //
-//   muster -> each team's six step up by their corner, then their stand pours its stats into them
+//   muster -> each team's six step up by their corner; then, a team at a time, its collection is counted into its
+//             hexagon and the hexagon is spent on its six
 //   drop   -> the six hop to their places and the balls fall in
 //   countdown -> 3, 2, 1, GO     fight -> sim.step()     finish -> slow-motion last knockout, then the cheer
 import * as THREE from 'three';
 import { createSim, TUNE, CORNERS } from './arena-sim.js';
-import { planArmy } from './arena-merge.js';
+import { planArmy, teamBonus } from './arena-merge.js';
 import { hexSvg, hexDraw, hexValues, STAT_COL, HEX_STYLE } from './squad-hud.js';
 import { createFx, TYPE_HEX, TYPE_GLOW } from './arena-fx.js';
-import { el, setText, replay, injectStyle, isMe, teamLabel, chip, HAS_DOM, clamp } from './arena-ui.js';
+import { el, setText, replay, injectStyle, isMe, teamLabel, chip, typeColor, HAS_DOM, clamp } from './arena-ui.js';
 
 // ---------- timings and looks ----------
 const LINE_AT = 0.3, LINE_STEP = 0.2;                 // the muster: when the first of a team's six steps up, and the gap to the next
-const POUR_AT = 2.0, POUR_MIN = 0.7, POUR_SPAN = 3.0; // when the stands start to pour, and how long that takes (longer for a bigger collection)
-const MUSTER_HOLD = 0.55;                             // a beat after the last team is full
+const LINE_END = 1.9;                                 // ...and when the first team's turn begins
+const POUR_HUMAN = 4.0, POUR_CPU = 2.6;               // a team's turn: counting its collection (less for a small one)...
+const APPLY = 1.55, WAVE_GAP = 0.14;                  // ...then spending it on the six, a stat at a time
+const TURN_IN = 0.35, TURN_OUT = 0.3;                 // the panel opening and closing
+const MUSTER_HOLD = 0.4;                              // a beat after the last team
+const TILE_MAX = 240;                                 // critters shown one to a tile; beyond this they share
 const DROP_PHASE = 1.5, DROP_FALL = 0.42;
 const STAT_HEX = STAT_COL.map((c) => parseInt(c.slice(1), 16));
 const COUNT_STEP = 0.7;       // seconds per "3", "2", "1"
@@ -38,6 +43,24 @@ const GEO = {
   thin: new THREE.RingGeometry(0.9, 1, 30).rotateX(-Math.PI / 2), plane: new THREE.PlaneGeometry(1, 1), planeL: new THREE.PlaneGeometry(1, 1).translate(0.5, 0, 0),
   unitRing: new THREE.RingGeometry(0.86, 1, 30).rotateX(-Math.PI / 2),
 };
+// The floor gauges: a ring that is `aFill` full, going round from the side nearest the camera. What is left of the
+// ring is dark, and between the two a white stretch (up to `aLag`) shows what was just lost.
+const GAUGE_VS = `
+attribute float aFill; attribute float aLag; attribute vec3 aCol;
+varying vec2 vP; varying float vFill; varying float vLag; varying vec3 vCol;
+void main() { vP = position.xz; vFill = aFill; vLag = aLag; vCol = aCol; gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0); }`;
+const GAUGE_FS = `
+uniform float r0; uniform float r1; uniform float track;
+varying vec2 vP; varying float vFill; varying float vLag; varying vec3 vCol;
+void main() {
+  float a = fract(atan(vP.x, vP.y) / 6.2831853 + 1.0), r = length(vP), edge = min(r - r0, r1 - r) / (r1 - r0);
+  vec3 c = vec3(0.028, 0.019, 0.051); float al = 0.42 * track;
+  if (edge < 0.15) al = a <= vFill ? 0.9 : 0.9 * track;
+  else if (a <= vFill) { c = vCol; al = 0.97; }
+  else if (a <= vLag) { c = vec3(1.0); al = 0.95; }
+  gl_FragColor = vec4(c, al);
+  #include <colorspace_fragment>
+}`;
 const backOut = (u) => 1 + 2.7 * (u - 1) ** 3 + 1.7 * (u - 1) ** 2;
 const bounceOut = (u) => { const n = 7.5625, d = 2.75; return u < 1 / d ? n * u * u : u < 2 / d ? n * (u -= 1.5 / d) * u + 0.75 : u < 2.5 / d ? n * (u -= 2.25 / d) * u + 0.9375 : n * (u -= 2.625 / d) * u + 0.984375; };
 const smooth = (u) => u * u * (3 - 2 * u);
@@ -50,7 +73,8 @@ export function planTeams(teams, arena, specOf) {
 // rand: the fight's dice (a seeded one in multiplayer, so every machine fights the same fight); input(team) gives a
 // player's stick; noSkip: no skipping (a multiplayer fight is stepped by the host).
 // buildActor(spec, team) -> { root, play(name, opts), update(dt), flash(k, color), dispose(), rigged }
-export function createBattle({ arena, teams = [], specOf, plans, buildActor, buildMesh, buildBall, buildTrainer, poseTrainer, input, sfx, rand: dice, noSkip = false } = {}) {
+// portrait(spec) -> an image URL for a critter's face (optional: without it the ceremony shows plain tiles)
+export function createBattle({ arena, teams = [], specOf, plans, buildActor, buildMesh, buildBall, buildTrainer, poseTrainer, portrait, input, sfx, rand: dice, noSkip = false } = {}) {
   const NT = teams.length, vr = Math.random;
   let quiet = false, destroyed = false;                         // quiet: no effects or sound (while skipping)
   const tone = (...a) => { if (quiet) return; try { if (sfx && sfx.tone) sfx.tone(...a); } catch (e) { /* no audio */ } };
@@ -183,16 +207,27 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
   const hitSound = (type, vol, pitch = 1) => { if (sndBudget < 1) return; sndBudget--; const s = SND[type] || SND.normal; tone(s[1] * pitch, s[2] * pitch, s[3], s[0], vol); };
   const hexOf = (type) => TYPE_HEX[type] || 0xffffff, glowOf = (type) => TYPE_GLOW[type] || 0xffffff;
 
-  // ---- drawn in bulk: team rings, favoured auras, health bars, signature-move meters, stars, "roll through me" marks
+  // ---- drawn in bulk: the gauges, favoured auras, stars, "roll through me" marks
   const RN = NT * TUNE.FIELD_CAP + 24;
+  // Health and the signature move are read off the FLOOR, so nothing floats over the models. Each monster stands in
+  // a ring of its team's colour that empties as it is hurt (white marks what the last blow took), and inside that a
+  // thin gold ring that fills as its signature move charges.
+  function gauge(r0, r1, track) {
+    const geo = new THREE.RingGeometry(r0, r1, 44).rotateX(-Math.PI / 2);
+    const fill = new THREE.InstancedBufferAttribute(new Float32Array(RN), 1), lag = new THREE.InstancedBufferAttribute(new Float32Array(RN), 1), tint = new THREE.InstancedBufferAttribute(new Float32Array(RN * 3), 3);
+    geo.setAttribute('aFill', fill); geo.setAttribute('aLag', lag); geo.setAttribute('aCol', tint);
+    const mat = new THREE.ShaderMaterial({ transparent: true, depthWrite: false, uniforms: { r0: { value: r0 }, r1: { value: r1 }, track: { value: track } }, vertexShader: GAUGE_VS, fragmentShader: GAUGE_FS });
+    const mesh = new THREE.InstancedMesh(geo, mat, RN); mesh.frustumCulled = false; mesh.count = 0; scene.add(mesh); owned.push(mat, geo);
+    return {
+      mesh,
+      set(n, x, y, z, s, f, l, c) { m4.makeScale(s, 1, s).setPosition(x, y, z); mesh.setMatrixAt(n, m4); fill.array[n] = f; lag.array[n] = l; c.toArray(tint.array, n * 3); },
+      done(n) { mesh.count = n; mesh.instanceMatrix.needsUpdate = true; fill.needsUpdate = lag.needsUpdate = tint.needsUpdate = true; },
+    };
+  }
+  const hpRing = gauge(0.8, 1, 1), chRing = gauge(0.62, 0.74, 0);       // (the move's ring shows only as far as it is charged)
   const inst = (geo, material, n = RN) => { const m = new THREE.InstancedMesh(geo, material, n); m.frustumCulled = false; m.count = 0; scene.add(m); owned.push(material); return m; };
   const teamColOf = (tm) => new THREE.Color(tm.hex);
-  const ringMesh = inst(GEO.unitRing, new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.9, depthWrite: false }));
   const auraMesh = inst(GEO.thin, new THREE.MeshBasicMaterial({ color: 0xffe169, transparent: true, opacity: 0.9, depthWrite: false, blending: THREE.AdditiveBlending }));
-  const barBg = inst(GEO.plane, new THREE.MeshBasicMaterial({ color: 0x2b2540, depthTest: false, transparent: true }));
-  const barLag = inst(GEO.planeL, new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false, transparent: true }));
-  const barFill = inst(GEO.planeL, new THREE.MeshBasicMaterial({ depthTest: false, transparent: true }));
-  const barCharge = inst(GEO.planeL, new THREE.MeshBasicMaterial({ depthTest: false, transparent: true }));
   const starMesh = inst(fx.GEO.star5, new THREE.MeshBasicMaterial({ color: 0xffd23f, depthTest: false, transparent: true, side: THREE.DoubleSide }), RN * 3);
   const markMesh = inst(fx.GEO.chevron, new THREE.MeshBasicMaterial({ color: 0xffe169, depthTest: false, transparent: true, side: THREE.DoubleSide }), TUNE.FIELD_CAP + 4);
   // a trail of gold dots from the player's ball to one of their own monsters, until they have rolled through one:
@@ -216,7 +251,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
   const crowd = inst(GEO.sph, new THREE.MeshLambertMaterial(), Math.max(1, bench.length));
   bench.forEach((q, i) => crowd.setColorAt(i, q.color));
   crowd.count = bench.length; crowd.castShadow = true;
-  barBg.renderOrder = 5; barLag.renderOrder = 6; barFill.renderOrder = 7; barCharge.renderOrder = 7; starMesh.renderOrder = 8; markMesh.renderOrder = 8;
+  starMesh.renderOrder = 8; markMesh.renderOrder = 8;
   const teamCol = teams.map((tm) => new THREE.Color(tm.hex)), GOLD = new THREE.Color(0xffd23f), DIM = new THREE.Color(0x8a86a0), WHITE = new THREE.Color(0xffffff);
 
   // ---- fighters. A monster's drawing state hangs off it as u.v; the sim never looks at it.
@@ -583,22 +618,33 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     }
   }
 
-  // ---- the muster. Before the fight each team's six step up by their corner, strongest first. Then the rest of the
-  // collection pours what it is worth into them: sparks stream from the team's stand in the colours of the six
-  // stats, the six swell and glow, and the team's hexagon (on its panel) grows a corner at a time. The bigger the
-  // collection the longer it pours, so the biggest finishes last. Then they walk on: the monsters that lined up are
-  // the very ones that fight.
+  // ---- the muster: the ceremony before the fight.
+  //   1. Every team's six step up by their corner, strongest first.
+  //   2. Each team then takes its turn in the light. The camera goes to its corner and a panel opens beside it. Every
+  //      critter the team rolled up that is not part of its six is shown, one after another, and each sends a spark
+  //      to the corner of the team's hexagon that it feeds: the hexagon grows as they are counted, so what the
+  //      collection is worth, and its shape, is seen being made.
+  //   3. Then the hexagon is spent on the six: one stat at a time, its colour flies from its corner to each of the
+  //      six fighters (their portraits on the panel light a pip, and on the floor they flash in that colour and
+  //      swell), and at the last they flare and roar.
+  // CPU teams go first and take less time; the player at this screen goes last. A press of the dash button hurries
+  // the counting along. Then they walk on: the monsters that lined up are the very ones that fight.
   const muster = [];
-  let musterLen = 0;
   plans.forEach((p, k) => {
     const recs = sim.recs[k];
     if (!recs.length) return;
-    const [cx, cz] = CORNERS[k % 4], vals = hexValues(p.bonus || [0, 0, 0, 0, 0, 0]), mag = vals.reduce((a, b) => a + b, 0) / 6;
-    const dur = mag > 0.004 ? POUR_MIN + POUR_SPAN * mag : 0;
-    muster.push({ team: k, cx, cz, face: Math.atan2(-cx, -cz), recs, lined: [], vals, mag, dur, done: dur === 0, doneT: 9, tick: 0, pinged: 0, over: false, stand: bench.filter((q) => q.k === k) });
-    musterLen = Math.max(musterLen, POUR_AT + dur + MUSTER_HOLD);
+    const [cx, cz] = CORNERS[k % 4], items = [];
+    for (const q of p.spareList || []) for (let i = 0; i < q.count; i++) items.push(q);
+    const stride = Math.max(1, Math.ceil(items.length / TILE_MAX)), tiles = [];           // (a truly huge haul is counted several to a tile)
+    for (let i = 0; i < items.length; i += stride) tiles.push(items.slice(i, i + stride));
+    const human = !!teams[k].human, pour = !tiles.length ? 0.35 : (human ? POUR_HUMAN : POUR_CPU) * clamp(0.45 + tiles.length / 60, 0.55, 1);
+    muster.push({ team: k, cx, cz, face: Math.atan2(-cx, -cz), recs, lined: [], tiles, shown: 0, run: [0, 0, 0, 0, 0, 0], bonus: p.bonus || [0, 0, 0, 0, 0, 0], vals: hexValues(p.bonus || [0, 0, 0, 0, 0, 0]),
+      human, pour, apply: tiles.length ? APPLY : 0.5, wave: -1, fin: false, done: false, over: false, stand: bench.filter((q) => q.k === k), tick: 0, ui: null });
   });
-  const leadTeam = muster.some((c) => c.team === myTeam && c.dur > 0) ? myTeam : muster.reduce((a, c) => (!a || c.dur > a.dur ? c : a), null)?.team;      // whose pour is heard
+  const order = muster.slice().sort((a, b) => (a.team === myTeam ? 2 : a.human ? 1 : 0) - (b.team === myTeam ? 2 : b.human ? 1 : 0) || a.team - b.team);
+  const turnLen = (c) => TURN_IN + c.pour + c.apply + TURN_OUT;
+  const musterLen = muster.length ? LINE_END + order.reduce((s, c) => s + turnLen(c), 0) + MUSTER_HOLD : 0;
+  let turnI = -1, turnT = 0, musterCam = null, dashWas = false, endHold = 0;
   // two rows of three across the corner, the strongest three in front
   const lineSpot = (c, j) => {
     const n = c.recs.length, front = Math.min(3, n), row = j < front ? 0 : 1, inRow = row ? n - front : front, col = row ? j - front : j;
@@ -606,64 +652,164 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     return [c.cx * d + tx * off, c.cz * d + tz * off];
   };
   const newActor = (spec, k) => { const a = buildActor(spec, k); a.root.scale.setScalar(0.0001); a.root.traverse((o) => { if (o.isMesh) o.castShadow = true; }); scene.add(a.root); return a; };
-  const pickStat = (vals) => { let sum = 0; for (const v of vals) sum += v; let r = vr() * sum; for (let i = 0; i < 6; i++) { r -= vals[i]; if (r <= 0) return i; } return 0; };
-  const cornerOf = (g, i) => smooth(clamp((g - i * 0.11) / 0.42, 0, 1));          // how far corner i of a hexagon has grown when the pour is g of the way through
-  function drawHex(c, g) {
+  const faceUrl = (spec) => { try { return (portrait && portrait(spec)) || ''; } catch (e) { return ''; } };
+  const topStat = (add) => { let b = 0; for (let i = 1; i < 6; i++) if (add[i] > add[b]) b = i; return b; };
+  function drawHex(c) { if (hud) hexDraw(hud.panels[c.team].hex, c.vals); }
+  // a spark across the screen, from one HUD element to another
+  let domSparks = 0;
+  function domSpark(from, to, color, ms, done) {
+    if (!hud || quiet || domSparks > 70 || !from || !to) { if (done) done(); return; }
+    const a = from.getBoundingClientRect(), b = to.getBoundingClientRect(), x0 = a.left + a.width / 2, y0 = a.top + a.height / 2, x1 = b.left + b.width / 2, y1 = b.top + b.height / 2;
+    const s = el('i', 'ar-spk', hud.root); s.style.background = color; domSparks++;
+    const bend = (vr() - 0.5) * 0.5, mx = (x0 + x1) / 2 - (y1 - y0) * bend, my = (y0 + y1) / 2 + (x1 - x0) * bend;
+    let landed = false;
+    const land = () => { if (landed) return; landed = true; s.remove(); domSparks--; if (done && hud) done(); };
+    try {
+      const an = s.animate([{ transform: `translate(${x0}px,${y0}px) scale(.5)` }, { transform: `translate(${mx}px,${my}px) scale(1.3)`, offset: 0.45 }, { transform: `translate(${x1}px,${y1}px) scale(.8)` }], { duration: ms, easing: 'cubic-bezier(.4,0,.8,1)' });
+      an.onfinish = an.oncancel = land;
+    } catch (e) { /* no animations here */ }
+    setTimeout(land, ms + 150);
+  }
+
+  // ---- the panel for the team whose turn it is
+  function openPanel(c) {
     if (!hud) return;
-    const p = hud.panels[c.team];
-    hexDraw(p.hex, c.vals.map((v, i) => v * cornerOf(g, i)));
-    while (c.pinged < 6 && cornerOf(g, c.pinged) >= 1) { if (c.vals[c.pinged] > 0.01 && g < 1.5) replay(p.icons[c.pinged], 'ping'); c.pinged++; }
+    const tm = teams[c.team], p = el('div', `ar-cer ar-pill ${c.cx < 0 ? 'ar-r' : 'ar-l'}`, hud.root);
+    p.style.setProperty('--tc', tm.css);
+    const head = el('div', 'ar-cer-head', p, `<i class="ar-dot" style="background:${tm.css}"></i>${teamLabel(tm)}`), count = el('span', 'ar-cer-n', head, '0');
+    // the count as a wall of tiles; beside it, a close-up of whoever is being counted, and the hexagon they feed
+    const body = el('div', 'ar-cer-body', p), grid = el('div', 'ar-cer-grid', body), side = el('div', 'ar-cer-side', body);
+    const now = el('div', 'ar-cer-now', side, '<i></i><b></b>'), hexw = el('div', 'ar-cer-hexw', side, hexSvg());
+    const labels = [0, 1, 2, 3, 4, 5].map((i) => { const b = el('b', 'ar-cer-pc ar-pc' + i, hexw, ''); b.style.color = STAT_COL[i]; return b; });
+    const six = el('div', 'ar-cer-six', p);
+    const faces = c.recs.map((r) => {
+      const f = el('div', 'ar-cer-f', six, `<img alt="" src="${faceUrl(r.spec)}"><em>${'★'.repeat(r.stars || 0)}</em><u>${'<i></i>'.repeat(6)}</u>`);
+      f.style.background = `radial-gradient(circle at 50% 35%, #fff 0%, ${typeColor(r.spec.types[0])} 140%)`;
+      return { root: f, pips: [...f.querySelectorAll('u i')] };
+    });
+    c.ui = { root: p, count, grid, now, nowFace: now.firstChild, nowN: now.lastChild, nowSpec: null, nowCount: 0, hex: hexw.firstChild, icons: [...hexw.querySelectorAll('.hx-ico')], labels, faces, n: 0, pc: [-1, -1, -1, -1, -1, -1] };
+    // tiles as big as will fit
+    const W = grid.clientWidth || 300, H = grid.clientHeight || 200, N = Math.max(1, c.tiles.length);
+    let cell = clamp(Math.floor(Math.sqrt(W * H / N)) - 2, 10, 72);
+    while (cell > 10 && Math.ceil(N / Math.max(1, Math.floor(W / (cell + 2)))) * (cell + 2) > H) cell--;
+    grid.style.setProperty('--cell', cell + 'px');
+    void p.offsetWidth; p.classList.add('ar-on');
+  }
+  function closePanel(c) { if (c.ui) { const p = c.ui.root; c.ui = null; p.classList.remove('ar-on'); setTimeout(() => p.remove(), 300); } }
+  function showLabels(c, bonus) {
+    if (!c.ui) return;
+    for (let i = 0; i < 6; i++) { const v = Math.round(bonus[i] * 100); if (v !== c.ui.pc[i]) { c.ui.pc[i] = v; c.ui.labels[i].textContent = v > 0 ? '+' + v + '%' : ''; } }
+  }
+  // one tile of the count: the critter is shown, what it is worth goes into the running total, and the hexagon follows
+  function countTile(c) {
+    const group = c.tiles[c.shown++], q = group[0], top = topStat(q.add);
+    for (const g of group) for (let i = 0; i < 6; i++) c.run[i] += g.add[i];
+    const bonus = teamBonus(c.run), n = (c.ui ? c.ui.n : 0) + group.length;
+    if (!c.ui) return;
+    c.ui.n = n; c.ui.count.textContent = String(n);
+    const t = el('i', 'ar-cer-t', c.ui.grid), url = faceUrl(q.spec);
+    t.style.backgroundColor = typeColor(q.spec.types[0]); if (url) t.style.backgroundImage = `url(${url})`;
+    const ui = c.ui, vals = hexValues(bonus);
+    if (ui.nowSpec !== q.spec) { ui.nowSpec = q.spec; ui.nowCount = 0; ui.nowFace.style.backgroundColor = typeColor(q.spec.types[0]); ui.nowFace.style.backgroundImage = url ? `url(${url})` : 'none'; ui.nowFace.style.borderColor = STAT_COL[top]; replay(ui.now, 'ar-nowin'); }
+    ui.nowCount += group.length; ui.nowN.textContent = '×' + ui.nowCount;
+    domSpark(t, ui.icons[top], STAT_COL[top], 300, () => { if (c.ui !== ui) return; hexDraw(ui.hex, vals); showLabels(c, bonus); replay(ui.icons[top], 'ping'); });
+  }
+  function turnStep(c, dt) {
+    const tm = teams[c.team], mine = c.team === myTeam, t = turnT - TURN_IN;
+    excite[c.team] = Math.max(excite[c.team], 0.7);
+    // ---- the count
+    if (t >= 0 && c.shown < c.tiles.length) {
+      const u = clamp(t / c.pour, 0, 1), want = Math.min(c.tiles.length, Math.ceil(Math.pow(u, 1.25) * c.tiles.length));
+      let made = 0;
+      while (c.shown < want) { countTile(c); made++; }
+      if (made && (c.tick -= dt) <= 0) { c.tick = 0.055; const g = c.shown / c.tiles.length; tone(380 + 1100 * g, 420 + 1250 * g, 0.05, 'triangle', mine ? 0.085 : 0.05); }
+      if (made && c.stand.length) for (let i = 0; i < Math.min(made, 3); i++) { const q = c.stand[Math.floor(vr() * c.stand.length)]; fx.spark(q.x, q.s * 1.5, q.z, (vr() - 0.5) * 2, 9 + vr() * 5, (vr() - 0.5) * 2, STAT_HEX[Math.floor(vr() * 6)], (0.3 + vr() * 0.14) * K, 0.6, -12, true); }
+    }
+    // ---- the hexagon is spent on the six, a stat at a time
+    const ta = t - c.pour;
+    if (ta >= 0 && !c.tiles.length && !c.fin) { c.fin = true; if (mine) tone(392, 523, 0.2, 'triangle', 0.1); }
+    if (ta >= 0 && c.tiles.length) {
+      if (c.wave < 0) { c.wave = 0; if (c.ui) { hexDraw(c.ui.hex, c.vals); showLabels(c, c.bonus); replay(c.ui.hex.parentNode, 'ar-hexdone'); } tone(523, 784, 0.18, 'triangle', mine ? 0.14 : 0.07); }
+      while (c.wave < 6 && ta >= 0.22 + c.wave * WAVE_GAP) {
+        const i = c.wave++, on = c.bonus[i] > 0.004;
+        if (!on) continue;
+        if (c.ui) { replay(c.ui.icons[i], 'ping'); c.ui.faces.forEach((f) => domSpark(c.ui.icons[i], f.root, STAT_COL[i], 260, () => { f.pips[i].style.background = STAT_COL[i]; replay(f.pips[i], 'ar-lit'); replay(f.root, 'ar-fed'); })); }
+        for (const q of c.lined) {                                // and on the floor: each of the six takes it
+          q.kick = 1; q.col = STAT_HEX[i];
+          fx.ring(q.x, q.z, { r0: 0.2, r1: q.h * 0.75 + 0.9, color: STAT_HEX[i], life: 0.34, opacity: 0.95, thin: true });
+          for (let j = 0; j < 5; j++) { const a = vr() * 6.283; fx.spark(q.x + Math.cos(a) * q.h * 0.35, 0.2, q.z + Math.sin(a) * q.h * 0.35, 0, 5 + vr() * 5, 0, STAT_HEX[i], 0.3 * K, 0.5, -6, true); }
+        }
+        const f = 523 * 1.122 ** i; tone(f, f * 1.5, 0.11, 'triangle', mine ? 0.15 : 0.07);
+      }
+      if (!c.fin && ta >= 0.22 + 6 * WAVE_GAP + 0.12) {           // all of it is in: the six flare, and roar
+        c.fin = true;
+        let mx = 0, mz = 0;
+        for (const q of c.lined) { mx += q.x / c.lined.length; mz += q.z / c.lined.length; q.flare = 1; fx.burst(q.x, q.h * 0.6, q.z, 9, 0xffe169, 6, 0.3 * K, 0.55); q.actor.play('entrance', { dur: 0.9 }); }
+        fx.ring(mx, mz, { r0: 1, r1: L * 0.22, color: 0xffe169, life: 0.55, opacity: 0.95 }); fx.ring(mx, mz, { r0: 0.5, r1: L * 0.16, color: tm.hex, life: 0.75, thin: true });
+        const s = mine ? 1 : 0.84, vol = mine ? 0.17 : 0.07; [523, 659, 784, 1047].forEach((f, i) => tone(f * s, f * s * (i === 3 ? 1.5 : 1), i === 3 ? 0.34 : 0.09, 'triangle', vol, i * 0.07));
+        if (c.lined[0]) cry(c.lined[0].rec.spec, mine ? 0.1 : 0.05);
+        bump(mine ? 0.22 : 0.12);
+        if (c.ui) replay(c.ui.root, 'ar-bump');
+      }
+    }
+  }
+  function endTurn(c) {
+    if (c.done) return;
+    c.done = true; drawHex(c); closePanel(c);
+    if (hud) { replay(hud.panels[c.team].root, 'ar-bump'); replay(hud.panels[c.team].hex.parentNode, 'ar-hexdone'); }
   }
   function musterStep(dt) {
+    // ---- everyone steps up, and stands
     for (const c of muster) {
       if (c.over) continue;
       const tm = teams[c.team], mine = c.team === myTeam, t0 = pt - LINE_AT - c.team * 0.05;
-      while (c.lined.length < c.recs.length && t0 >= c.lined.length * LINE_STEP) {            // step up, one at a time
+      while (c.lined.length < c.recs.length && t0 >= c.lined.length * LINE_STEP) {
         const j = c.lined.length, r = c.recs[j], [x, z] = lineSpot(c, j), actor = newActor(r.spec, c.team);
         actor.play('entrance', { dur: 0.8 });
-        c.lined.push({ actor, rec: r, x, z, h: r.h, t: 0, phase: vr() * 6.28 });
+        c.lined.push({ actor, rec: r, x, z, h: r.h, t: 0, phase: vr() * 6.28, kick: 0, col: 0xffffff, flare: 0 });
         fx.puff(x, 0.15, z, 6, 0xf5efe0, 3, 0.35, 0.4); fx.ring(x, z, { r0: 0.3, r1: r.h * 0.8 + 0.9, color: tm.hex, life: 0.32, opacity: 0.9 });
         for (let i = 0; i < r.stars; i++) fx.star(x + (i - (r.stars - 1) / 2) * r.h * 0.34, r.h * 1.18 + 0.6, z, { size: r.h * 0.18 + 0.32, color: 0xffd23f, five: true, life: Math.max(0.6, musterLen - pt), spin: 0.5, lit: false });
         const f = 392 * 1.122 ** j; tone(f, f * 1.5, 0.1, 'triangle', mine ? 0.14 : 0.04);
         if (mine || (myTeam < 0 && c.team === 0)) cry(r.spec, 0.07);
       }
-      const g = c.dur > 0 ? clamp((pt - POUR_AT) / c.dur, 0, 1) : pt >= POUR_AT ? 1 : 0, pouring = c.dur > 0 && pt >= POUR_AT && !c.done;
-      if (pouring) {
-        excite[c.team] = Math.max(excite[c.team], 0.45 + g * 0.55);
-        if (c.stand.length && c.lined.length) for (let i = 0, n = 2 + Math.round(c.mag * 4); i < n; i++) {
-          const q = c.stand[Math.floor(vr() * c.stand.length)], to = c.lined[Math.floor(vr() * c.lined.length)];
-          fx.spark(q.x, q.s * 1.4, q.z, (to.x - q.x) / 0.45, 8.1 + to.h * 1.2, (to.z - q.z) / 0.45, STAT_HEX[pickStat(c.vals)], (0.3 + vr() * 0.14) * K, 0.45, -36, true);
-        }
-        if (c.team === leadTeam && (c.tick -= dt) <= 0) { c.tick = 0.1; tone(420 + 880 * g, 450 + 940 * g, 0.06, 'triangle', 0.07); }
-        if (g >= 1) {                                           // full: the six flare, and roar
-          c.done = true; c.doneT = 0;
-          let mx = 0, mz = 0;
-          for (const q of c.lined) { mx += q.x / c.lined.length; mz += q.z / c.lined.length; fx.burst(q.x, q.h * 0.6, q.z, 7, 0xffe169, 5, 0.28 * K, 0.5); q.actor.play('entrance', { dur: 0.9 }); }
-          fx.ring(mx, mz, { r0: 1, r1: L * 0.2, color: 0xffe169, life: 0.5, opacity: 0.9 }); fx.ring(mx, mz, { r0: 0.5, r1: L * 0.15, color: tm.hex, life: 0.7, thin: true });
-          const s = mine ? 1 : 0.84, vol = mine ? 0.16 : 0.05; [523, 659, 784, 1047].forEach((f, i) => tone(f * s, f * s * (i === 3 ? 1.5 : 1), i === 3 ? 0.3 : 0.09, 'triangle', vol, i * 0.07));
-          if (mine || c.team === leadTeam) bump(0.14);
-          if (hud) { replay(hud.panels[c.team].root, 'ar-bump'); replay(hud.panels[c.team].hex.parentNode, 'ar-hexdone'); }
-        }
-      }
-      c.doneT += dt;
-      drawHex(c, g);
-      const flare = c.dur > 0 && c.doneT < 0.4 ? Math.sin(c.doneT / 0.4 * Math.PI) * 0.7 : 0;
       for (const q of c.lined) {
-        q.t += dt;
-        const root = q.actor.root, up = clamp(q.t / 0.4, 0, 1), glow = pouring ? 0.1 + 0.4 * g * (0.6 + 0.4 * Math.sin(T * 18 + q.phase)) : flare;
-        root.position.set(q.x, Math.sin(up * Math.PI) * q.h * 0.5 + (up >= 1 ? Math.abs(Math.sin((q.t - 0.4) * 5 + q.phase)) * q.h * (0.04 + (pouring ? 0.06 * g : 0)) : 0), q.z);
+        q.t += dt; q.kick = Math.max(0, q.kick - dt * 4.5); q.flare = Math.max(0, q.flare - dt * 2.2);
+        const root = q.actor.root, up = clamp(q.t / 0.4, 0, 1), k = Math.sin(q.kick * Math.PI) * (q.kick > 0 ? 1 : 0);
+        root.position.set(q.x, Math.sin(up * Math.PI) * q.h * 0.5 + (up >= 1 ? Math.abs(Math.sin((q.t - 0.4) * 5 + q.phase)) * q.h * 0.04 : 0) + k * q.h * 0.14, q.z);
         root.rotation.y = c.face;
-        root.scale.setScalar(q.h * backOut(clamp(q.t / 0.3, 0, 1)) * (1 + (pouring ? 0.1 * g : 0) + flare * 0.22));
-        q.actor.flash(glow, pouring ? 0xffe169 : 0xffffff);
+        root.scale.setScalar(q.h * backOut(clamp(q.t / 0.3, 0, 1)) * (1 + k * 0.14 + Math.sin(q.flare * Math.PI) * 0.22));
+        q.actor.flash(Math.max(q.kick * 0.85, q.flare * 0.8), q.flare > q.kick ? 0xffffff : q.col);
         q.actor.update(dt);
       }
     }
+    if (pt < LINE_END) return false;
+    // ---- one team at a time
+    if (turnI >= order.length) { musterCam = null; return (endHold += dt) >= MUSTER_HOLD; }
+    let c = order[turnI];
+    if (turnI < 0 || turnT >= turnLen(c)) {
+      if (c) endTurn(c);
+      turnI++; turnT = 0; c = order[turnI];
+      if (!c) { musterCam = null; return false; }
+      openPanel(c);
+      // the camera goes to its corner, leaving room beside it for the panel
+      musterCam = { x: c.cx * L * 0.1, z: c.cz * L * 0.22, f: 0.3 };
+      tone(330, 494, 0.16, 'triangle', c.team === myTeam ? 0.13 : 0.07);
+    }
+    // a press of dash (any player's) hurries the count to its end
+    let dash = false;
+    if (input) for (let k = 0; k < NT; k++) if (teams[k].human) { const st = input(k); if (st && st.dash) dash = true; }
+    if (dash && !dashWas && turnT > 0.2 && turnT < TURN_IN + c.pour) turnT = TURN_IN + c.pour;
+    dashWas = dash;
+    turnT += dt;
+    turnStep(c, dt);
+    return false;
   }
   // The muster is over: whoever lined up is handed to the fight as the monster they are (adopt), or let go.
   function endMuster(adopt) {
+    musterCam = null;
     for (const c of muster) {
       if (c.over) continue;
-      c.over = true; drawHex(c, 9);
+      c.over = true; c.done = true; drawHex(c); closePanel(c);
       for (const q of c.lined) {
         const u = q.rec.unit;
         if (adopt && u && !u.v) { const v = ensure(u, q.actor), p = q.actor.root.position; q.actor.flash(0); v.pop = 1; v.hop = { x: p.x, z: p.z, t: 0, dur: 0.5 }; }
@@ -745,10 +891,9 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
   resizeView(HAS_DOM && typeof window !== 'undefined' && window.innerHeight ? window.innerWidth / window.innerHeight : 16 / 9);
 
   // ---- drawing
-  function bar(mesh, n, x, y, z, w, hgt, c) { s3.set(w, hgt, 1); m4.compose(v3.set(x, y, z), camQ, s3); mesh.setMatrixAt(n, m4); if (c) mesh.setColorAt(n, c); }
   function view(dt, fdt) {                                      // dt: this frame; fdt: the same, slowed for hit-stop and the finale
     const cheerTeam = cheering ? winner() : -1, fight = phase === 'fight' || phase === 'finish', live = !sim.finished;      // live: the fight is still going (after it, nobody is stunned, tumbling or winding up)
-    let n = 0, na = 0, nb = 0, ns = 0, nm = 0;
+    let n = 0, na = 0, ns = 0, nm = 0;
     for (let i = views.length - 1; i >= 0; i--) {
       const v = views[i], u = v.u, h = u.h, A = v.actor;
       if (!u.alive && !u.scooped && fight) continue;
@@ -793,30 +938,21 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
       if (u.rush && vr() < 0.8) fx.spark(u.x - u.rush.dx * u.r, 0.2, u.z - u.rush.dz * u.r, (vr() - 0.5) * 3, 1 + vr() * 2, (vr() - 0.5) * 3, 0xf5efe0, 0.4 * K, 0.4);
       A.update(u.frozen && live ? 0 : fdt);
       if (v.pop <= 0 || fallY > h * 2 || n >= RN) continue;
-      // ring, aura, bars
-      const s = Math.max(0.55, u.r * 1.4);
-      m4.makeScale(s, 1, s).setPosition(u.x, 0.02, u.z); ringMesh.setMatrixAt(n, m4); ringMesh.setColorAt(n, teamCol[u.team]); n++;
-      if (u.fav) { const a = s * (1.2 + 0.08 * Math.sin(T * 5 + v.phase)); m4.makeScale(a, 1, a).setPosition(u.x, 0.026, u.z); auraMesh.setMatrixAt(na++, m4); }
-      if (!fight || fallY > 0.5) continue;
-      // The health bar appears once it has something to say (hurt, or its signature move is nearly ready), so a
-      // fresh army is not a wall of bars. Under it, a thin gold line fills as the move charges.
-      const bw = clamp(h * 0.8, 1.3 * K, 2.5 * K), bh = 0.2 * K, by = h * 1.08 + y + 0.45 * K, f = clamp(u.hp / u.st.maxHp, 0, 1), ch = u.wind ? 1 : u.charge;
+      // the gauges under it: health round the outside, the signature move inside
+      const s = Math.max(0.75, u.r * 1.8), f = clamp(u.hp / u.st.maxHp, 0, 1), ch = !fight ? 0 : u.wind ? 1 : u.charge;
       v.lag = Math.max(f, v.lag - fdt * 0.45);
-      const want = f < 0.999 || ch > 0.7 || u.stars > 0 ? 1 : 0; v.bar += (want - v.bar) * Math.min(1, dt * 10);
-      if (v.bar > 0.02) {
-        const a = v.bar;
-        bar(barBg, nb, u.x, by - bh * 0.3, u.z, (bw + 0.12 * K) * a, bh * 1.9, null);
-        bar(barLag, nb, u.x - bw * a / 2, by, u.z, Math.max(0.001, bw * v.lag * a), bh, WHITE);
-        bar(barFill, nb, u.x - bw * a / 2, by, u.z, Math.max(0.001, bw * f * a), bh, teamCol[u.team]);
-        bar(barCharge, nb, u.x - bw * a / 2, by - bh * 0.85, u.z, Math.max(0.001, bw * ch * a), bh * 0.42, ch >= 1 || u.wind ? (Math.sin(T * 24) > 0 ? WHITE : GOLD) : GOLD);
-        nb++;
-        for (let j = 0; j < u.stars && ns < RN * 3; j++) { const ss = 0.3 * K * a; s3.set(ss, ss, ss); m4.compose(v3.set(u.x + (j - (u.stars - 1) / 2) * ss * 2.2, by + bh * 1.2 + ss * 0.9, u.z), camQ, s3); starMesh.setMatrixAt(ns++, m4); }
-      }
+      hpRing.set(n, u.x, 0.02, u.z, s, f, v.lag, teamCol[u.team]);
+      chRing.set(n, u.x, 0.024, u.z, s, ch, ch, ch >= 1 && Math.sin(T * 24) > 0 ? WHITE : GOLD);
+      n++;
+      if (u.fav) { const a = s * (1.14 + 0.05 * Math.sin(T * 5 + v.phase)); m4.makeScale(a, 1, a).setPosition(u.x, 0.026, u.z); auraMesh.setMatrixAt(na++, m4); }
+      if (!fight || fallY > 0.5) continue;
+      // its stars sit on the front of its ring, small and low
+      for (let j = 0; j < u.stars && ns < RN * 3; j++) { const ss = 0.26 * K; s3.set(ss, ss, ss); m4.compose(v3.set(u.x + (j - (u.stars - 1) / 2) * ss * 2.1, 0.3 * K, u.z + s + 0.1 * K), camQ, s3); starMesh.setMatrixAt(ns++, m4); }
       if (u.team === myTeam && nm < TUNE.FIELD_CAP + 4 && u.rallyCd <= 0 && !u.wind && !u.rush && u.stun <= 0 && phase === 'fight' && !sim.balls[myTeam].gone) {      // "roll through me"
-        const ms = (0.42 + 0.06 * Math.sin(T * 9 + v.phase)) * K; s3.set(ms, ms, ms); m4.compose(v3.set(u.x, by + bh * 2.2 + ms + u.stars * 0.3 * K + Math.sin(T * 6 + v.phase) * 0.12, u.z), camQ, s3); markMesh.setMatrixAt(nm++, m4);
+        const ms = (0.36 + 0.05 * Math.sin(T * 9 + v.phase)) * K; s3.set(ms, ms, ms); m4.compose(v3.set(u.x, h * 1.1 + y + 0.5 * K + ms + Math.sin(T * 6 + v.phase) * 0.12, u.z), camQ, s3); markMesh.setMatrixAt(nm++, m4);
       }
     }
-    ringMesh.count = n; auraMesh.count = na; barBg.count = barLag.count = barFill.count = barCharge.count = nb; starMesh.count = ns; markMesh.count = nm;
+    hpRing.done(n); chRing.done(n); auraMesh.count = na; starMesh.count = ns; markMesh.count = nm;
     let ng = 0;
     if (guideOn > 0 && phase === 'fight' && myTeam >= 0) {
       const b = sim.balls[myTeam];
@@ -835,7 +971,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
       for (let i = 0; i < bench.length; i++) { const q = bench[i], e = excite[q.k], hop = Math.abs(Math.sin(T * (4 + e * 5) + q.phase)) * q.s * (0.12 + e * 0.9); m4.makeScale(q.s, q.s * 1.2, q.s).setPosition(q.x, 0.06 + q.s * 0.6 + hop, q.z); crowd.setMatrixAt(i, m4); }
       crowd.instanceMatrix.needsUpdate = true;
     }
-    for (const m of [ringMesh, auraMesh, barBg, barLag, barFill, barCharge, starMesh, markMesh]) { m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true; }
+    for (const m of [auraMesh, starMesh, markMesh]) { m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true; }
     drawDying(fdt);
     for (let i = timed.length - 1; i >= 0; i--) { timed[i].t -= fdt; if (timed[i].t <= 0) { timed[i].h.release(0.2); timed.splice(i, 1); } }
     if (fight && live) drawFlying(fdt);
@@ -886,6 +1022,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     shake = Math.max(0, shake - dt * 1.6);
     let gx = 0, gz = 0, gf = 0;
     if (phase === 'finish' && pt < FREEZE) { gx = clamp(lastKo.x, -half * 1.15, half * 1.15); gz = clamp(lastKo.z, -half * 1.15, half * 1.15); gf = 0.46; }
+    else if (phase === 'muster' && musterCam) { gx = musterCam.x; gz = musterCam.z; gf = musterCam.f; }      // on the team whose turn it is
     else if (phase === 'fight' || phase === 'finish') {
       let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
       const grow = (x, z, pad) => { x0 = Math.min(x0, x - pad); x1 = Math.max(x1, x + pad); z0 = Math.min(z0, z - pad); z1 = Math.max(z1, z + pad); };
@@ -942,7 +1079,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
       if (destroyed || finished) return;
       T += dt; pt += dt; sndBudget = Math.min(3, sndBudget + dt * 14);
       let fdt = dt;
-      if (phase === 'muster') { musterStep(dt); if (pt >= musterLen) beginDrop(); }
+      if (phase === 'muster') { if (musterStep(dt)) beginDrop(); }
       else if (phase === 'drop') { if (pt >= DROP_PHASE) { phase = 'countdown'; pt = 0; countN = -1; } }
       if (phase === 'countdown') {                              // 3, 2, 1, GO! Nothing moves until GO
         const c = Math.floor(pt / COUNT_STEP);
@@ -987,7 +1124,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
       for (const a of [...actors]) freeActor(a);
       fx.dispose();
       for (const m of mats.values()) m.dispose(); for (const o of owned) o.dispose();
-      for (const m of [ringMesh, auraMesh, barBg, barLag, barFill, barCharge, starMesh, markMesh, guideMesh, crowd]) m.dispose();
+      for (const m of [hpRing.mesh, chRing.mesh, auraMesh, starMesh, markMesh, guideMesh, crowd]) m.dispose();
       sun.shadow.map && sun.shadow.map.dispose();
     },
   };

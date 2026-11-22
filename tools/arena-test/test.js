@@ -1,5 +1,6 @@
 // Standalone try-out page for the arena: the wheel, then the fight, with made-up armies and stub ball/trainer models.
 //   http://127.0.0.1:8417/tools/arena-test/            wheel, then a fight
+//   ?mine=40 the player's army is 40 critters   ?mystat=5 ...leaning towards critters best at stat 5 (0 HP, 1 Atk, 2 Def, 3 SpA, 4 SpD, 5 Speed)
 //   ?arena=magma (or tidal canopy storm frost dune hollow meadow)   skip the wheel
 //   ?n=80        critters per team (each team gets a random 55-145% of it)       ?titans=1   titans per team
 //   ?cpu         no human: watch four CPU balls                                   ?mute       no sound
@@ -10,7 +11,8 @@
 import * as THREE from 'three';
 import { ARENAS, createWheel, createBattle, planTeams } from '../../arena.js';
 import { buildCritterGeometry } from '../../critters/kit.js';
-import { stadiumMeta, loadStadium, makeArenaActor } from '../../critters/stadium.js';
+import { stadiumMeta, loadStadium, makeArenaActor, makeStadiumInstance } from '../../critters/stadium.js';
+import { STATS } from '../../critters/battle-data.js';
 import c1 from '../../critters/critters_1.js';
 import c2 from '../../critters/critters_2.js';
 import c3 from '../../critters/critters_3.js';
@@ -38,6 +40,32 @@ function buildActor(spec, k) {
   let geo = geoCache.get(base.id);
   if (!geo) { geo = buildCritterGeometry(base); geoCache.set(base.id, geo); }
   return makeArenaActor(base.dex, new THREE.Mesh(geo, teamMats[k]), live);
+}
+// portraits for the ceremony, as the game makes them: the generated critter at once, the model's once it has loaded
+const faces = new Map(), faceMat = new THREE.MeshLambertMaterial({ vertexColors: true });
+let faceR = null;
+function shoot(obj, model) {
+  if (!faceR) {
+    faceR = { r: new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true }), sc: new THREE.Scene(), cam: new THREE.PerspectiveCamera(30, 1, 0.05, 80) };
+    faceR.r.setSize(96, 96); faceR.sc.add(new THREE.HemisphereLight(0xffffff, 0x8899aa, 2.2));
+    const dl = new THREE.DirectionalLight(0xffffff, 1.6); dl.position.set(2, 3, 4); faceR.sc.add(dl);
+  }
+  const { r, sc, cam } = faceR;
+  sc.add(obj); obj.updateMatrixWorld(true);
+  const b = new THREE.Box3().setFromObject(obj, true), c = b.getCenter(new THREE.Vector3()), sz = b.getSize(new THREE.Vector3()), s = model ? Math.max(sz.x, sz.y, sz.z * 0.8) : sz.length() * 0.62;
+  cam.position.set(c.x + s * 0.85, c.y + s * 0.45, c.z + s * 1.7); cam.lookAt(c);
+  r.render(sc, cam); sc.remove(obj);
+  return r.domElement.toDataURL();
+}
+function portrait(spec) {
+  const b = spec.base || spec;
+  if (!faces.has(b.dex)) {
+    let geo = geoCache.get(b.id);
+    if (!geo) { geo = buildCritterGeometry(b); geoCache.set(b.id, geo); }
+    faces.set(b.dex, shoot(new THREE.Mesh(geo, faceMat), false));
+    if (live) loadStadium(b.dex).then((l) => { if (!l) return; const inst = makeStadiumInstance(l); inst.update(0); faces.set(b.dex, shoot(inst.root, true)); inst.dispose(); });
+  }
+  return faces.get(b.dex);
 }
 const sphere = new THREE.SphereGeometry(1, 24, 16), band = new THREE.TorusGeometry(1, 0.07, 6, 24), box = new THREE.BoxGeometry(1, 1, 1);
 function buildBall(k) {
@@ -104,7 +132,15 @@ function makeArmy(n) {
 function makeTeams() {
   const n = Q.has('n') ? +Q.get('n') : 80, titans = Q.has('titans') ? +Q.get('titans') : 0;
   return TEAMS.map((tm, k) => {
-    const army = makeArmy(Math.max(1, Math.round(n * (0.55 + rnd() * 0.9))));
+    let army = makeArmy(Math.max(1, Math.round(n * (0.55 + rnd() * 0.9))));
+    // ?mine=N: the player's own army is N critters; ?mystat=0..5: and it leans towards critters whose best stat is that one
+    if (k === 0 && (Q.has('mine') || Q.has('mystat'))) {
+      const size = Q.has('mine') ? +Q.get('mine') : army.length, lean = Q.has('mystat') ? +Q.get('mystat') : -1;
+      const best = (c) => { const b = STATS[c.dex] || []; let m = 0; for (let i = 1; i < 6; i++) if (b[i] > b[m]) m = i; return m; };
+      const pool = lean >= 0 ? CRITTERS.filter((c) => best(c) === lean && c.height < 2.2) : null;
+      army = makeArmy(size);
+      if (pool && pool.length) army = army.map((c, i) => (i % 4 ? pool[Math.floor(rnd() * pool.length)] : c));
+    }
     for (let i = 0; i < titans; i++) army.push(titanOf(pick(CRITTERS.filter((c) => c.height < 2.5))));
     return Object.assign({}, tm, { army, ballD: 1.5 + rnd() * 12, human: k === 0 && !Q.has('cpu') });
   });
@@ -124,7 +160,9 @@ function start(arena) {
 function begin(arena) {
   let s = (seed ^ 0x9e3779b9) >>> 0;
   const dice = Q.has('seed') ? () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; } : undefined;
-  battle = createBattle({ arena, teams, specOf, buildActor, buildBall, buildTrainer, poseTrainer, input, sfx, rand: dice });
+  const plans = planTeams(teams, arena, specOf);
+  for (const p of plans) { for (const r of p.roster) portrait(r.spec); for (const q of p.spareList) portrait(q.spec); }
+  battle = createBattle({ arena, teams, specOf, plans, buildActor, buildBall, buildTrainer, poseTrainer, portrait, input, sfx, rand: dice });
   battle.resize(innerWidth / innerHeight);
   window.__battle = battle;
 }

@@ -27,6 +27,10 @@ export const TUNE = {
   // taller or shorter they really are, within H_MIN..H_MAX times typical. So a sea serpent towers over a mouse,
   // but nothing is a speck and nothing blots out the floor. (Stats still use the real height.)
   H_TARGET: 0.085, H_MIN: 0.62, H_MAX: 2.4,
+  // Room to see the fight. Monsters keep SPACE times their two radii apart (a melee hit reaches across that), and
+  // one choosing a target counts a foe as CROWD further away for every monster already on it: so a fight is a
+  // handful of duels across the floor, not one heap in the middle.
+  SPACE: 1.55, CROWD: 0.7,
   HIT_DELAY: 0.14,          // a melee swing lands this long after it starts (so the blow meets the animation)
   SHOT_SPEED: 0.62,         // ranged attacks fly this many arena sides per second
   // knockback: metres slid = kb x (KB_FLAT + KB_FRAC x damage share x (1 + KB_WEAK x health lost)) / weight
@@ -38,7 +42,11 @@ export const TUNE = {
   SPECIAL_HIT_GAIN: 0.02,   // and each landed hit adds this much
   BREAK_DIST: 0.9,          // a knock of at least this many metres breaks a wind-up
   RALLY_CD: 9, RALLY_BALL_CD: 2.0, RALLY_POWER: 1.2, RALLY_WIND: 0.55,
-  RAM_MIN: 2.5, RAM_PUSH: 0.3, RAM_DMG: 0.04, RAM_IMMUNE: 1.2,
+  // A ram: metres slid = RAM_PUSH x closing speed x (1 + RAM_WEAK x health lost) / weight. So, as with any hit, the
+  // weaker a monster is the further a ball sends it: the ball is the finisher. A ram at dash speed (SMASH_AT times
+  // the ball's top speed) is a smash: SMASH_PUSH times the distance, and it takes health as well.
+  RAM_MIN: 2.5, RAM_PUSH: 0.26, RAM_WEAK: 1.5, RAM_DMG: 0.04, RAM_IMMUNE: 1.2,
+  SMASH_AT: 1.25, SMASH_PUSH: 1.3, SMASH_DMG: 0.07,
   SCOOP_RATIO: 0.45, SCOOP_GROW: 0.8, SCOOP_GULP: 0.7, SCOOP_DRAG: 0.35,
   BALL_BASE: 1.05, BALL_SPREAD: 0.5, BALL_MAX_GROW: 1.5, BALL_GRIP: 4.5,
   DASH_MULT: 1.8, DASH_TIME: 0.34, DASH_CD: 2.2,           // (a dash covers about 8 m before the ball can stop: with no walls, more was a trap)
@@ -155,7 +163,7 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
     for (let i = 0; i < n; i++) {
       const u = field[i];
       for (let j = i + 1; j < n; j++) {
-        const v = field[j], min = (u.r + v.r) * 0.92, dx = u.x - v.x, dz = u.z - v.z;
+        const v = field[j], min = (u.r + v.r) * T.SPACE, dx = u.x - v.x, dz = u.z - v.z;
         if (dx > min || dx < -min || dz > min || dz < -min) continue;
         const d = hyp(dx, dz) || 0.001;
         if (d < min) { const push = (min - d) * 0.5 / d, wu = v.r * v.r / (u.r * u.r + v.r * v.r); u.x += dx * push * wu; u.z += dz * push * wu; v.x -= dx * push * (1 - wu); v.z -= dz * push * (1 - wu); }
@@ -181,8 +189,8 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
   const balls = teams.map((tm, k) => {
     const [cx, cz] = CORNERS[k % 4], D = baseD * (1 + T.BALL_SPREAD * (Math.sqrt(finishD[k] / loD) - 1) / spanD);
     return { isBall: true, team: k, cpu: !tm.human, x: cx * L * 0.12, z: cz * L * 0.12, vx: 0, vz: 0, D, D0: D, R: D / 2, hd: Math.atan2(-cx, -cz),
-      hx: -cx * Math.SQRT1_2, hz: -cz * Math.SQRT1_2, stun: 0, safe: 0, gulp: 0, dashT: 0, dashCd: 0, combo: 0, comboT: 0, rallyCd: 0, cargo: [], scoops: 0, rams: 0, rallies: 0, ringOuts: 0,
-      aim: null, plan: '', rt: rand() * 0.5, ax: 0, az: 0, wob: rand() * 6.28, moving: false, gone: false, teamOut: false };
+      hx: -cx * Math.SQRT1_2, hz: -cz * Math.SQRT1_2, stun: 0, safe: 0, gulp: 0, dashT: 0, dashCd: 0, combo: 0, comboT: 0, rallyCd: 0, cargo: [], scoops: 0, rams: 0, smashes: 0, rallies: 0, ringOuts: 0,
+      aim: null, plan: '', rt: rand() * 0.5, ax: 0, az: 0, wob: rand() * 6.28, moving: false, gone: !!tm.sitOut, teamOut: false };      // (sitOut: no ball at all, for the balance test)
   });
   const maxD = (b) => b.D0 * T.BALL_MAX_GROW;
   function stunBall(b, dur) { if (b.safe > 0 || b.gone) return false; b.stun = dur; b.safe = dur + 1.5; b.dashT = 0; return true; }
@@ -402,7 +410,7 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
         let v = tgt;
         if (M.blink) { let bf = 2; foes(u.team, (q) => { const d = hyp(q.x - u.x, q.z - u.z), f = q.hp / q.st.maxHp + d / (w.reach * 4); if (d < w.reach && f < bf) { bf = f; v = q; } }); }
         if (!v) break;
-        const dx = v.x - u.x, dz = v.z - u.z, d = hyp(dx, dz) || 1, gap = u.r + v.r + 0.2;
+        const dx = v.x - u.x, dz = v.z - u.z, d = hyp(dx, dz) || 1, gap = (u.r + v.r) * T.SPACE + 0.1;
         ev.from = { x: u.x, z: u.z };
         let hx = dx / d, hz = dz / d;
         if (M.blink) { const ex = Math.abs(v.x) > Math.abs(v.z) ? Math.sign(v.x) : 0, ez = ex ? 0 : Math.sign(v.z); hx = ex; hz = ez; u.x = v.x - hx * gap; u.z = v.z - hz * gap; }   // appear on its inner side, to knock it towards the nearest edge
@@ -496,13 +504,18 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
     if (!u.target || !u.target.alive || u.rt <= 0) {            // nearest foe, leaning towards ones it has a type advantage over
       u.rt = 0.8 + rand() * 0.5;
       let bst = null, bs = 1e9;
-      for (const v of field) { if (v.team === u.team || !v.alive || v.drop > 0) continue; const s = hyp(v.x - u.x, v.z - u.z) * (1.3 - 0.15 * Math.min(best(u, v)[0], 2)) * (v.off ? 1.6 : 1); if (s < bs) { bs = s; bst = v; } }
+      for (const v of field) {
+        if (v.team === u.team || !v.alive || v.drop > 0) continue;
+        let on = 0; for (const o of field) if (o !== u && o.alive && o.target === v) on++;      // how many are on it already
+        const s = hyp(v.x - u.x, v.z - u.z) * (1.3 - 0.15 * Math.min(best(u, v)[0], 2)) * (v.off ? 1.6 : 1) * (1 + T.CROWD * on);
+        if (s < bs) { bs = s; bst = v; }
+      }
       u.target = bst;
     }
     const t = u.target;
     u.charge = Math.min(1, u.charge + u.st.charge * dt);
     if (!t) { u.moving = false; return; }
-    const dx = t.x - u.x, dz = t.z - u.z, d = hyp(dx, dz) || 0.001, reach = u.st.range > 0 ? u.st.range + t.r : u.r + t.r + 0.25;
+    const dx = t.x - u.x, dz = t.z - u.z, d = hyp(dx, dz) || 0.001, reach = u.st.range > 0 ? u.st.range + t.r : (u.r + t.r) * T.SPACE + 0.25;
     u.yaw = Math.atan2(dx, dz);
     // a charged signature move goes off as soon as the target is inside it; one that reaches less far than the
     // monster's ordinary attack (a ring around itself, for a monster that fights at range) makes it close in first
@@ -528,7 +541,7 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
       else shots.push({ u, t, x: u.x, z: u.z, sx: u.x, sz: u.z, speed: L * T.SHOT_SPEED, type: b[1], miss, id: uid++ });
     } else {
       emit({ e: 'atk', u, t, type: b[1], ranged: false, miss });
-      if (!miss) later(T.HIT_DELAY, () => { if (u.alive && t.alive && u.stun <= 0 && hyp(t.x - u.x, t.z - u.z) < u.r + t.r + 1.2) strike(u, t, 1, { kb: 1 }); });
+      if (!miss) later(T.HIT_DELAY, () => { if (u.alive && t.alive && u.stun <= 0 && hyp(t.x - u.x, t.z - u.z) < (u.r + t.r) * T.SPACE + 1.2) strike(u, t, 1, { kb: 1 }); });
     }
   }
 
@@ -551,8 +564,10 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
       if (u.ramImm > 0) continue;
       let s = 0;
       if (u.wind) s = (u.value + 1) * 2.2 / d;                                    // break a wind-up
-      const gap = edgeGap(u.x, u.z);
-      if (gap < L * 0.2) s = Math.max(s, (u.value + 1) * (1.9 - gap / (L * 0.2)) * 1.2 / d);     // shove one near the edge over it
+      // one that a smash would send over the edge is the best target there is; failing that, one near the edge
+      const gap = edgeGap(u.x, u.z), far = ramDist(b, u, topSpeed0 * T.CPU_SPEED * T.DASH_MULT * 0.85, true);
+      if (gap < far * 0.85) s = Math.max(s, (u.value + 1) * 2.6 / d);
+      else if (gap < L * 0.2) s = Math.max(s, (u.value + 1) * (1.9 - gap / (L * 0.2)) * 1.2 / d);
       else if (u.target && u.target.team === b.team) s = Math.max(s, (u.value + 1) * 0.35 / d);
       if (haz.danger(u.x, u.z, 0)) s *= 0.5;
       if (s > 0) consider(u, s, 'ram');
@@ -565,6 +580,8 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
     }
     b.aim = bestT; b.plan = plan;
   }
+  // how far a ram from ball b at closing speed v sends monster u
+  const ramDist = (b, u, v, smash) => T.RAM_PUSH * v * clamp(Math.sqrt(b.D / u.h), 0.6, 1.5) * (1 + T.RAM_WEAK * (1 - Math.max(0, u.hp) / u.st.maxHp)) * (smash ? T.SMASH_PUSH : 1) * (1 + (ramp - 1) * T.RAMP_KB) / u.st.weight;
   function moveBall(b, dt, auto) {
     if (b.gone) return;
     const cpu = b.cpu || auto, top = topSpeed0 * (1 + 0.12 * (b.D / b.D0 - 1)) * haz.top * haz.slow(b.x, b.z) * (cpu ? T.CPU_SPEED : 1);
@@ -581,7 +598,7 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
         const tr = a.isBall ? a.R : a.r, [ox, oz] = outward(a.x, a.z), px = a.x - ox * (b.R + tr + 1.6), pz = a.z - oz * (b.R + tr + 1.6);
         const ex = a.x - b.x, ez = a.z - b.z, e = hyp(ex, ez) || 1;
         lined = (ex * ox + ez * oz) / e > 0.72 || a.wind;
-        if (!lined && edgeGap(a.x, a.z) < L * 0.22) { tx = px; tz = pz; }
+        if (!lined && (edgeGap(a.x, a.z) < L * 0.22 || (!a.isBall && a.hp < a.st.maxHp * 0.6))) { tx = px; tz = pz; }
       }
       const dx = tx - b.x, dz = tz - b.z, d = hyp(dx, dz) || 0.001;
       if (a || d > L * 0.12) {
@@ -646,12 +663,13 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
           if (vn < 0) {
             b.vx -= 1.45 * vn * nx; b.vz -= 1.45 * vn * nz; b.dashT = 0;
             if (-vn > T.RAM_MIN && u.ramImm <= 0) {             // a proper ram: knocks it back, breaks its wind-up
-              const dist = Math.min(L * 0.3, T.RAM_PUSH * -vn * clamp(Math.sqrt(b.D / u.h), 0.6, 1.5) * (1 + (ramp - 1) * T.RAMP_KB) / u.st.weight);
-              u.ramImm = T.RAM_IMMUNE; b.rams++;
-              u.hp = Math.max(1, u.hp - u.st.maxHp * T.RAM_DMG); u.lastTeam = b.team; u.lastT = now; u.lastBy = null;
+              const smash = -vn > top * T.SMASH_AT, dist = Math.min(L * 0.5, ramDist(b, u, -vn, smash));
+              u.ramImm = T.RAM_IMMUNE; b.rams++; if (smash) b.smashes++;
+              u.hp = Math.max(1, u.hp - u.st.maxHp * (smash ? T.SMASH_DMG : T.RAM_DMG)); u.lastTeam = b.team; u.lastT = now; u.lastBy = null;
               const broke = !!u.wind;
               knock(u, -nx, -nz, dist); if (broke) breakWind(u);
-              emit({ e: 'ram', b, u, dist, broke, speed: -vn });
+              emit({ e: 'ram', b, u, dist, broke, speed: -vn, smash });
+              if (smash) hitStop(T.FREEZE_HEAVY);
             }
             if (cpu && b.aim === u) { b.aim = null; b.rt = 0.15; }
           }
@@ -775,7 +793,7 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
     status() { tally(); return teams.map((tm, k) => ({ alive: stat[k].alive, all: recs[k].length, hp: maxHpAll[k] ? clamp(stat[k].hp / maxHpAll[k], 0, 1) : 0, scooped: balls[k].cargo.length, favoured: stat[k].fav, ballOut: balls[k].gone })); },
     result() {
       const mvp = everyone.reduce((a, u) => (!a || u.dmg > a.dmg ? u : a), null);
-      return { winner, timedOut, seconds: fought, scoops: balls.map((b) => b.scoops), rams: balls.map((b) => b.rams), rallies: balls.map((b) => b.rallies), ringOuts: balls.map((b) => b.ringOuts),
+      return { winner, timedOut, seconds: fought, scoops: balls.map((b) => b.scoops), rams: balls.map((b) => b.rams), smashes: balls.map((b) => b.smashes), rallies: balls.map((b) => b.rallies), ringOuts: balls.map((b) => b.ringOuts),
         mvp: mvp && mvp.dmg > 0 ? { name: mvp.spec.name, dex: mvp.spec.dex, team: mvp.team, damage: Math.round(mvp.dmg), kills: mvp.kills } : null };
     },
   };

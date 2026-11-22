@@ -7,6 +7,8 @@
 //     verbose    one line per fight
 //     moves      a table of the signature moves: how often each is used and what one use is worth
 //     mirror     all four teams bring the same army: any difference in who wins is the seat, not the army
+//     balls      what a ball is worth: the same six in all four corners, with one team's ball sitting out, or only
+//                one team's ball playing
 //     bonus      what the spare critters are worth: the same six against themselves, one side with its spares'
 //                stat bonus and one without, beside the same test with one side simply made 15/30/60% stronger
 //     tune=HP_SCALE:13,RAMP_AT:40   try other tuning values (the names in TUNE, arena-sim.js)
@@ -61,9 +63,10 @@ const plan = (army, arena, k, merged = true) => (merged
   ? MERGE.planArmy(army, { specOf, teamIndex: k, limit: SIM.TUNE.ROSTER_CAP })
   : { roster: army.map((spec) => ({ spec, stars: 0, boost: 1, made: 1, value: MERGE.power(spec) })).sort((a, b) => b.value - a.value).slice(0, SIM.TUNE.ROSTER_CAP), bonus: [0, 0, 0, 0, 0, 0], merges: [], before: army.length, after: army.length, bench: 0 });
 
-function fight(seed, { armies, arena, unmerged = -1, check = false, dt = 1 / 30, noBonus = null, stronger = null }) {
+function fight(seed, { armies, arena, unmerged = -1, check = false, dt = 1 / 30, noBonus = null, stronger = null, sitOut = null }) {
   const rnd = dice(seed);
   const teams = armies.map((army, k) => Object.assign(plan(army, arena, k, k !== unmerged), { ballD: 1 + rnd() * 9, human: false }));
+  if (sitOut) teams.forEach((t, k) => { t.sitOut = !!sitOut[k]; });
   if (noBonus) teams.forEach((t, k) => { if (noBonus === true || noBonus.includes(k)) t.bonus = [0, 0, 0, 0, 0, 0]; });
   if (stronger) teams.forEach((t, k) => { if (stronger[k]) t.roster = t.roster.map((r) => Object.assign({}, r, { boost: r.boost * Math.sqrt(stronger[k]) })); });
   const sim = SIM.createSim({ arena, teams, rand: rnd });
@@ -120,7 +123,7 @@ if (flag('smoke') || true) {
     const six = MERGE.planArmy(army, { specOf, teamIndex: i % 4 });
     if (six.roster.length !== Math.min(6, p.after) || six.spares !== army.length - six.roster.reduce((n, r) => n + r.made, 0)) { console.error('FAIL merge: the six do not add up'); process.exitCode = 1; break; }
     if (six.roster.some((r, j) => r.kind !== p.roster[j].kind || !(r.ring > 0 && r.ring <= 1) || (r.ring === 1) !== !r.goal)) { console.error('FAIL merge: the six are not the strongest six, or a ring is out of range'); process.exitCode = 1; break; }
-    if (six.bonus.some((v) => !(v >= 0 && v < MERGE.BONUS_MAX))) { console.error('FAIL merge: a bonus is out of range', six.bonus); process.exitCode = 1; break; }
+    if (six.bonus.some((v) => !(v >= 0 && v <= MERGE.BONUS_STAT_MAX)) || six.spareList.reduce((n, q) => n + q.count, 0) !== six.spares) { console.error('FAIL merge: a bonus is out of range', six.bonus); process.exitCode = 1; break; }
     if (p.roster.some((r) => !(r.boost >= 1 && r.boost <= MERGE.MAX_BOOST) || r.stars > MERGE.MAX_STARS)) { console.error('FAIL merge: a boost or star count is out of range'); process.exitCode = 1; break; }
     for (let j = 1; j < p.roster.length; j++) if (p.roster[j].value > p.roster[j - 1].value + 1e-9) { console.error('FAIL merge: roster is not strongest first'); process.exitCode = 1; break; }
   }
@@ -130,6 +133,28 @@ if (flag('smoke') || true) {
     if (sizes.filter((n) => n).length === 1 && r.res.winner !== sizes.findIndex((n) => n)) { console.error('FAIL: a lone army did not win', sizes, r.res.winner); process.exitCode = 1; }
   }
   if (flag('smoke')) { console.log(process.exitCode ? 'SMOKE FAILED' : 'smoke ok', `(${Date.now() - t0} ms)`); process.exit(); }
+}
+
+// ---- 1a. what a ball is worth. Every corner has the same six, so all that differs is who has a ball.
+if (flag('balls')) {
+  const N = Math.max(200, nums[0] || 600);
+  const run = (label, who) => {
+    const rnd = dice(SEED * 17); let win = 0, n = 0, len = 0, ringBall = 0, rally = 0, ram = 0, lost = 0, smash = 0;
+    for (let f = 0; f < N; f++) {
+      const army = makeArmy(rnd, 60 + Math.floor(rnd() * 90)), seat = f % 4;
+      const r = fight(900 + f * 7, { armies: [army, army, army, army], arena: ARENAS[f % 8], sitOut: [0, 1, 2, 3].map((k) => who(k, seat)) });
+      if (r.res.winner >= 0) { n++; if (r.res.winner === seat) win++; }
+      len += r.res.seconds; ringBall += r.res.ringOuts[seat]; rally += r.res.rallies[seat]; ram += r.res.rams[seat]; smash += r.res.smashes[seat]; if (r.sim.balls[seat].gone && !who(seat, seat)) lost++;
+    }
+    console.log(`  ${label.padEnd(44)} that team wins ${pct(win, n).padStart(4)}   (fights ${(len / N).toFixed(0)} s; its ball: ${(ram / N).toFixed(1)} rams of which ${(smash / N).toFixed(1)} at dash speed, ${(rally / N).toFixed(1)} rallies, ${(ringBall / N).toFixed(2)} ring-outs, lost ${pct(lost, N)})`);
+  };
+  console.log('');
+  console.log('  four identical teams; 25% is an even share');
+  run('every ball plays', () => false);
+  run('one ball sits out', (k, seat) => k === seat);
+  run('only one ball plays', (k, seat) => k !== seat);
+  run('no ball plays', () => true);
+  process.exit();
 }
 
 // ---- 1b. what a collection is worth (see BONUS_MAX in arena-merge.js)

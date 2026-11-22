@@ -8,12 +8,13 @@
 // answer, and what the round's HUD shows a player is exactly what walks into the arena. Slots are Pokedex numbers;
 // the table works for the generated stand-ins and the local models alike.
 //
-//   planArmy(army, { specOf, teamIndex, limit })  ->  { roster, merges, before, after, bench, spares, spare, bonus }
+//   planArmy(army, { specOf, teamIndex, limit })  ->  { roster, merges, before, after, bench, spares, spareList, spare, bonus }
 //     roster  : [{ spec, stars, boost, made, value, kind, ring, goal }]   the fighters, strongest first (at most `limit`)
 //                 ring : 0..1, how close this kind is to its next form or star (1 = nothing further to become)
 //                 goal : { spec, stars } of what it becomes next, or null
 //     merges  : [{ from, to, stars, count }]            what fused, in order
 //     bench   : how many merged monsters did not make the roster;  spares: how many critters are not in a fighter
+//     spareList: [{ spec, count, add }] the spare critters by kind, weakest first; add is what one of them adds to `spare`
 //     spare   : [6] the spare critters' stats added up (each weighted by the root of its height)
 //     bonus   : [6] what that is worth: the share added to each of the fighters' stats (0.12 = +12%)
 import { STATS } from './critters/battle-data.js';
@@ -38,13 +39,18 @@ export const STAR_HEIGHT = 1.22;      // each star draws (and weighs) this much 
 // between health and damage, on top of whatever its new stage gives it naturally.
 export const MERGE_GAIN = 1.5;
 export const MAX_BOOST = 3.2;
-// What the spare critters are worth. Each stat's bonus is BONUS_MAX x s / (s + BONUS_HALF), where s is that stat
-// added up over every spare critter (times the root of its height): the first critters count most, every one
-// after counts a little less, and it can never pass BONUS_MAX. BONUS_HALF is about a hundred ordinary critters,
-// so a big haul is worth half of BONUS_MAX on each stat. All six stats rising together multiply up (more health,
-// more damage, less damage taken, more attacks): +9% on each wins as often as a team made 30% stronger outright,
-// which is what a large haul is meant to be worth (measured: node tools/arena-test/headless.mjs bonus).
-export const BONUS_MAX = 0.18, BONUS_HALF = 5200;
+// What the spare critters are worth. Their stats are added up into six totals (see spareOf). Two things come of that:
+//   how much: a budget of bonus, 6 x BONUS_AVG x S / (S + BONUS_HALF), where S is the six totals added together. The
+//             first critters count most and every one after a little less. BONUS_HALF is about a hundred ordinary
+//             critters, so a big haul gets half of all there is.
+//   where:    the budget is shared between the six stats by the SQUARE of each stat's share of S. A collection
+//             spread evenly gets the same on every stat (at most BONUS_AVG); one that leans towards fast critters
+//             gets much more Speed and less of the rest, up to BONUS_STAT_MAX on one stat. So what a player
+//             chooses to roll up shows as a shape, and no collection can fill every corner.
+// All six stats rising together multiply up (more health, more damage, less damage taken, more attacks): +9% on
+// each wins as often as a team made 30% stronger outright, which is what a large, even haul is meant to be worth
+// (measured: node tools/arena-test/headless.mjs bonus).
+export const BONUS_AVG = 0.18, BONUS_HALF = 31200, BONUS_STAT_MAX = 0.3;
 export const STAT_NAMES = ['HP', 'Attack', 'Defence', 'Sp. Atk', 'Sp. Def', 'Speed'];
 
 const DEF = [50, 50, 50, 50, 50, 50];
@@ -54,7 +60,13 @@ export function power(spec) { const b = statsOf(spec); return (b[0] + b[1] + b[2
 // Health x damage, in the arena's own terms (see unitStats in arena-sim.js): both scale with the root of height.
 export function strength(spec, boost = 1) { const b = statsOf(spec); return b[0] * Math.max(b[1], b[3]) * spec.height * boost * boost; }
 // The share added to each stat by spare critters whose stats add up to `spare`.
-export function teamBonus(spare) { return spare.map((s) => (s > 0 ? BONUS_MAX * s / (s + BONUS_HALF) : 0)); }
+export function teamBonus(spare) {
+  let S = 0, W = 0;
+  for (let i = 0; i < 6; i++) S += spare[i] > 0 ? spare[i] : 0;
+  if (!(S > 0)) return [0, 0, 0, 0, 0, 0];
+  const budget = 6 * BONUS_AVG * S / (S + BONUS_HALF), w = spare.map((v) => { const q = v > 0 ? v / S : 0; W += q * q; return q * q; });
+  return w.map((q) => Math.min(BONUS_STAT_MAX, budget * q / W));
+}
 // What one critter adds to `spare` when it is not in a fighter: its stat total (times the root of its height),
 // shared out by the cube of each stat, so that it goes mostly to what that critter is best at. A fast critter
 // feeds Speed, a tank feeds HP and Defence, and what a player collects shows in the shape of their bonus.
@@ -84,20 +96,19 @@ function makeSpec(specOf, dex, scale, stars, titan) {
 
 export function planArmy(army, { specOf, teamIndex = 0, limit = SQUAD } = {}) {
   // ---- count what was brought, by kind. A kind is slot + how much bigger than natural it is + titan + stars.
-  const kinds = new Map(), total = [0, 0, 0, 0, 0, 0];
+  const kinds = new Map();
   const keyOf = (dex, scale, titan, stars) => dex + '|' + scale + '|' + (titan ? 1 : 0) + '|' + stars;
   const kindOf = (dex, scale, titan, stars) => {
     const key = keyOf(dex, scale, titan, stars);
     let k = kinds.get(key);
-    if (!k) { k = { key, dex, scale, titan, stars, plain: 0, fused: [], spec: makeSpec(specOf, dex, scale, stars, titan) }; k.one = k.spec ? spareOf(k.spec) : DEF; kinds.set(key, k); }
+    if (!k) { k = { key, dex, scale, titan, stars, plain: 0, brought: 0, fused: [], spec: makeSpec(specOf, dex, scale, stars, titan) }; k.one = k.spec ? spareOf(k.spec) : DEF; kinds.set(key, k); }
     return k;
   };
   for (const spec of army || []) {
     const b = baseOf(spec);
     if (!b || !b.dex) continue;
     const k = kindOf(b.dex, round2(spec.height / b.height), !!spec.titan, 0);
-    k.plain++;
-    for (let i = 0; i < 6; i++) total[i] += k.one[i];
+    k.plain++; k.brought++;
   }
   const before = (army || []).length, merges = [];
   let branchN = teamIndex;
@@ -109,16 +120,16 @@ export function planArmy(army, { specOf, teamIndex = 0, limit = SQUAD } = {}) {
     if (!k.spec || (!EVOLVES[k.dex] && k.stars >= MAX_STARS)) return;      // nothing left to become
     const each = strength(k.spec);
     while (k.plain + k.fused.length >= MERGE_SIZE) {
-      let sIn = 0, made = 0; const parts = [0, 0, 0, 0, 0, 0];
+      let sIn = 0, made = 0; const raw = [];             // raw: the critters it is made of, as they were brought
       for (let i = 0; i < MERGE_SIZE; i++) {            // already-merged ones go in first, so their boost is carried up
-        if (k.fused.length) { const f = k.fused.pop(); sIn += f.strengthIn; made += f.made; for (let j = 0; j < 6; j++) parts[j] += f.parts[j]; }
-        else { k.plain--; sIn += each; made += 1; for (let j = 0; j < 6; j++) parts[j] += k.one[j]; }
+        if (k.fused.length) { const f = k.fused.pop(); sIn += f.strengthIn; made += f.made; for (const q of f.raw) raw.push(q); }
+        else { k.plain--; sIn += each; made += 1; raw.push(k.key); }
       }
       const to = nextOf(k);
       if (Array.isArray(EVOLVES[k.dex])) branchN++;
       // what a merged monster carries forward is the better of what went into it and what its new stage is worth
       // by nature (three weak fish make a sea serpent that is far stronger than they were)
-      to.fused.push({ strengthIn: Math.max(sIn * MERGE_GAIN, to.spec ? strength(to.spec) : 0), made, parts });
+      to.fused.push({ strengthIn: Math.max(sIn * MERGE_GAIN, to.spec ? strength(to.spec) : 0), made, raw });
       const last = merges[merges.length - 1];
       if (last && last.fromKey === k.key && last.toKey === to.key) last.count++;
       else merges.push({ from: k.spec, to: to.spec, fromKey: k.key, toKey: to.key, stars: to.stars, count: 1 });
@@ -154,18 +165,25 @@ export function planArmy(army, { specOf, teamIndex = 0, limit = SQUAD } = {}) {
   for (const k of kinds.values()) {
     if (!k.spec || !count(k)) continue;
     const natural = strength(k.spec), value = power(k.spec), ring = ringOf(k), goal = goalOf(k);
-    for (let i = 0; i < k.plain; i++) roster.push({ spec: k.spec, stars: k.stars, boost: 1, made: 1, value, kind: k.key, ring, goal, parts: k.one });
+    for (let i = 0; i < k.plain; i++) roster.push({ spec: k.spec, stars: k.stars, boost: 1, made: 1, value, kind: k.key, ring, goal, raw: [k.key] });
     for (const f of k.fused) {
       const boost = Math.min(MAX_BOOST, Math.max(1, Math.sqrt(f.strengthIn / natural)));
-      roster.push({ spec: k.spec, stars: k.stars, boost, made: Math.round(f.made), value: value * boost, kind: k.key, ring, goal, parts: f.parts });
+      roster.push({ spec: k.spec, stars: k.stars, boost, made: Math.round(f.made), value: value * boost, kind: k.key, ring, goal, raw: f.raw });
     }
   }
   roster.sort((a, b) => b.value - a.value || a.spec.dex - b.spec.dex || b.spec.height - a.spec.height);
   const after = roster.length;
   roster.length = Math.min(roster.length, limit);
   // ---- everything that is not part of a fighter backs them
-  const spare = total.slice(); let used = 0;
-  for (const r of roster) { used += r.made; for (let i = 0; i < 6; i++) spare[i] -= r.parts[i]; }
-  for (let i = 0; i < 6; i++) spare[i] = spare[i] > 0.001 ? spare[i] : 0;
-  return { roster, merges, before, after, bench: after - roster.length, spares: before - used, spare, bonus: teamBonus(spare) };
+  const usedRaw = new Map(), spare = [0, 0, 0, 0, 0, 0], spareList = [];
+  let spares = 0;
+  for (const r of roster) for (const q of r.raw) usedRaw.set(q, (usedRaw.get(q) || 0) + 1);
+  for (const k of kinds.values()) {
+    const count = k.brought - (usedRaw.get(k.key) || 0);
+    if (count <= 0 || !k.spec) continue;
+    spareList.push({ spec: k.spec, count, add: k.one, value: power(k.spec) }); spares += count;
+    for (let i = 0; i < 6; i++) spare[i] += k.one[i] * count;
+  }
+  spareList.sort((a, b) => a.value - b.value || a.spec.dex - b.spec.dex || a.spec.height - b.spec.height);
+  return { roster, merges, before, after, bench: after - roster.length, spares, spareList, spare, bonus: teamBonus(spare) };
 }
