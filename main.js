@@ -277,7 +277,11 @@ function askModel(m) {
   LOCAL.still(baseOf(m.userData.spec).dex).then((s) => {
     if (!s) { m.geometry = genGeometry(m.userData.spec, m.userData.fine); return; }
     m.geometry = s.geo; m.userData.om = s.mat;
+    // (The still can breathe: see stadium.js. A critter's own mesh is only ever drawn when it is stuck to a ball,
+    // and there it holds still; the free ones are drawn in batches, and it is the batch that breathes.)
+    m.morphTargetInfluences = s.rest;
     if (m.material !== goldMat) m.material = s.mat;
+    if (S.state !== 'menu' && S.state !== 'dex') LOCAL.wake(s);
   });
 }
 const teamMats = TEAMS.map((tm) => new THREE.MeshLambertMaterial({ vertexColors: true, color: new THREE.Color(tm.hex).lerp(new THREE.Color(0xffffff), 0.35), emissive: tm.hex, emissiveIntensity: 0.22 }));
@@ -428,6 +432,7 @@ function growBatch(b) {
   const cap = Math.max(8, b.cap * 2), old = b.mesh;
   const m = new THREE.InstancedMesh(b.geo, b.material, cap);
   m.frustumCulled = false; m.castShadow = b.casts; m.matrixAutoUpdate = false; m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  if (b.geo.userData.infl) m.morphTargetInfluences = b.geo.userData.infl;      // (a model's still, breathing: see askModel)
   if (old) { m.instanceMatrix.array.set(old.instanceMatrix.array.subarray(0, b.n * 16)); batchGroup.remove(old); old.dispose(); }
   batchGroup.add(m); b.mesh = m; b.cap = cap; b.arr = m.instanceMatrix.array;
 }
@@ -455,6 +460,8 @@ function drawWorld() {
     if (!bs) { geo.computeBoundingSphere(); bs = geo.boundingSphere; }
     viewSphere.center.set(p.x, p.y + bs.center.y * sc, p.z); viewSphere.radius = (bs.radius + Math.hypot(bs.center.x, bs.center.z)) * sc * (casts ? 2.6 : 1.05);
     if (!viewFrustum.intersectsSphere(viewSphere)) continue;
+    // (from high above the menu the whole map is in view: leave out what would be a speck, under about three pixels)
+    if (!inGame && viewSphere.radius * pxH < 1.5 * camera.position.distanceTo(p)) continue;
     if (o.kind === 'creature' || o.fly || o.mx !== p.x || o.my !== p.y || o.mz !== p.z || o.ms !== sc) { g.updateMatrix(); o.mx = p.x; o.my = p.y; o.mz = p.z; o.ms = sc; }    // (things that have not moved keep their matrix)
     let b = casts ? o.bS : o.bN;
     if (!b || b.geo !== geo || b.material !== g.material) { b = batchFor(geo, g.material, casts); if (casts) o.bS = b; else o.bN = b; }
@@ -467,6 +474,7 @@ function drawWorld() {
     if (!m) continue;
     m.count = b.n; m.visible = b.n > 0;
     if (b.n) { used++; const a = m.instanceMatrix; if (a.clearUpdateRanges) { a.clearUpdateRanges(); a.addUpdateRange(0, b.n * 16); } a.needsUpdate = true; }
+    if (b.n && inGame && b.geo.userData.still) LOCAL.wake(b.geo.userData.still);      // (a model on show in a round starts to breathe)
   }
   DRAW.things = things; DRAW.batches = used;
 }
@@ -3065,6 +3073,7 @@ function showStats(now) {
   if (!NET.stats || now - statsT < 1000) return;
   const secs = (now - statsT) / 1000; statsT = now;
   let txt = `${FPS.now.toFixed(0)} fps (${FPS.ms.toFixed(0)} ms) · graphics ${QUAL.name} · ${renderer.info.render.calls} draws · ${DRAW.things} things in ${DRAW.batches} batches`;
+  if (PROF.n) { const k = 1 / PROF.n; txt += `\nper frame: rules ${(PROF.sim * k).toFixed(1)} ms · models ${(PROF.models * k).toFixed(1)} · batches ${(PROF.batch * k).toFixed(1)} · drawing ${(PROF.draw * k).toFixed(1)}`; PROF.n = PROF.sim = PROF.models = PROF.batch = PROF.draw = 0; }
   if (NET.room) {
     const back = NET.host ? Math.max(0, ...NET.peers.filter(Boolean).map((id) => NET.room.buffered(id))) : NET.room.buffered('host');
     txt += `\n${NET.room.host ? 'host' : 'player'}${NET.room.public ? ' (public)' : ''} · ${NET.on ? `sent ${(NET.bOut / secs / 1000).toFixed(1)} kB/s · received ${(NET.bIn / secs / 1000).toFixed(1)} kB/s · waiting to send ${back} B` : 'in the lobby'}`;
@@ -3093,15 +3102,22 @@ try {
   };
 } catch (e) { /* no workers: the game simply waits while hidden */ }
 let catchingUp = false;                       // true for all but the last of a burst of catch-up ticks: those are not drawn
+// Where a frame's time goes, in milliseconds summed over PROF.n frames: the game's rules, the animated models, filling
+// the batches, and handing the scene to the graphics card. (F3 shows the averages; __game.bench() measures it.)
+const PROF = { n: 0, sim: 0, models: 0, batch: 0, draw: 0, force: false };
 function tick(now) {
   const dt = Math.min(0.05, (now - last) / 1000);
   if (dt <= 0) return;
   last = now;
+  const p0 = performance.now();
   pollPadButtons();
   tickDexPop(dt);
   if (S.state === 'play') update(dt);
+  const p1 = performance.now();
   // the animated models stand in wherever the world is on show: behind the menu, before the round and after it too
   if (S.state === 'battle' || S.state === 'battlepause') LOCAL.clearWorld(); else LOCAL.tickWorld(S.state === 'paused' ? 0 : dt);
+  const p2 = performance.now();
+  PROF.n++; PROF.sim += p1 - p0; PROF.models += p2 - p1;
   if (S.state === 'intro') tickIntro(dt);
   else if (S.state === 'countdown') tickCountdown(dt);
   else if (S.state === 'timeup') tickTimeUp(dt);
@@ -3118,7 +3134,30 @@ function tick(now) {
     aimSun(0, 0, 0, 12);
   }
   netFlush(); lobbyTick();
-  if (document.hidden || catchingUp) return;
-  if ((S.state === 'battle' || S.state === 'battlepause') && battle) renderer.render(battle.scene, battle.camera); else { drawWorld(); renderer.render(scene, camera); }
+  if ((document.hidden && !PROF.force) || catchingUp) return;
+  const p3 = performance.now();
+  if ((S.state === 'battle' || S.state === 'battlepause') && battle) renderer.render(battle.scene, battle.camera);
+  else { drawWorld(); const p4 = performance.now(); PROF.batch += p4 - p3; renderer.render(scene, camera); PROF.draw += performance.now() - p4; }
 }
+// __game.bench(frames): runs that many frames back to back, waiting for the graphics card to finish each one, and
+// says what a frame costs and what was in it. Works in a hidden tab, where the browser's own frame rate means nothing.
+S.bench = (n = 60, step = 1 / 60) => {
+  const gl = renderer.getContext(), px = new Uint8Array(4), r3 = (v) => Math.round(v * 100) / 100;
+  Object.assign(PROF, { n: 0, sim: 0, models: 0, batch: 0, draw: 0, force: true });
+  let gpu = 0, worst = 0;
+  const t0 = performance.now();
+  for (let i = 0; i < n; i++) {
+    const a = performance.now();
+    tick(last + step * 1000);
+    const b = performance.now();
+    gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);      // (does not return until everything asked for has been drawn)
+    const c = performance.now();
+    gpu += c - b; worst = Math.max(worst, c - a);
+  }
+  PROF.force = false;
+  const total = performance.now() - t0, inf = renderer.info;
+  return { ms: r3(total / n), worst: r3(worst), sim: r3(PROF.sim / n), models: r3(PROF.models / n), batch: r3(PROF.batch / n), draw: r3(PROF.draw / n), gpuWait: r3(gpu / n),
+    calls: inf.render.calls, tris: inf.render.triangles, things: DRAW.things, batches: DRAW.batches, programs: inf.programs ? inf.programs.length : 0, geos: inf.memory.geometries, tex: inf.memory.textures,
+    px: renderer.domElement.width + 'x' + renderer.domElement.height, quality: QUAL.name, state: S.state };
+};
 requestAnimationFrame(frame);

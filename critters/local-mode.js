@@ -20,7 +20,7 @@
 // None of it is part of the game's rules: it is presentation only, so a round plays
 // identically with the switch either way.
 import * as THREE from 'three';
-import { loadStadium, makeStadiumInstance, makeArenaActor, stadiumMeta, stillOf, stadiumBase } from './stadium.js';
+import { loadStadium, makeStadiumInstance, makeArenaActor, stadiumMeta, stillOf, stadiumBase, bakePose, poseTo } from './stadium.js';
 
 export const LOCAL_MODELS = true;
 
@@ -118,28 +118,40 @@ export function preload(dexes) { if (on) for (const d of dexes) loadStadium(d); 
 
 // ---------------------------------------------------------------- critters in the world
 // Every critter in the world is one plain mesh, and those batch into an instanced draw per species. With models,
-// that mesh is the model standing still (still(), below): main.js asks for it the first time the critter is about to
-// be seen and draws nothing for it until then, so the generated shape never appears where there is a model.
-// A model that MOVES is its own draw call with a skeleton and cannot join the batches, so a budgeted pool shadows
-// the critters worth it: in front of the camera, and big enough on screen to tell apart. The still mesh is hidden
-// (main.js reads o.understudy, the one field this module writes onto a game object) and the animated model is drawn
-// at its transform. This runs wherever the world is on show, not only during a round.
+// that mesh is the model's "still" (still(), below; see stadium.js): main.js asks for it the first time the critter
+// is about to be seen and draws nothing for it until then, so the generated shape never appears where there is a
+// model. A still has no skeleton, and breathes anyway: its idle loop is baked into poses the graphics card blends
+// between, so every critter of a species moves, in step, for the price of one that stands still. Only the free ones
+// breathe: a critter stuck to a ball holds its first pose.
 //
-// still(dex) resolves to { geo, mat }, or to null when there are no models (or none for that species): only then
-// does main.js fall back to the generated shape.
+// still(dex) resolves to { geo, mat, infl, rest, ... }, or to null when there are no models (or none for that
+// species): only then does main.js fall back to the generated shape. A mesh given the geometry must be given infl
+// (to breathe) or rest (to hold still) as its morphTargetInfluences too.
 export function still(dex) { return ready.then((live) => (live ? loadStadium(dex).then((l) => (l ? stillOf(l) : null)) : null)); }
 
+// wake(still): this species is being looked at in a round, so work out its poses. They are baked a little each
+// frame (BAKE_MS of it at most), and the species starts to move when its last pose is done. Nothing is woken behind
+// the menu: from up there no movement could be seen, and it would mean poses for all 151.
+let clock = 0;                          // the one clock every moving still is posed by
+const baking = [], movers = [];
+const BAKE_MS = 1.5;
+export function wake(s) { if (!on || s.woken) return; s.woken = true; baking.push(s); }
+
+// The model proper, skeleton and all, is still what shows a flame or a cloud of gas: the few species that have one
+// (still.fx) get it back when they are close and free. A budgeted pool shadows the nearest of them: the still is hidden
+// (main.js reads o.understudy, the one field this module writes onto a game object) and the model is drawn at its
+// transform, posed by the same clock so the change-over does not show.
 //
-// Tuned by measurement: 240 models hold a locked 60 fps with a 19 ms worst frame. Below
-// 5px the count stops climbing -- the frustum and the critters in view run out first.
-// Density varies a lot by habitat, so the cap is what protects the frame rate.
-let budgetMax = 240;                    // live models at once
-let budgetPx = 5;                       // smallest on-screen height worth a model
-const ACQUIRE_PER_FRAME = 8;            // spread cloning over frames so movement does not hitch
+// Measured (1920x1080, a 23 ms frame at the start of a round): 240 skinned models cost 14 ms of it, 0.06 ms each
+// however small they were on screen. That pool was every species'; with the stills breathing by themselves it is
+// down to the handful that need it.
+let budgetMax = 16;                     // live models at once
+let budgetPx = 16;                      // smallest on-screen height worth a model
+const ACQUIRE_PER_FRAME = 4;            // spread cloning over frames so movement does not hitch
 const POOL_PER_SPECIES = 6;             // spare instances kept rather than disposed
 const live = new Map();                 // o -> { inst, dex } | 'loading'
 const spares = new Map();               // dex -> [instances]
-const vScale = new THREE.Vector3(), vSphere = new THREE.Sphere();
+const vSphere = new THREE.Sphere();
 const vFrustum = new THREE.Frustum(), vProj = new THREE.Matrix4();
 
 function take(dex, loaded) {
@@ -160,26 +172,31 @@ export function clearWorld() {
   live.clear();
 }
 export function tickWorld(dt) {
-  if (!on || budgetMax <= 0) { clearWorld(); return; }
+  if (!on) return;
+  clock += dt;
+  if (baking.length) {
+    const t0 = performance.now();
+    do { if (bakePose(baking[0])) { const s = baking.shift(); if (s.moving) movers.push(s); } } while (baking.length && performance.now() - t0 < BAKE_MS);
+  }
+  for (const s of movers) poseTo(s, clock);
+  if (budgetMax <= 0) { clearWorld(); return; }
   const { scene, camera, renderer, S, baseOf } = G;
   vProj.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
   vFrustum.setFromProjectionMatrix(vProj);
   const px = renderer.domElement.height || 1080, cam = camera.position;
   const cand = [];
-  // Both lists, without building a third every frame: attach() splices a critter out of
-  // S.objects and into S.attached, so the ones stuck to the ball -- the closest things to
-  // the camera there are -- are only ever found in the second.
-  for (let l = 0; l < 2; l++) for (const o of (l ? S.attached : S.objects)) {
+  // (the free ones only: attach() splices a critter out of S.objects, and one stuck to a ball stands still)
+  for (const o of S.objects) {
     const g = o.group;
-    if (o.kind !== 'creature' || o.gone || !g.parent) continue;
+    if (o.kind !== 'creature' || o.gone || o.on || !g.parent) continue;
     // Only one that is already drawn as its still model, in that model's own colours: until the still has arrived
-    // there is nothing to stand in for, and one wearing something special (gold) keeps it.
+    // there is nothing to stand in for, and one wearing something special (gold) keeps it. And only a species with
+    // a flame or gas to show, unless the console has asked for every one (__game.models).
     if (!g.userData.om || g.material !== g.userData.om) continue;
+    if (!everyone && !g.geometry.userData.still.fx) continue;
     // Where it is in the world. A free critter's parent sits at the origin and is never given a world matrix (its
-    // children are drawn in batches), so its own position is the answer; one stuck to a ball is positioned
-    // relative to the ball, and the renderer worked out its world matrix this frame.
-    let x = g.position.x, y = g.position.y, z = g.position.z;
-    if (o.on) { const e = g.matrixWorld.elements; x = e[12]; y = e[13]; z = e[14]; }
+    // children are drawn in batches), so its own position is the answer.
+    const x = g.position.x, y = g.position.y, z = g.position.z;
     const dx = x - cam.x, dy = y - cam.y, dz = z - cam.z;
     const d2 = dx * dx + dy * dy + dz * dz;
     // a thing of height h at distance d covers about h / (1.04 * d) of the screen height at this fov
@@ -192,7 +209,7 @@ export function tickWorld(dt) {
   cand.sort((a, b) => a.d2 - b.d2);                                  // nearest first
   const want = new Set(cand.slice(0, budgetMax).map((c) => c.o));
   for (const [o, u] of [...live]) {
-    if (want.has(o)) continue;
+    if (want.has(o) && !o.on) continue;
     if (u !== 'loading') give(u);
     release(o);
     live.delete(o);
@@ -216,19 +233,23 @@ export function tickWorld(dt) {
     const g = o.group, r = u.inst.root;
     o.understudy = true;
     g.visible = false;   // the cull runs before this and would leave it on for a frame, drawing both
-    if (o.on) { g.getWorldPosition(r.position); g.getWorldQuaternion(r.quaternion); r.scale.copy(g.getWorldScale(vScale)); }
-    else { r.position.copy(g.position); r.quaternion.copy(g.quaternion); r.scale.copy(g.scale); }
-    u.inst.update(dt);
+    r.position.copy(g.position); r.quaternion.copy(g.quaternion); r.scale.copy(g.scale);
+    u.inst.at(clock);
   }
 }
 
 // ---------------------------------------------------------------- console
+// __game.models(n, px, all): at most n skinned models, down to px on screen; all = every species, not only those
+// with effects (for measuring what a skinned model costs). No arguments puts it back.
+let everyone = false;
 export function hooks(S) {
   if (!on) return;
-  S.models = (n, px) => {
-    budgetMax = n === undefined ? 240 : Math.max(0, n);
-    if (px !== undefined) budgetPx = px;
+  S.models = (n, px, all) => {
+    budgetMax = n === undefined ? 16 : Math.max(0, n);
+    budgetPx = px === undefined ? 16 : px;
+    everyone = !!all;
     clearWorld();
-    return `models: up to ${budgetMax} at once, down to ${budgetPx}px on screen`;
+    return `models: up to ${budgetMax} at once, down to ${budgetPx}px on screen${everyone ? ', every species' : ''}`;
   };
+  S.poses = () => ({ moving: movers.length, baking: baking.length, clock });
 }

@@ -18,7 +18,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 
 // Where the models live. The default sits beside this module and is resolved against the
 // module rather than the page, so it holds wherever the page lives. Repoint it without
@@ -167,8 +167,12 @@ function mergeBody(parts) {
     g.setAttribute('color', new THREE.BufferAttribute(cols, 3));
     geos.push(g);
   }
-  const merged = mergeGeometries(geos, false);
-  if (!merged) return null;
+  const loose = mergeGeometries(geos, false);
+  if (!loose) return null;
+  // (the prims come apart as loose triangles, three corners each; welding the corners that are the same in every
+  // respect leaves about a third as many vertices to skin, to draw and to keep poses of)
+  const merged = mergeVertices(loose);
+  loose.dispose();
   const tex = new THREE.CanvasTexture(atlas.canvas);
   tex.flipY = false;                                    // glTF convention, as the source maps were
   tex.generateMipmaps = false;
@@ -287,52 +291,78 @@ export function makeStadiumInstance(loaded, animName = 'idle') {
   }).filter(Boolean);
 
   let t = 0;
+  const flip = () => {
+    for (const f of fx) {
+      const i = Math.floor(t * FX_FPS) % f.frames.length;
+      if (i !== f.last) { f.last = i; f.mat.map = texFor(entry.slug, f.frames[i]); }
+    }
+  };
   return {
     root,
-    update(dt) {
-      mixer.update(dt);
-      t += dt;
-      for (const f of fx) {
-        const i = Math.floor(t * FX_FPS) % f.frames.length;
-        if (i !== f.last) { f.last = i; f.mat.map = texFor(entry.slug, f.frames[i]); }
-      }
-    },
+    update(dt) { mixer.update(dt); t += dt; flip(); },
+    at(time) { mixer.setTime(time); t = time; flip(); },      // the pose at that moment of a shared clock (see poseTo)
     dispose() { mixer.stopAllAction(); mixer.uncacheRoot(root); },
   };
 }
 
-// ---------------------------------------------------------------- standing still
-// The model in the first frame of its idle pose, as one plain (unskinned) geometry in the same normalised frame as the
-// model itself, with the body's own material. It is what a critter is drawn as when it is too far off, or one of too
-// many, to be worth a skeleton of its own: plain meshes of one species batch into a single instanced draw, so there
-// is no limit on how many can be shown. Effects (flames, gas) are left out.
-// Returns { geo, mat }, or null if the model's body is not one mesh.
+// ---------------------------------------------------------------- standing still, and breathing
+// A skeleton apiece is what makes a model dear: its bones are moved, multiplied out and sent to the graphics card
+// every frame, and it is a draw call of its own (about 0.06 ms each, measured; 240 of them were most of a frame).
+// So a critter in the world has none. It is drawn as a "still": the model's body as one plain (unskinned) geometry,
+// in the same normalised frame as the model, which batches into one instanced draw per species however many there
+// are. Effects (flames, gas) are left out of it.
+//
+// The still breathes all the same. Its idle loop is worked out ahead of time as POSES sets of vertex positions
+// (bakePose, one pose a call so it can be spread over frames) and handed to the geometry as morph targets; the
+// graphics card blends the two poses either side of now (poseTo sets the weights). Every mesh drawing the geometry
+// must carry a set of weights as its morphTargetInfluences: still.infl to breathe (it is one array, so setting it once
+// moves every mesh that has it, in step), or still.rest to hold the first pose.
+//
+// stillOf returns { geo, mat, infl, rest, fx, ... }, or null if the model's body is not one mesh.
+export const POSES = 16;
+const REST = Object.freeze(new Array(POSES).fill(0));
+
+// A copy of the model, playing its idle clip, to read vertex positions out of.
+function poseRig(loaded) {
+  const root = cloneSkinned(loaded.root), { entry, clips } = loaded;
+  let body = root.getObjectByName('body');
+  if (!body) { const all = []; root.traverse((n) => { if (n.isSkinnedMesh && !/^fx\d+$/.test(n.name)) all.push(n); }); if (all.length === 1) body = all[0]; }
+  if (!body || !body.isSkinnedMesh) return null;
+  const mixer = new THREE.AnimationMixer(root);
+  const want = entry.anims.find((a) => a.name === 'idle') || entry.anims[0], clip = (want && clips[want.i]) || clips[0];
+  if (clip) mixer.clipAction(clip).play();
+  return { root, body, mixer, dur: clip ? clip.duration : 0 };
+}
+function freeRig(rig) { rig.mixer.stopAllAction(); rig.mixer.uncacheRoot(rig.root); }
+// Where each vertex of the body is at time t of the loop (into P), and if N is given which way it faces.
+const pv = new THREE.Vector3(), pw = new THREE.Vector3();
+function poseAt(rig, t, P, N) {
+  rig.mixer.setTime(t);
+  rig.root.updateMatrixWorld(true);
+  const body = rig.body, src = body.geometry, pos = src.attributes.position, nor = N ? src.attributes.normal : null, n = pos.count;
+  if (!src.boundingSphere) src.computeBoundingSphere();
+  const eps = (src.boundingSphere.radius || 1) * 0.01;
+  for (let i = 0; i < n; i++) {
+    pv.fromBufferAttribute(pos, i);
+    if (nor) pw.fromBufferAttribute(nor, i).multiplyScalar(eps).add(pv);
+    body.applyBoneTransform(i, pv).applyMatrix4(body.matrixWorld);
+    P[i * 3] = pv.x; P[i * 3 + 1] = pv.y; P[i * 3 + 2] = pv.z;
+    if (nor) {                                            // (a normal goes wherever a point just along it went)
+      body.applyBoneTransform(i, pw).applyMatrix4(body.matrixWorld).sub(pv).normalize();
+      N[i * 3] = pw.x; N[i * 3 + 1] = pw.y; N[i * 3 + 2] = pw.z;
+    }
+  }
+}
 export function stillOf(loaded) {
   if (loaded.still !== undefined) return loaded.still;
   loaded.still = null;
+  let rig = null;
   try {
-    const root = cloneSkinned(loaded.root), { entry, clips } = loaded;
-    let body = root.getObjectByName('body');
-    if (!body) { const all = []; root.traverse((n) => { if (n.isSkinnedMesh && !/^fx\d+$/.test(n.name)) all.push(n); }); if (all.length === 1) body = all[0]; }
-    if (!body || !body.isSkinnedMesh) return null;
-    const mixer = new THREE.AnimationMixer(root);
-    const want = entry.anims.find((a) => a.name === 'idle') || entry.anims[0], clip = (want && clips[want.i]) || clips[0];
-    if (clip) { mixer.clipAction(clip).play(); mixer.update(0); }
-    root.updateMatrixWorld(true);
-    const src = body.geometry, pos = src.attributes.position, nor = src.attributes.normal, n = pos.count;
-    if (!src.boundingSphere) src.computeBoundingSphere();
-    const eps = (src.boundingSphere.radius || 1) * 0.01;
-    const P = new Float32Array(n * 3), N = new Float32Array(n * 3), v = new THREE.Vector3(), w = new THREE.Vector3();
-    for (let i = 0; i < n; i++) {
-      v.fromBufferAttribute(pos, i);
-      if (nor) w.fromBufferAttribute(nor, i).multiplyScalar(eps).add(v);
-      body.applyBoneTransform(i, v).applyMatrix4(body.matrixWorld);
-      P[i * 3] = v.x; P[i * 3 + 1] = v.y; P[i * 3 + 2] = v.z;
-      if (nor) {                                            // (a normal goes wherever a point just along it went)
-        body.applyBoneTransform(i, w).applyMatrix4(body.matrixWorld).sub(v).normalize();
-        N[i * 3] = w.x; N[i * 3 + 1] = w.y; N[i * 3 + 2] = w.z;
-      }
-    }
+    rig = poseRig(loaded);
+    if (!rig) return null;
+    const src = rig.body.geometry, n = src.attributes.position.count, nor = !!src.attributes.normal;
+    const P = new Float32Array(n * 3), N = nor ? new Float32Array(n * 3) : null;
+    poseAt(rig, 0, P, N);
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(P, 3));
     if (nor) geo.setAttribute('normal', new THREE.BufferAttribute(N, 3));
@@ -340,10 +370,45 @@ export function stillOf(loaded) {
     if (src.index) geo.setIndex(src.index.clone());
     if (!nor) geo.computeVertexNormals();
     geo.computeBoundingSphere(); geo.computeBoundingBox();
-    mixer.stopAllAction(); mixer.uncacheRoot(root);
-    loaded.still = { geo, mat: body.material };
+    const infl = new Array(POSES).fill(0);
+    // (a material of its own, sharing the texture: the skinned model and the still are different shader programs,
+    // and one material drawn both ways has its program looked up again at every change)
+    loaded.still = { geo, mat: rig.body.material.clone(), infl, rest: REST, loaded, dur: rig.dur, fx: !!(loaded.entry.fx && loaded.entry.fx.length), poses: 0, bank: null, rig: null, moving: false, a: 0, b: 0 };
+    geo.userData.infl = infl; geo.userData.still = loaded.still;
   } catch (e) { console.warn('stadium: no still for', loaded.entry && loaded.entry.slug, e); }
+  if (rig) freeRig(rig);
   return loaded.still;
+}
+// Works out the next pose of a still's idle loop. Returns true once there is nothing left to do: either all POSES are
+// in the geometry and still.moving is set, or the model has no clip to take them from and it stays as it is.
+export function bakePose(still) {
+  if (still.poses >= POSES) return true;
+  try {
+    if (!still.rig) { still.rig = poseRig(still.loaded); still.bank = []; }
+    const rig = still.rig;
+    if (!rig || !(rig.dur > 0)) throw new Error('no idle clip');
+    const P = new Float32Array(still.geo.attributes.position.count * 3);
+    poseAt(rig, still.poses / POSES * rig.dur, P, null);
+    still.bank.push(new THREE.BufferAttribute(P, 3));
+    if (++still.poses < POSES) return false;
+    // all there. The sphere it is culled by has to hold every pose, not only the first.
+    const bs = still.geo.boundingSphere, c = bs.center;
+    let r2 = bs.radius * bs.radius;
+    for (const a of still.bank) { const q = a.array; for (let i = 0; i < q.length; i += 3) { const dx = q[i] - c.x, dy = q[i + 1] - c.y, dz = q[i + 2] - c.z, d2 = dx * dx + dy * dy + dz * dz; if (d2 > r2) r2 = d2; } }
+    bs.radius = Math.sqrt(r2);
+    still.geo.morphAttributes.position = still.bank;
+    still.dur = rig.dur; still.moving = true;
+  } catch (e) { still.poses = POSES; if (!/no idle clip/.test(String(e))) console.warn('stadium: no poses for', still.loaded.entry && still.loaded.entry.slug, e); }
+  if (still.rig) freeRig(still.rig);
+  still.rig = still.bank = null;
+  return true;
+}
+// Puts a moving still at time t of a clock that every one of them shares: the two poses either side, blended.
+export function poseTo(still, t) {
+  const f = (t / still.dur % 1) * POSES, i = Math.floor(f), a = i % POSES, b = (a + 1) % POSES, w = still.infl;
+  w[still.a] = 0; w[still.b] = 0;
+  w[a] = 1 - (f - i); w[b] = f - i;
+  still.a = a; still.b = b;
 }
 
 // ---------------------------------------------------------------- the arena

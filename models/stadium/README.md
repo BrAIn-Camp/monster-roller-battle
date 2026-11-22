@@ -59,8 +59,10 @@ Loaded one at a time, on demand, by `critters/stadium.js`. Nothing is fetched un
   game cuts every portrait it shows (dex, HUD, results, the arena's ceremony) from this sheet, so it never
   loads a model just to show its face. Draw it again if the models change: run `python tools/serve.py` and
   open `http://127.0.0.1:8417/tools/faces.html`, which saves the sheet itself.
-- **The generated critters never stand in for a model.** A critter in the world is drawn as its model
-  standing still (`stillOf` in `critters/stadium.js`: the first frame of its idle pose as a plain mesh, which
-  batches by species), with an animated copy in its place when it is near enough to tell. Until a species'
+- **The generated critters never stand in for a model.** A critter in the world is drawn as its model's
+  "still" (`stillOf` in `critters/stadium.js`: the body as a plain mesh with no skeleton, which batches by
+  species). The still breathes: its idle loop is baked into 16 poses that the graphics card blends between,
+  so no critter in the world needs a skeleton. Only the eight species with a flame or gas get the model
+  proper, and only when close. A critter stuck to a ball holds still. Until a species'
   model has loaded, its critters are not drawn at all. Add `?stadium=nowhere` to the address to see the
   game without the models.

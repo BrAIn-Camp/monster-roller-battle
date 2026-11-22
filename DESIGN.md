@@ -345,11 +345,40 @@ Up to four players, one of them hosting; CPU teams take the empty seats. See REA
 - Public games (Quick play) need no server of their own: there are six fixed room names (`pub1` to `pub6` in `net.js`). A player tries each in turn: joins the first that is waiting, or hosts the first that nobody holds. A public host refuses joiners while its round is on, starts by itself on a countdown (`PUBLIC_WAIT` in `main.js`), uses Normal CPUs, and everyone is returned from the results screen to the lobby after 25 seconds.
 - Not done: joining a round already under way, carrying on if the host leaves, relay servers for players behind strict firewalls, and player names.
 - Measured cost after the second pass: about 3.3 kB/s from the host to each player and 0.4 kB/s back.
-- F3 shows a readout: frame rate, graphics level, draw calls and, in multiplayer, data rates, ping, updates per second and the send backlog.
+- F3 shows a readout: frame rate, graphics level, draw calls, where a frame's time went (rules, models, batches, drawing) and, in multiplayer, data rates, ping, updates per second and the send backlog.
 
 ## Graphics quality (added 20 November 2026)
 
 `QUALITY` in `main.js` has four levels (resolution cap, shadows, draw distance). On "auto" the game starts at the top and steps down one level whenever it averages under 30 frames a second for four seconds of play; it never steps back up by itself, and remembers where it settled. The Graphics button (title screen and pause menu) cycles auto and the four levels.
+
+## Drawing cost of the models (measured and trimmed 22 November 2026)
+
+`__game.bench(frames)` in the console runs frames back to back, waits for the graphics card after each and says what a frame
+costs and where it went; it works in a hidden tab. Measured with it at 1920x1080 on the development machine:
+
+| | before | after |
+|---|---|---|
+| start of a round | 21.2 ms | 8.0 ms |
+| late in a round, a 5 m ball | 8.4 ms | 3.9 ms |
+| title screen | 21.9 ms | 8.7 ms |
+
+- **What it was.** Up to 240 critters at a time were drawn as the model proper, each with a skeleton: bones moved, multiplied
+  out and sent to the graphics card every frame, and a draw call apiece. That cost 0.06 ms each however small they were on
+  screen: 14 ms of the frame at the start of a round.
+- **Poses instead of skeletons.** A critter in the world is its model's "still" (`stillOf` in `critters/stadium.js`), one
+  instanced draw per species. The still's idle loop is baked into 16 sets of vertex positions (`bakePose`, 1.5 ms of it a
+  frame at most, only for species on show in a round) and the graphics card blends the two either side of now (`poseTo`).
+  Every free critter of a species breathes, in step, at the price of one that stands still. A critter stuck to a ball holds
+  its first pose.
+- **Skeletons only where there is a flame.** The eight species with fire or gas get the model proper when they are free and
+  close (16 at most, 16 pixels and up), posed by the same clock.
+- **Welded vertices.** A model's body came out of the merge as loose triangles; welding identical corners leaves about a
+  third as many vertices (2,000 to 700).
+- **Title screen.** Anything that would be under about three pixels from up there is left out: 5,560 things to 3,250.
+- **What is left** (start of a round, 8 ms): the rules 1.6 ms, filling the batches 0.6, handing about 570 draws to the card
+  2.4, the card itself 3.3. Shadows are 0.3 ms of that and the grass nothing; rendering at the screen's own resolution
+  instead of 1.5 times it saves 0.3. Late in a round the dear thing is the stuck critters: each is its own draw, and with
+  four full balls in view there are 950 of them, 3 ms. Putting those through the batches is the next saving worth having.
 
 ## Drawing cost (measured and trimmed 20 November 2026)
 
