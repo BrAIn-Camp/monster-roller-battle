@@ -157,14 +157,74 @@ browser console starts any event at once for testing.
 
 ## 6. The finale
 
-- `arena.js` (self-contained: wheel, eight arenas, battle, HUD).
-- The arena is chosen when the round starts so the oracle can hint at it; the wheel reveals it and shows how many favoured critters each team has.
-- Favoured types deal 25% more damage, take 20% less, move 10% faster, glow, and ignore the arena's hazard.
-- Armies fight on their own (same stats and type chart as before). Each team also has a ball: the human steers theirs with the stick or WASD and dashes with Shift.
-  A ball scoops enemy critters up to half its width, grows a little as it does, and bounces off bigger ones (staggering them).
-  Ramming another ball stuns it and frees one or two of the critters it scooped.
-- Ball size is earned but compressed: 1.0x to 1.6x a base size, by the log of each team's final ball size.
-- Fixed camera, 3-2-1-GO, a 75 s limit with a pulsing last ten seconds, FINISH freeze, confetti and a winner banner. Space skips.
+Rebuilt on 21-22 November 2026 (the running record of that night is `OVERNIGHT-LOG.md`).
+
+**Files.** `arena.js` (the arena list and the wheel), `arena-merge.js` (merging), `arena-sim.js` (the fight, with no drawing in
+it), `arena-battle.js` (everything on screen), `arena-fx.js` (particles and effect shapes), `arena-ui.js` (style sheet).
+
+**The order of things.** The arena is chosen when the round starts so the oracle can hint at it. The wheel reveals it. Then:
+
+1. *Merge.* Three of a kind become one of the next stage of their line, again and again (9 -> 3 -> 1). Three of a kind that
+   cannot evolve become a starred, bigger version (up to three stars). A merged monster is worth 1.5x what went into it.
+   The strongest 20 fight (12 on the floor, 8 in reserve); the rest "back" them for up to +50% health and damage.
+   Each team's best three merges are shown at a spot in front of its corner: three spin together, flash, and one stands
+   there. The results line up by the corner and walk on as the fighters they are.
+2. *Drop.* The rest of the fighters and the four balls fall in. 3, 2, 1, GO.
+3. *Fight.* See below. Reserves drop in at their corner as places open.
+4. *Finish.* The last knockout plays in slow motion with the camera pushed in, then the winners cheer.
+
+**The floor is a platform with no walls.** A monster whose middle goes past the edge is out, whatever health it had. One on
+its feet digs in at the edge, so it takes a knock to send it over; flyers and floaters can drift back from a little way out.
+A ball that leaves the floor is gone for the fight (whatever it had scooped scrambles back on).
+
+**Every hit knocks back**, and harder the weaker the target is: metres slid = knockback x (a little + damage share x
+(1 + 2.6 x health lost)) / weight. Fights drift to the edges and the weak get launched.
+
+**Signature moves.** One per type, from a monster's first type (its second if the first is Normal). It charges over about 17 s,
+faster for quick monsters and with every hit landed. A full charge starts a wind-up of 0.5 to 1.1 s, drawn on the floor in the
+type's colour: a wedge, a strip, a ring or a reticle, filling until the move goes off. A hard knock or a ram breaks it.
+
+| Type | Move | What it does |
+|---|---|---|
+| Fire | Flame Burst | a wedge of fire in front |
+| Water | Tidal Surge | a wave that rolls forward and carries things with it |
+| Electric | Chain Bolt | jumps between up to four foes and stuns them |
+| Grass | Bloom Drain | hurts everything around it and heals itself and friends |
+| Ice | Deep Freeze | a circle at the target: frozen solid for 1.7 s |
+| Fighting | Sky Uppercut | dashes in and launches one foe |
+| Poison | Toxic Pool | a pool that lingers, hurting and slowing |
+| Ground | Earthshaker | a quake around it (flyers are untouched) |
+| Flying | Whirlwind | little damage, a huge shove away from the user |
+| Psychic | Mind Throw | lifts a foe and its neighbours, then hurls them |
+| Bug | Swarm Sting | five fast stings on one foe |
+| Rock | Rock Slide | boulders land on the target's spot |
+| Ghost | Shadow Strike | appears beside the weakest foe in reach and knocks it towards the nearest edge |
+| Dragon | Dragon Beam | everything on a line |
+| Normal | Stampede | charges down a line, bowling foes aside |
+
+**The balls.** The human steers with the stick or WASD and dashes with Shift or Space. A ball:
+- *rams* any monster it cannot scoop: knocks it back (further at dash speed), breaks its wind-up, and stops it acting for a moment
+- *rallies* one of its own by rolling through it: the signature move is charged at once, winds up in half the time and hits 20%
+  harder (9 s before the same monster can be rallied again, 2 s between rallies)
+- *scoops* enemy monsters smaller than 0.45 of its width (rare now: only the very smallest), and spills them when rammed
+- *clashes* with other balls: the heavier, faster one stuns the other
+CPU balls do all of this, come at monsters from the inside so the knock sends them outwards, and keep off the edge.
+
+**Favoured types** (three per arena) deal 25% more damage, take 20% less, move 10% faster, wear a gold ring, and ignore the
+arena's hazard. A hazard's slow push (wave, sandstorm) carries off only monsters that are stunned or tumbling; balls get no grip.
+
+**Ending.** No time limit. After 45 s every hit climbs (7% a second, and knockback with it), the clock turns into the
+multiplier and the light turns red. A fight that somehow reaches 150 s is decided on health, as a safety net only.
+
+**The camera** never turns (so "up" on the stick is always away), but it closes in on whatever is still fighting as the floor
+empties, and pushes in on the last knockout.
+
+**Drawn sizes are compressed**: a monster N times taller than typical is drawn root-N times bigger, within 0.62x to 2.4x. Stats
+use the real height.
+
+**The fight is separate from its drawing.** `arena-sim.js` uses one dice and pushes what happens onto `sim.events`;
+`arena-battle.js` draws from that with its own cosmetic dice. So a multiplayer fight is the same on every machine, skipping
+runs the real fight, and `tools/arena-test/headless.mjs` can run hundreds of them in seconds (see section 7).
 
 ## 7. Where the numbers live
 
@@ -174,11 +234,18 @@ browser console starts any event at once for testing.
 | Biomes, places, river, who lives where | `map.js` |
 | Props and scenes per habitat | `habitats/*.js` (rules in `habitats/BRIEF.md`) |
 | Events | `events.js` |
-| Arena list, favoured-type edge, ball rules, timings | top of `arena.js` |
+| Arena list | top of `arena.js` |
+| Everything that decides an arena fight (floor cap, knockback, ramp, ball rules, the edge) | `TUNE` at the top of `arena-sim.js` |
+| Signature moves | `MOVES` in `arena-sim.js` |
+| Merging (group size, stars, merge bonus, bench backing) | top of `arena-merge.js` |
+| Arena intro and finale timings, the camera | top of `arena-battle.js` |
 | Round length | `LEVEL.seconds` in `roster.js` |
 
 Tools: `node tools/map-image.mjs out.png 2` (picture of the map with every prop), `node tools/map-report.mjs [biome]` (size ladder and placement problems),
-`node tools/map-probe.mjs x z` (ground at a point). `tools/arena-test/` is a stand-alone page for the wheel and arena.
+`node tools/map-probe.mjs x z` (ground at a point). `tools/arena-test/` is a stand-alone page for the wheel and arena
+(options are listed at the top of its `test.js`). `node tools/arena-test/headless.mjs 400` runs 400 arena fights with no screen and
+reports how they go (share decided by knockout, length, ring-outs, whether the strongest army wins, seat fairness); add
+`tune=HP_SCALE:13` to try a number without editing, `smoke` for a quick sanity run.
 
 ## 8. Online play (not built)
 

@@ -26,7 +26,7 @@ export const TUNE = {
   // Drawn heights. A typical monster is H_TARGET of the arena side; others are scaled by the ROOT of how much
   // taller or shorter they really are, within H_MIN..H_MAX times typical. So a sea serpent towers over a mouse,
   // but nothing is a speck and nothing blots out the floor. (Stats still use the real height.)
-  H_TARGET: 0.06, H_MIN: 0.62, H_MAX: 2.5,
+  H_TARGET: 0.066, H_MIN: 0.62, H_MAX: 2.4,
   HIT_DELAY: 0.14,          // a melee swing lands this long after it starts (so the blow meets the animation)
   SHOT_SPEED: 0.62,         // ranged attacks fly this many arena sides per second
   // knockback: metres slid = kb x (KB_FLAT + KB_FRAC x damage share x (1 + KB_WEAK x health lost)) / weight
@@ -39,8 +39,8 @@ export const TUNE = {
   BREAK_DIST: 0.9,          // a knock of at least this many metres breaks a wind-up
   RALLY_CD: 9, RALLY_BALL_CD: 2.0, RALLY_POWER: 1.2, RALLY_WIND: 0.55,
   RAM_MIN: 2.5, RAM_PUSH: 0.3, RAM_DMG: 0.04, RAM_IMMUNE: 1.2,
-  SCOOP_RATIO: 0.4, SCOOP_GROW: 0.8, SCOOP_GULP: 0.7, SCOOP_DRAG: 0.35,
-  BALL_BASE: 1.3, BALL_SPREAD: 0.55, BALL_MAX_GROW: 1.5, BALL_GRIP: 4.5,
+  SCOOP_RATIO: 0.45, SCOOP_GROW: 0.8, SCOOP_GULP: 0.7, SCOOP_DRAG: 0.35,
+  BALL_BASE: 1.05, BALL_SPREAD: 0.5, BALL_MAX_GROW: 1.5, BALL_GRIP: 4.5,
   DASH_MULT: 2.0, DASH_TIME: 0.4, DASH_CD: 2.2,
   CPU_SPEED: 0.9, CPU_THINK: [0.3, 0.55],
   CLASH_STUN: 1.0,
@@ -483,8 +483,15 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
     if (!t) { u.moving = false; return; }
     const dx = t.x - u.x, dz = t.z - u.z, d = Math.hypot(dx, dz) || 0.001, reach = u.st.range > 0 ? u.st.range + t.r : u.r + t.r + 0.25;
     u.yaw = Math.atan2(dx, dz);
-    if (u.charge >= 1 && t.drop <= 0 && d < reachOf(u, MOVES[u.move]) * (MOVES[u.move].shape === 'nova' ? 0.75 : 0.95) + t.r) { windUp(u, t); return; }
-    if (d > reach) {
+    // a charged signature move goes off as soon as the target is inside it; one that reaches less far than the
+    // monster's ordinary attack (a ring around itself, for a monster that fights at range) makes it close in first
+    let stand = reach;
+    if (u.charge >= 1 && t.drop <= 0) {
+      const M = MOVES[u.move], sr = reachOf(u, M) * (M.shape === 'nova' ? 0.7 : 0.95) + t.r;
+      if (d < sr) { windUp(u, t); return; }
+      stand = Math.min(reach, sr * 0.9);
+    }
+    if (d > stand) {
       const sp = u.st.speed * (u.fav ? T.FAV_SPEED : haz.slow(u.x, u.z)) * (u.slow > 0 ? 0.6 : 1) * dt;
       u.x = clamp(u.x + dx / d * sp, -lim, lim); u.z = clamp(u.z + dz / d * sp, -lim, lim); u.moving = true;
       return;
