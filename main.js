@@ -2949,7 +2949,16 @@ function frame(now) { watchFps(now); showStats(now); tick(now); requestAnimation
 try {
   const w = new Worker(URL.createObjectURL(new Blob(['setInterval(() => postMessage(0), 33)'], { type: 'text/javascript' })));
   const always = new URLSearchParams(location.search).has('keepalive');      // ?keepalive: also in single player (for testing in a hidden tab)
-  w.onmessage = () => { lobbyTick(); if ((NET.room || always) && S.state !== 'menu' && performance.now() - last > 250) tick(performance.now()); };      // no frame for a quarter of a second: tick anyway
+  // No frame for a quarter of a second: tick anyway, and make up the time. (One tick covers at most 50 ms, so a single
+  // tick per quarter second ran the game at a fifth of its speed: for every player, if it was the host's tab that was hidden.)
+  w.onmessage = () => {
+    lobbyTick();
+    if (!(NET.room || always) || S.state === 'menu') return;
+    const now = performance.now(), lag = now - last;
+    if (lag <= 250) return;
+    const n = Math.min(20, Math.ceil(lag / 50)), from = now - Math.min(lag, n * 50);
+    for (let i = 1; i <= n; i++) tick(from + (now - from) * i / n);
+  };
 } catch (e) { /* no workers: the game simply waits while hidden */ }
 function tick(now) {
   const dt = Math.min(0.05, (now - last) / 1000);

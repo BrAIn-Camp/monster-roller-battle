@@ -52,6 +52,7 @@ built, the decisions taken without you, and every bug or rough edge found along 
 | 5 | (new) Sinking the surroundings below the platform also buried the lava pools and sea foam under the ground. | Ground lowered to where it was. |
 | 6 | (new) Every fight built its own copies of the effect shapes and never freed them. | Built once and shared. |
 | 7 | (existing) The arena had no music at all: the round's tune stops at "TIME UP". | A fight tune from the same synth (waiting / fighting / sudden death). |
+| 8 | (existing) A hidden tab ran the whole game at a fifth of its speed. The worker that keeps a hidden tab ticking gave it one tick per quarter second, and a tick covers at most 50 ms. In multiplayer that slowed every player whenever the host's tab was hidden or covered. | The catch-up now runs as many 50 ms ticks as the gap needs (up to a second's worth). Measured: 10.0 game seconds per 10.0 real seconds in a hidden tab. |
 
 ## Checked
 
