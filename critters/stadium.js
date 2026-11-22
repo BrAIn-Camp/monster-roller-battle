@@ -301,6 +301,51 @@ export function makeStadiumInstance(loaded, animName = 'idle') {
   };
 }
 
+// ---------------------------------------------------------------- standing still
+// The model in the first frame of its idle pose, as one plain (unskinned) geometry in the same normalised frame as the
+// model itself, with the body's own material. It is what a critter is drawn as when it is too far off, or one of too
+// many, to be worth a skeleton of its own: plain meshes of one species batch into a single instanced draw, so there
+// is no limit on how many can be shown. Effects (flames, gas) are left out.
+// Returns { geo, mat }, or null if the model's body is not one mesh.
+export function stillOf(loaded) {
+  if (loaded.still !== undefined) return loaded.still;
+  loaded.still = null;
+  try {
+    const root = cloneSkinned(loaded.root), { entry, clips } = loaded;
+    let body = root.getObjectByName('body');
+    if (!body) { const all = []; root.traverse((n) => { if (n.isSkinnedMesh && !/^fx\d+$/.test(n.name)) all.push(n); }); if (all.length === 1) body = all[0]; }
+    if (!body || !body.isSkinnedMesh) return null;
+    const mixer = new THREE.AnimationMixer(root);
+    const want = entry.anims.find((a) => a.name === 'idle') || entry.anims[0], clip = (want && clips[want.i]) || clips[0];
+    if (clip) { mixer.clipAction(clip).play(); mixer.update(0); }
+    root.updateMatrixWorld(true);
+    const src = body.geometry, pos = src.attributes.position, nor = src.attributes.normal, n = pos.count;
+    if (!src.boundingSphere) src.computeBoundingSphere();
+    const eps = (src.boundingSphere.radius || 1) * 0.01;
+    const P = new Float32Array(n * 3), N = new Float32Array(n * 3), v = new THREE.Vector3(), w = new THREE.Vector3();
+    for (let i = 0; i < n; i++) {
+      v.fromBufferAttribute(pos, i);
+      if (nor) w.fromBufferAttribute(nor, i).multiplyScalar(eps).add(v);
+      body.applyBoneTransform(i, v).applyMatrix4(body.matrixWorld);
+      P[i * 3] = v.x; P[i * 3 + 1] = v.y; P[i * 3 + 2] = v.z;
+      if (nor) {                                            // (a normal goes wherever a point just along it went)
+        body.applyBoneTransform(i, w).applyMatrix4(body.matrixWorld).sub(v).normalize();
+        N[i * 3] = w.x; N[i * 3 + 1] = w.y; N[i * 3 + 2] = w.z;
+      }
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(P, 3));
+    if (nor) geo.setAttribute('normal', new THREE.BufferAttribute(N, 3));
+    for (const a of ['uv', 'color']) if (src.attributes[a]) geo.setAttribute(a, src.attributes[a].clone());
+    if (src.index) geo.setIndex(src.index.clone());
+    if (!nor) geo.computeVertexNormals();
+    geo.computeBoundingSphere(); geo.computeBoundingBox();
+    mixer.stopAllAction(); mixer.uncacheRoot(root);
+    loaded.still = { geo, mat: body.material };
+  } catch (e) { console.warn('stadium: no still for', loaded.entry && loaded.entry.slug, e); }
+  return loaded.still;
+}
+
 // ---------------------------------------------------------------- the arena
 // A fighter: the same clone, with its clips on call and a material of its own so it can flash when hit.
 //   play(name, { dur, speed, hold })   'idle' loops; 'attack', 'special', 'faint' and 'entrance' play once and
@@ -360,8 +405,10 @@ export function makeStadiumActor(loaded) {
 }
 
 // What the arena is handed for every fighter, whether or not there is a model for it. `mesh` is the generated
-// critter, shown at once; if `live` and the species has a model, that takes its place as soon as it has loaded
-// (straight away when it was preloaded). The arena never needs to know which it is drawing.
+// critter. Without models (`live` false) it is shown at once and that is that. With them it is never shown in a
+// model's place: the fighter is simply not drawn until its model has loaded (straight away when it was preloaded),
+// and the generated one appears only if there turns out to be no model for the species at all.
+// The arena never needs to know which it is drawing.
 export function makeArenaActor(dex, mesh, live) {
   const root = new THREE.Group();
   root.add(mesh);
@@ -384,8 +431,10 @@ export function makeArenaActor(dex, mesh, live) {
     },
     dispose() { dead = true; if (inst) inst.dispose(); if (own) own.dispose(); },
   };
+  if (live) mesh.visible = false;
   if (live) loadStadium(dex).then((l) => {
-    if (!l || dead) return;
+    if (dead) return;
+    if (!l) { mesh.visible = true; return; }
     inst = makeStadiumActor(l);
     root.remove(mesh); root.add(inst.root);
     A.rigged = true;

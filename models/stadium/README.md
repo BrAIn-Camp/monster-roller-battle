@@ -55,3 +55,12 @@ Loaded one at a time, on demand, by `critters/stadium.js`. Nothing is fetched un
   absent from the model files — Charmander's texture set is eyes, claws, teeth and skin, no flame.
   The pipeline generates original procedural flipbooks on crossed quads, tagged `generated` and
   named `*_fx.png`. 8 species, 63 effect prims. They are drawn unlit and additive (gas: alpha).
+- **`faces.png` is drawn from the models.** One portrait of each, 16 across, 112 px each, in dex order. The
+  game cuts every portrait it shows (dex, HUD, results, the arena's ceremony) from this sheet, so it never
+  loads a model just to show its face. Draw it again if the models change: run `python tools/serve.py` and
+  open `http://127.0.0.1:8417/tools/faces.html`, which saves the sheet itself.
+- **The generated critters never stand in for a model.** A critter in the world is drawn as its model
+  standing still (`stillOf` in `critters/stadium.js`: the first frame of its idle pose as a plain mesh, which
+  batches by species), with an animated copy in its place when it is near enough to tell. Until a species'
+  model has loaded, its critters are not drawn at all. Add `?stadium=nowhere` to the address to see the
+  game without the models.

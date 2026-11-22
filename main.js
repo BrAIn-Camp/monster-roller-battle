@@ -246,16 +246,43 @@ function buildItem(spec) {
 }
 // Critters are generated in code from the parts lists in critters/*.js: one merged mesh per species.
 const critterGeo = new Map();
-function buildCreature(spec, fine = false) {   // fine: the detailed shape, for close-ups (the dex and the pop-up card)
+function genGeometry(spec, fine) {             // fine: the detailed shape, for close-ups (the dex and the pop-up card)
   const key = baseOf(spec).id + (fine ? '|fine' : '');                 // a titan shares its species' mesh, just drawn bigger
   let geo = critterGeo.get(key);
   if (!geo) { geo = buildCritterGeometry(spec, fine); critterGeo.set(key, geo); }
-  const m = new THREE.Mesh(geo, critterMaterial);
+  return geo;
+}
+function genCreature(spec, fine = false) {     // the generated critter, always
+  const m = new THREE.Mesh(genGeometry(spec, fine), critterMaterial);
   m.castShadow = true;
   return m;
 }
+// A critter for the world. Where there are models (critters/local-mode.js) the generated shape is never drawn in a
+// model's place: the mesh starts with no shape at all, askModel() fetches its model's still mesh the first time it is
+// about to be seen, and nothing is drawn for it until that arrives. Only if there turns out to be no model does it
+// get the generated shape. (userData.om is the model's own material, once it is here.)
+const noGeo = new THREE.BufferGeometry();
+noGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(0), 3));
+noGeo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 0); noGeo.boundingBox = new THREE.Box3(new THREE.Vector3(), new THREE.Vector3());
+function buildCreature(spec, fine = false) {
+  if (!LOCAL.LOCAL_MODELS) return genCreature(spec, fine);
+  const m = new THREE.Mesh(noGeo, critterMaterial);
+  m.castShadow = true;
+  m.userData.spec = spec; m.userData.fine = fine;
+  return m;
+}
+function askModel(m) {
+  if (m.userData.asked) return;
+  m.userData.asked = true;
+  LOCAL.still(baseOf(m.userData.spec).dex).then((s) => {
+    if (!s) { m.geometry = genGeometry(m.userData.spec, m.userData.fine); return; }
+    m.geometry = s.geo; m.userData.om = s.mat;
+    if (m.material !== goldMat) m.material = s.mat;
+  });
+}
 const teamMats = TEAMS.map((tm) => new THREE.MeshLambertMaterial({ vertexColors: true, color: new THREE.Color(tm.hex).lerp(new THREE.Color(0xffffff), 0.35), emissive: tm.hex, emissiveIntensity: 0.22 }));
-function setTeamLook(o, team) { if (o.kind === 'creature') o.group.material = team === null ? critterMaterial : teamMats[team]; }
+// (a model keeps its own colours whoever has it; a generated critter is tinted with its team's)
+function setTeamLook(o, team) { if (o.kind === 'creature') o.group.material = o.group.userData.om || (team === null ? critterMaterial : teamMats[team]); }
 
 // ---------- renderer, lights, sky ----------
 const canvas = $('c');
@@ -411,10 +438,17 @@ function drawWorld() {
   for (const b of batches.values()) b.n = 0;
   const inGame = S.state !== 'menu' && S.state !== 'dex';      // behind the menu everything is shown, from far above
   let things = 0;
+  const pxH = renderer.domElement.height || 1080;
   for (const o of S.objects) {
     const g = o.group;
-    if (inGame && !g.visible) continue;
+    if (o.understudy || (inGame && !g.visible)) continue;      // (understudied: its animated model is being drawn instead)
     const geo = g.geometry, p = g.position, sc = g.scale.x, casts = inGame && !!o.casts;
+    if (geo === noGeo) {
+      // A critter whose model has not been fetched: nothing to draw yet. Fetch it if it is in view, and (from high
+      // above the menu, where the whole map is in view at once) big enough on screen to be more than a speck.
+      if (!g.userData.asked) { viewSphere.center.copy(p); viewSphere.radius = sc; if (viewFrustum.intersectsSphere(viewSphere) && (inGame || sc * pxH > 3.1 * camera.position.distanceTo(p))) askModel(g); }
+      continue;
+    }
     // off screen: skip it. Shapes stand on their base, so the middle is straight above the thing's position; a
     // shadow-caster counts as bigger, since its shadow may be in view when it is not.
     let bs = geo.boundingSphere;
@@ -849,6 +883,7 @@ function updateHud() {
 // ---------- the six (squad-hud.js): the player's best six monsters as they stand after merging, and what the rest of
 // the collection adds to them. Worked out again whenever the army changes; the arena uses the very same sum. ----------
 const faces = new Map();                      // slot -> portrait
+const BLANK = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';      // a clear pixel: a portrait that is still on its way
 let faceR = null, squad = null, squadOn = null, squadRun = null, squadSig = -1, squadT = 0, squadStale = false, bestT = 0;
 const bestOf = [];                            // each team's strongest monster, for the standings
 function renderFace(inst) {                   // a portrait of a Stadium model (the generated critters already have theirs: thumbs)
@@ -872,7 +907,7 @@ function renderFace(inst) {                   // a portrait of a Stadium model (
 function faceOf(spec) {
   const b = baseOf(spec);
   if (!faces.has(b.dex)) {
-    faces.set(b.dex, thumbs[b.id] || '');
+    faces.set(b.dex, LOCAL.isOn() ? BLANK : thumbs[b.id] || BLANK);      // (never the generated critter's picture where there is a model)
     // (taken twice: a model's textures can still be on their way to the graphics card the first time, and come out black)
     const snap = (l) => { try { faces.set(b.dex, renderFace(LOCAL.dexInstance(l))); squadStale = true; } catch (e) { console.warn('portrait', b.dex, e); } };
     LOCAL.dexModel(b.dex).then((l) => { if (!l) return; snap(l); setTimeout(() => snap(l), 900); });
@@ -925,16 +960,16 @@ function framePop(obj) {
 function showDexPop(sp, isNew, count) {
   popSpin.clear();
   if (popInst) { popInst.dispose(); popInst = null; }
-  const m = buildCreature(sp, true);
-  popSpin.add(m);
-  framePop(m);
+  const gen = () => { const m = genCreature(sp, true); popSpin.add(m); framePop(m); };
+  if (!LOCAL.isOn()) gen();
   popSpin.rotation.y = 0.5;
-  // Where the player has extracted the Stadium models, swap the real one in when it
-  // arrives. The generated mesh is already on screen, so a slow load shows nothing odd,
-  // and a pop that has been replaced or has expired drops its result on the floor.
+  // Where there are models the card shows the model, and never the generated critter in its place: the card's
+  // picture is empty for the moment the model takes to arrive (it has usually been loaded already: the critter was
+  // just rolled up). A pop that has been replaced or has expired drops its result on the floor.
   const seq = ++popSeq;
   LOCAL.dexModel(sp.dex).then((l) => {
-    if (!l || seq !== popSeq || popT <= 0) return;
+    if (seq !== popSeq || popT <= 0) return;
+    if (!l) { if (!popSpin.children.length) gen(); return; }
     popSpin.clear();
     popInst = LOCAL.dexInstance(l);
     popSpin.add(popInst.root);
@@ -1102,6 +1137,7 @@ function stick(ballGroup, o, cx, cy, cz, r) {
   tmpV.set(p.x - cx, p.y + Math.min(o.size * 0.5, r * 1.5) - cy, p.z - cz);
   if (tmpV.lengthSq() < 1e-10) tmpV.set(0, 1, 0);
   tmpV.normalize();
+  if (o.group.geometry === noGeo) askModel(o.group);
   o.group.visible = true;
   o.group.quaternion.setFromUnitVectors(UP, tmpV);
   axis.set(rand() - 0.5, rand() - 0.5, rand() - 0.5).normalize();
@@ -1667,9 +1703,9 @@ function startBattle(arena) {
   S.battleTeams = teams; S.battleResult = null; S.battleStatus = null; S.battleArena = arena; S.skipHold = 0;
   S.state = 'battle';
   show('battle');
-  const buildMesh = (spec, k) => { const m = buildCreature(spec); m.material = teamMats[k]; return m; };
+  const buildMesh = (spec, k) => { const m = genCreature(spec); m.material = teamMats[k]; return m; };
   if (ARENA && arena) {
-    // a fighter is the generated critter in its team's colour, or (local build) its model once that has loaded
+    // a fighter is its model (not drawn until that has loaded), or without models the generated critter in its team's colour
     const buildActor = (spec, k) => LOCAL.arenaActor(baseOf(spec).dex, buildMesh(spec, k));
     const plans = S.battlePlans && S.battlePlans.arena === arena ? S.battlePlans.plans : undefined;
     battle = ARENA.createBattle({ arena, teams, specOf, plans, buildActor, buildBall: buildBallFor, buildTrainer: (k) => buildTrainer(TEAMS[k].hex), poseTrainer, portrait: faceOf, sfx: { tone, cry },
@@ -2291,7 +2327,7 @@ function clientMsg(m) {
       const o = S.byId.get(id);
       if (!o) continue;
       o.size = size; o.rad = rad; o.vis = size; o.armySpec = null; o.noPick = !!(bits & 2);
-      if (!o.on) { o.group.scale.setScalar(size); if (o.kind === 'creature') o.group.material = bits & 1 ? goldMat : critterMaterial; }
+      if (!o.on) { o.group.scale.setScalar(size); if (o.kind === 'creature') o.group.material = bits & 1 ? goldMat : o.group.userData.om || critterMaterial; }
     } break;
     case 'fl': { const o = S.byId.get(m[1]); if (o && !o.on) { o.group.position.set(m[2], m[3], m[4]); o.fly = { vx: m[5], vy: m[6], vz: m[7] }; o.cool = 1; } break; }
     case 'im': {
@@ -2874,7 +2910,7 @@ function finish() {
   persist();
   $('resTitle').textContent = title;
   const seen = [...S.runSeen.keys()].map((id) => SPECS[id].spec).sort((a, b2) => a.dex - b2.dex);
-  const lineup = seen.length ? `<div class="lineup">${seen.map((sp) => `<span class="${S.runNew.has(sp.id) ? 'isnew' : ''}" title="${sp.name}"><img src="${thumbs[sp.id] || ''}" alt="${sp.name}"></span>`).join('')}</div><p class="sub">${seen.length} species this run${S.runNew.size ? `, ${S.runNew.size} new to your dex (gold)` : ''}</p>` : '';
+  const lineup = seen.length ? `<div class="lineup">${seen.map((sp) => `<span class="${S.runNew.has(sp.id) ? 'isnew' : ''}" title="${sp.name}"><img src="${thumbs[sp.id] || BLANK}" alt="${sp.name}"></span>`).join('')}</div><p class="sub">${seen.length} species this run${S.runNew.size ? `, ${S.runNew.size} new to your dex (gold)` : ''}</p>` : '';
   $('resBody').innerHTML = `<table class="res">${rows}</table>${lineup}`;
   $('btnAgain').textContent = NET.on ? 'Back to lobby' : 'Play again'; $('btnMenu').textContent = NET.on ? 'Leave' : 'Menu'; S.resAt = 0;
   show('results');
@@ -2899,7 +2935,7 @@ function makeThumbs() {
   const dl = new THREE.DirectionalLight(0xffffff, 1.6); dl.position.set(2, 3, 4); sc.add(dl);
   const cam = new THREE.PerspectiveCamera(30, 1, 0.1, 30);
   for (const spec of CREATURES) {
-    const g = buildCreature(spec, true);
+    const g = genCreature(spec, true);
     sc.add(g);
     const b = g.geometry.boundingBox, c = b.getCenter(new V3()), s = b.getSize(new V3()).length();
     cam.position.set(c.x + s * 0.95, c.y + s * 0.5, c.z + s * 1.65); cam.lookAt(c);
@@ -2915,8 +2951,8 @@ function openDex(all) {
     const e = save.dex[sp.id], num = '#' + String(sp.dex).padStart(3, '0');
     if (e && e.count) seen++;
     html += (e && e.count) || all
-      ? `<div class="dex"><img src="${thumbs[sp.id] || ''}" alt=""><div>${num} ${sp.name}</div><div class="meta">${sp.species}</div>${typeChips(sp)}<div class="meta">${sp.height} m · ${sp.rarity} · ${sp.temper}</div><div class="meta">${areaOfSpec(sp)}${e && e.count ? ' · caught ' + e.count : ''}</div></div>`
-      : `<div class="dex unseen"><img src="${thumbs[sp.id] || ''}" alt=""><div>${num} ???</div><div class="meta">${sp.height} m · ${sp.rarity}</div><div class="meta">seen in: ${areaOfSpec(sp)}</div></div>`;
+      ? `<div class="dex"><img src="${thumbs[sp.id] || BLANK}" alt=""><div>${num} ${sp.name}</div><div class="meta">${sp.species}</div>${typeChips(sp)}<div class="meta">${sp.height} m · ${sp.rarity} · ${sp.temper}</div><div class="meta">${areaOfSpec(sp)}${e && e.count ? ' · caught ' + e.count : ''}</div></div>`
+      : `<div class="dex unseen"><img src="${thumbs[sp.id] || BLANK}" alt=""><div>${num} ???</div><div class="meta">${sp.height} m · ${sp.rarity}</div><div class="meta">seen in: ${areaOfSpec(sp)}</div></div>`;
   }
   $('dexgrid').innerHTML = html;
   $('dexcount').textContent = `${seen}/${CREATURES.length}`;
@@ -2977,13 +3013,26 @@ function resize() {
 }
 addEventListener('resize', resize);
 applyGfx();
-makeThumbs();
+if (!LOCAL.LOCAL_MODELS) makeThumbs();
 // The local Stadium-model build, if its switch is on and the models are there. Everything
 // it changes lives in critters/local-mode.js; this is the only place the game starts it.
 LOCAL.init({ scene, camera, renderer, S, baseOf, mat, TEAMS, CREATURES, TITANS }).then((live) => {
-  if (!live) return;
+  if (!live) { if (LOCAL.LOCAL_MODELS) makeThumbs(); return; }      // (no models after all: the generated critters' pictures)
   styleBall(core, S.team || 0, true);      // the ball was built before the switch was known
   LOCAL.hooks(S);
+  // every portrait at once, from the sheet drawn from the models ahead of time (without it they are taken from the
+  // models one by one as they are needed: faceOf)
+  LOCAL.faceSheet().then((img) => {
+    if (!img) return;
+    const cv = document.createElement('canvas'), px = LOCAL.FACE_PX, cx = cv.getContext('2d');
+    cv.width = cv.height = px;
+    for (const sp of CREATURES) {
+      const i = sp.dex - 1;
+      cx.clearRect(0, 0, px, px); cx.drawImage(img, (i % LOCAL.FACE_COLS) * px, Math.floor(i / LOCAL.FACE_COLS) * px, px, px, 0, 0, px, px);
+      const url = cv.toDataURL(); thumbs[sp.id] = url; faces.set(sp.dex, url);
+    }
+    squadStale = true;
+  });
 });
 populate();
 toMenu();
@@ -3050,8 +3099,9 @@ function tick(now) {
   last = now;
   pollPadButtons();
   tickDexPop(dt);
-  if (S.state === 'play') { update(dt); LOCAL.tickWorld(dt); }
-  else LOCAL.clearWorld();
+  if (S.state === 'play') update(dt);
+  // the animated models stand in wherever the world is on show: behind the menu, before the round and after it too
+  if (S.state === 'battle' || S.state === 'battlepause') LOCAL.clearWorld(); else LOCAL.tickWorld(S.state === 'paused' ? 0 : dt);
   if (S.state === 'intro') tickIntro(dt);
   else if (S.state === 'countdown') tickCountdown(dt);
   else if (S.state === 'timeup') tickTimeUp(dt);

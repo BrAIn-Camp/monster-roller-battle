@@ -11,14 +11,16 @@
 //
 // What it changes, all of it:
 //   - critters are drawn as their extracted model instead of the generated mesh, in the world and in the arena
-//   - the dex card shows the model too
+//   - the dex card shows the model too, and every portrait (dex, HUD, results) is of the model
+//   - where there is a model the generated critter is NEVER drawn in its place, not even while the model loads:
+//     a critter is not drawn at all until its model has arrived
 //   - critters take their name from the extracted metadata
 //   - the ball is drawn with two coloured caps rather than the striped orb
 //
 // None of it is part of the game's rules: it is presentation only, so a round plays
 // identically with the switch either way.
 import * as THREE from 'three';
-import { loadStadium, makeStadiumInstance, makeArenaActor, stadiumMeta } from './stadium.js';
+import { loadStadium, makeStadiumInstance, makeArenaActor, stadiumMeta, stillOf, stadiumBase } from './stadium.js';
 
 export const LOCAL_MODELS = true;
 
@@ -30,14 +32,17 @@ export const isOn = () => on;
 // ---------------------------------------------------------------- startup
 // Resolves once it is known whether local mode is live. Safe to call either way: with the
 // switch off it does not even fetch, so the shipped build never asks for the folder.
+let readyDone;
+const ready = new Promise((r) => { readyDone = r; });      // settles (true or false) once init knows
 export async function init(host) {
   G = host;
-  if (!LOCAL_MODELS) return false;
-  const meta = await stadiumMeta();
-  if (!meta) { console.info('local models: switch is on, but models/stadium/ is missing -- staying off'); return false; }
-  on = true;
-  applyNames(meta);
-  return true;
+  if (LOCAL_MODELS) {
+    const meta = await stadiumMeta();
+    if (meta) { on = true; applyNames(meta); }
+    else console.info('local models: switch is on, but models/stadium/ is missing -- staying off');
+  }
+  readyDone(on);
+  return on;
 }
 
 // ---------------------------------------------------------------- names
@@ -92,18 +97,38 @@ export function ballParts(k, own) {
 export function dexModel(dex) { return on ? loadStadium(dex) : Promise.resolve(null); }
 export function dexInstance(loaded) { return makeStadiumInstance(loaded); }
 
+// ---------------------------------------------------------------- portraits
+// One sheet of all 151, drawn from the models ahead of time (tools/faces/): 16 across, 112 px each, in dex order.
+// Resolves to the image, or null when off or when the sheet is not there (the caller then takes them one at a time
+// from the models).
+export const FACE_PX = 112, FACE_COLS = 16;
+export function faceSheet() {
+  return ready.then((live) => (!live ? null : new Promise((res) => {
+    const img = new Image();
+    img.onload = () => res(img); img.onerror = () => res(null);
+    img.src = stadiumBase() + 'faces.png';
+  })));
+}
+
 // ---------------------------------------------------------------- the arena
-// A fighter for the arena fight: the generated mesh at first, the model in its place once loaded (or for good
-// when the switch is off). preload() is called while the wheel spins, so by the fight they are all there.
+// A fighter for the arena fight: its model (not drawn until that has loaded; preload() is called while the wheel
+// spins, so by the fight they are all there), or the generated mesh for good when the switch is off.
 export function arenaActor(dex, mesh) { return makeArenaActor(dex, mesh, on); }
 export function preload(dexes) { if (on) for (const d of dexes) loadStadium(d); }
 
 // ---------------------------------------------------------------- critters in the world
-// Generated critters are one merged mesh each and batch into a handful of instanced draws.
-// A model is its own draw call and cannot join them, so a budgeted pool shadows the ones
-// worth it: in front of the camera, and big enough on screen to tell apart. The generated
-// mesh is hidden (main.js's view cull reads o.understudy, the one field this module writes
-// onto a game object) and the model is drawn at its world transform.
+// Every critter in the world is one plain mesh, and those batch into an instanced draw per species. With models,
+// that mesh is the model standing still (still(), below): main.js asks for it the first time the critter is about to
+// be seen and draws nothing for it until then, so the generated shape never appears where there is a model.
+// A model that MOVES is its own draw call with a skeleton and cannot join the batches, so a budgeted pool shadows
+// the critters worth it: in front of the camera, and big enough on screen to tell apart. The still mesh is hidden
+// (main.js reads o.understudy, the one field this module writes onto a game object) and the animated model is drawn
+// at its transform. This runs wherever the world is on show, not only during a round.
+//
+// still(dex) resolves to { geo, mat }, or to null when there are no models (or none for that species): only then
+// does main.js fall back to the generated shape.
+export function still(dex) { return ready.then((live) => (live ? loadStadium(dex).then((l) => (l ? stillOf(l) : null)) : null)); }
+
 //
 // Tuned by measurement: 240 models hold a locked 60 fps with a 19 ms worst frame. Below
 // 5px the count stops climbing -- the frustum and the critters in view run out first.
@@ -128,9 +153,10 @@ function give(u) {
   if (pool.length < POOL_PER_SPECIES) { pool.push(u.inst); spares.set(u.dex, pool); }
   else u.inst.dispose();
 }
+function release(o) { o.understudy = false; o.group.visible = true; }     // (its still mesh again; a round's view cull hides it again if it is out of range)
 export function clearWorld() {
   if (!live.size) return;
-  for (const [o, u] of live) { if (u !== 'loading') give(u); o.understudy = false; }
+  for (const [o, u] of live) { if (u !== 'loading') give(u); release(o); }
   live.clear();
 }
 export function tickWorld(dt) {
@@ -144,16 +170,21 @@ export function tickWorld(dt) {
   // S.objects and into S.attached, so the ones stuck to the ball -- the closest things to
   // the camera there are -- are only ever found in the second.
   for (let l = 0; l < 2; l++) for (const o of (l ? S.attached : S.objects)) {
-    if (o.kind !== 'creature' || o.gone || !o.group.parent) continue;
-    // World space, read out of matrixWorld, which the renderer already computed this frame.
-    // group.position is relative to the PARENT: for a free critter the parent sits at the
-    // origin so the two agree, but one stuck to the ball is positioned relative to the ball.
-    const e = o.group.matrixWorld.elements;
-    const dx = e[12] - cam.x, dy = e[13] - cam.y, dz = e[14] - cam.z;
+    const g = o.group;
+    if (o.kind !== 'creature' || o.gone || !g.parent) continue;
+    // Only one that is already drawn as its still model, in that model's own colours: until the still has arrived
+    // there is nothing to stand in for, and one wearing something special (gold) keeps it.
+    if (!g.userData.om || g.material !== g.userData.om) continue;
+    // Where it is in the world. A free critter's parent sits at the origin and is never given a world matrix (its
+    // children are drawn in batches), so its own position is the answer; one stuck to a ball is positioned
+    // relative to the ball, and the renderer worked out its world matrix this frame.
+    let x = g.position.x, y = g.position.y, z = g.position.z;
+    if (o.on) { const e = g.matrixWorld.elements; x = e[12]; y = e[13]; z = e[14]; }
+    const dx = x - cam.x, dy = y - cam.y, dz = z - cam.z;
     const d2 = dx * dx + dy * dy + dz * dz;
     // a thing of height h at distance d covers about h / (1.04 * d) of the screen height at this fov
     if (px * o.size / (1.04 * Math.sqrt(d2) + 1e-3) < budgetPx) continue;
-    vSphere.center.set(e[12], e[13], e[14]);
+    vSphere.center.set(x, y, z);
     vSphere.radius = o.size;
     if (!vFrustum.intersectsSphere(vSphere)) continue;               // behind or beside the camera
     cand.push({ o, d2 });
@@ -163,7 +194,7 @@ export function tickWorld(dt) {
   for (const [o, u] of [...live]) {
     if (want.has(o)) continue;
     if (u !== 'loading') give(u);
-    o.understudy = false;
+    release(o);
     live.delete(o);
   }
   let budget = ACQUIRE_PER_FRAME;
@@ -182,11 +213,11 @@ export function tickWorld(dt) {
   }
   for (const [o, u] of live) {
     if (u === 'loading') continue;
+    const g = o.group, r = u.inst.root;
     o.understudy = true;
-    o.group.visible = false;   // the cull runs before this and would leave it on for a frame, drawing both
-    o.group.getWorldPosition(u.inst.root.position);
-    o.group.getWorldQuaternion(u.inst.root.quaternion);
-    u.inst.root.scale.copy(o.group.getWorldScale(vScale));
+    g.visible = false;   // the cull runs before this and would leave it on for a frame, drawing both
+    if (o.on) { g.getWorldPosition(r.position); g.getWorldQuaternion(r.quaternion); r.scale.copy(g.getWorldScale(vScale)); }
+    else { r.position.copy(g.position); r.quaternion.copy(g.quaternion); r.scale.copy(g.scale); }
     u.inst.update(dt);
   }
 }
