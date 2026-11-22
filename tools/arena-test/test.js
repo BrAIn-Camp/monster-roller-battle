@@ -63,7 +63,9 @@ function portrait(spec) {
     let geo = geoCache.get(b.id);
     if (!geo) { geo = buildCritterGeometry(b); geoCache.set(b.id, geo); }
     faces.set(b.dex, shoot(new THREE.Mesh(geo, faceMat), false));
-    if (live) loadStadium(b.dex).then((l) => { if (!l) return; const inst = makeStadiumInstance(l); inst.update(0); faces.set(b.dex, shoot(inst.root, true)); inst.dispose(); });
+    // (taken twice: a model's textures can still be on their way to the graphics card the first time, and come out black)
+    const snap = (l) => { const inst = makeStadiumInstance(l); inst.update(0); faces.set(b.dex, shoot(inst.root, true)); inst.dispose(); };
+    if (live) loadStadium(b.dex).then((l) => { if (!l) return; snap(l); setTimeout(() => snap(l), 900); });
   }
   return faces.get(b.dex);
 }

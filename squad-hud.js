@@ -28,6 +28,9 @@ const STAT_ICON = [                                             // a heart, a sw
   '<path d="M3.500 4.500l8 7.500-8 7.500zM12.500 4.500l8 7.500-8 7.500z"/>',
 ];
 const DARK = '#2b2540';
+export const STAT_SHORT = ['HP', 'ATK', 'DEF', 'SP.ATK', 'SP.DEF', 'SPEED'];
+// one stat's badge, as an SVG string (for the arena's ceremony)
+export const statIcon = (i) => `<svg class="st-ico" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10.5" fill="${STAT_COL[i]}" stroke="${DARK}" stroke-width="2.4"/><g transform="translate(5.3 5.3) scale(.56)" fill="#fff">${STAT_ICON[i]}</g></svg>`;
 const AX = [0, 1, 2, 3, 4, 5].map((i) => { const a = Math.PI * 2 * i / 6 - Math.PI / 2; return [Math.cos(a), Math.sin(a)]; });       // HP at the top, then clockwise
 const R_IN = 5, R_OUT = 39, R_ICON = 49;
 const hexPts = (r) => AX.map(([x, y], i) => ((Array.isArray(r) ? r[i] : r) * x).toFixed(1) + ',' + ((Array.isArray(r) ? r[i] : r) * y).toFixed(1)).join(' ');

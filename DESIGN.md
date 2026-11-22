@@ -171,9 +171,15 @@ this out from the army alone (no dice, no arena), so the round's HUD and every m
 
 **Everything else is in their stats.** Each critter that is not part of one of the six adds to the team's six stats (HP,
 Attack, Defence, Sp. Atk, Sp. Def, Speed), the same for all six fighters. A critter's stat total is shared out by the cube of
-each stat, so it goes mostly to what that critter is best at: fast critters feed Speed, tanks feed HP and Defence. Each
-stat's bonus is 18% x s / (s + 5200), where s is that stat added up over the spares: the first critters count most and it can
-never pass +18%. About 100 spares gives +8 to 9% on each stat, which wins as often as a team made 30% stronger outright
+each stat, so it goes mostly to what that critter is best at: fast critters feed Speed, tanks feed HP and Defence. Those six
+totals decide two things:
+- *How much.* A budget of 6 x 18% x S / (S + 31200), where S is the six totals added together: the first critters count
+  most, and about 100 spares earns half of all there is.
+- *Where.* The budget is shared between the stats by the square of each stat's share. An even collection gets the same on
+  every stat (never more than +18%); one that leans towards fast critters gets far more Speed and less of the rest, up to
+  +30% on a single stat. So a collection has a shape, and no hexagon can be filled: the frame is the +30% that only one
+  stat can reach.
+A large, even haul (+9% on each) wins as often as a team made 30% stronger outright
 (`node tools/arena-test/headless.mjs bonus` measures it).
 
 **On the round's HUD** (`squad-hud.js`, timed mode only), down the right edge:
@@ -191,10 +197,23 @@ Normal and Hard): a critter they already carry one or two of seems nearer to the
 
 **The order of things.** The arena is chosen when the round starts so the oracle can hint at it. The wheel reveals it. Then:
 
-1. *Muster* (about 6 s, all four teams at once, skippable). Each team's six step up by their corner, strongest first, in
-   two rows of three. Then the stand beside the corner (the spares, as a crowd) pours what it is worth into them: sparks in
-   the colours of the six stats stream from the stand to the fighters, the six swell and glow, and the team's hexagon grows
-   a corner at a time on its panel. The bigger the collection the longer it pours, so the biggest finishes last, with a flare.
+1. *Muster*, the ceremony (about 17 s with one player and three CPU teams; hold Enter skips the fight, a press of dash
+   hurries a count). Every team's six step up by their corner, strongest first, in two rows of three. Then each team takes a
+   turn: CPU teams first and quickly (3 s each), players after with the full count, the one at this screen last. The camera
+   goes to the team's corner and a panel opens beside it:
+   - *the count* (4 s for a player, less for a small collection): everything the team rolled up, a species to a tile with a
+     tally on it. First the critters that became its six: they fly to the six portraits, which start as silhouettes and come
+     to life as they fill, so nine little ones are seen to have become the big one. Then all the rest: each sends a spark to
+     the corner of the hexagon it feeds, and the hexagon takes its shape as they land. The number at the top is everything
+     the team caught.
+   - *what it came to*: the bonus appears on every corner (each named), and the team's best stat is announced by name.
+     Numbers are held back until here because a stat's share can fall while the count is still going.
+   - *the hand-over*: one stat at a time, a badge with that bonus on it flies from its corner to the six on the floor, who
+     take it with a flash in its colour; their portraits light a pip for each. At the last they flare and roar.
+   The team's hexagon and its best stat ("Speed +30%") stay on its corner panel for the fight, so the four can be compared.
+   This is the second version. The first counted only the spares, showed no names or numbers anyone could read and gave
+   every team five seconds; three role-played players (a child, a competitive player, an adult with a small haul) scored it
+   5/10 for excitement and 3 to 5 for clarity, and all three asked why the count did not match what they had caught.
 2. *Drop.* The six hop to their places and the four balls fall in. 3, 2, 1, GO.
 3. *Fight.* See below. Six a side, all on the floor from the start; nobody waits in reserve.
 4. *Finish.* The last knockout plays in slow motion with the camera pushed in, then the winners cheer.
@@ -205,6 +224,12 @@ A ball that leaves the floor is gone for the fight (whatever it had scooped scra
 
 **Every hit knocks back**, and harder the weaker the target is: metres slid = knockback x (a little + damage share x
 (1 + 2.6 x health lost)) / weight. Fights drift to the edges and the weak get launched.
+
+**Room to see it.** Monsters keep 1.55 times their two radii apart (a melee hit reaches across the gap), and one choosing a
+target counts a foe as 70% further away for every monster already on it. So a fight is a handful of duels across the floor
+rather than one heap in the middle. Health and the signature move are read off the floor: each monster stands in a ring of its
+team's colour that empties as it is hurt (white shows what the last blow took), with a thin gold ring inside that fills as
+its move charges. Nothing floats over the models but the player's own "roll through me" marks.
 
 **Signature moves.** One per type, from a monster's first type (its second if the first is Normal). It charges over about 17 s,
 faster for quick monsters and with every hit landed. A full charge starts a wind-up of 0.5 to 1.1 s, drawn on the floor in the
@@ -229,12 +254,20 @@ type's colour: a wedge, a strip, a ring or a reticle, filling until the move goe
 | Normal | Stampede | charges down a line, bowling foes aside |
 
 **The balls.** The human steers with the stick or WASD and dashes with Shift or Space. A ball:
-- *rams* any monster it cannot scoop: knocks it back (further at dash speed), breaks its wind-up, and stops it acting for a moment
+- *rams* any monster it cannot scoop: breaks its wind-up and knocks it back. Metres slid = 0.26 x closing speed x
+  (1 + 1.5 x health lost) / weight, so a ball barely moves a fresh monster and sends a weakened one flying: the ball is the
+  finisher, and picking the hurt one near an edge is the skill. A ram at dash speed is a *smash*: 1.3x the distance, 7% of
+  the target's health, and the fight holds its breath for a moment
 - *rallies* one of its own by rolling through it: the signature move is charged at once, winds up in half the time and hits 20%
   harder (9 s before the same monster can be rallied again, 2 s between rallies)
 - *scoops* enemy monsters smaller than 0.45 of its width (rare now: only the very smallest), and spills them when rammed
 - *clashes* with other balls: the heavier, faster one stuns the other
-CPU balls do all of this, come at monsters from the inside so the knock sends them outwards, and keep off the edge.
+CPU balls do all of this, come at monsters from the inside so the knock sends them outwards, go first for one a smash would
+send over the edge, and keep off the edge.
+
+*What a ball is worth* (`node tools/arena-test/headless.mjs balls`: four identical teams, so 25% is an even share). A team
+whose ball sits out wins 11%. A team with the only ball on the floor wins 76%. Each ball makes about 1.3 ring-outs a fight;
+before rams depended on health it was 0.3, and nearly all of a ball's worth came from dozens of small nudges nobody could see.
 
 **Favoured types** (three per arena) deal 25% more damage, take 20% less, move 10% faster, wear a gold ring, and ignore the
 arena's hazard. A hazard's slow push (wave, sandstorm) carries off only monsters that are stunned or tumbling; balls get no grip.

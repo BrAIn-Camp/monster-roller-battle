@@ -9,19 +9,21 @@
 //   countdown -> 3, 2, 1, GO     fight -> sim.step()     finish -> slow-motion last knockout, then the cheer
 import * as THREE from 'three';
 import { createSim, TUNE, CORNERS } from './arena-sim.js';
-import { planArmy, teamBonus } from './arena-merge.js';
-import { hexSvg, hexDraw, hexValues, STAT_COL, HEX_STYLE } from './squad-hud.js';
+import { planArmy, teamBonus, STAT_NAMES } from './arena-merge.js';
+import { hexSvg, hexDraw, hexValues, statIcon, STAT_COL, STAT_SHORT, HEX_STYLE } from './squad-hud.js';
 import { createFx, TYPE_HEX, TYPE_GLOW } from './arena-fx.js';
 import { el, setText, replay, injectStyle, isMe, teamLabel, chip, typeColor, HAS_DOM, clamp } from './arena-ui.js';
 
 // ---------- timings and looks ----------
 const LINE_AT = 0.3, LINE_STEP = 0.2;                 // the muster: when the first of a team's six steps up, and the gap to the next
 const LINE_END = 1.9;                                 // ...and when the first team's turn begins
-const POUR_HUMAN = 4.0, POUR_CPU = 2.6;               // a team's turn: counting its collection (less for a small one)...
-const APPLY = 1.55, WAVE_GAP = 0.14;                  // ...then spending it on the six, a stat at a time
-const TURN_IN = 0.35, TURN_OUT = 0.3;                 // the panel opening and closing
+// A team's turn. A player's count takes four seconds (less for a small collection); a CPU team's a little over one.
+const SIX_HUMAN = 0.9, SIX_CPU = 0.3;                 // counting the critters that became the six...
+const REST_HUMAN = 3.1, REST_CPU = 0.8;               // ...and all the rest, into the hexagon
+const SETTLE = 0.25;                                  // what it came to
+const GIVE_HUMAN = 1.9, GIVE_CPU = 1.1, FLY_MS = 300; // spending it on the six, a stat at a time
+const TURN_IN = 0.35, TURN_OUT = 0.2;                 // the panel opening and closing
 const MUSTER_HOLD = 0.4;                              // a beat after the last team
-const TILE_MAX = 240;                                 // critters shown one to a tile; beyond this they share
 const DROP_PHASE = 1.5, DROP_FALL = 0.42;
 const STAT_HEX = STAT_COL.map((c) => parseInt(c.slice(1), 16));
 const COUNT_STEP = 0.7;       // seconds per "3", "2", "1"
@@ -564,7 +566,13 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
         break;
       }
       case 'ko': launch(e, false); if (e.team >= 0) excite[e.team] = 1; break;
-      case 'ring': launch(e, true); if (e.team >= 0) excite[e.team] = 1; break;
+      case 'ring':
+        launch(e, true); if (e.team >= 0) excite[e.team] = 1;
+        if (!e.by && e.team >= 0 && hud) {                      // a ball's doing: it goes on that team's panel
+          const p = hud.panels[e.team]; setText(p.koN, String(sim.balls[e.team].ringOuts)); p.ko.classList.add('ar-on'); replay(p.ko, 'ar-lit'); replay(p.root, 'ar-bump');
+          if (e.team === myTeam) { [784, 1047, 1568].forEach((f, i) => tone(f, f, 0.1, 'triangle', 0.16, i * 0.06)); bump(0.3); }
+        }
+        break;
       case 'wind': telegraph(e.u, e.w); break;
       case 'fire': fireFx(e); break;
       case 'break': { const u = e.u, v = u.v; if (v) { dropTele(v); v.squash = 0.35; v.actor.play('hurt'); } for (let i = 0; i < 8; i++) { const a = vr() * 6.283; fx.shard(u.x, u.h * 0.7, u.z, Math.cos(a) * 5, 4 + vr() * 5, Math.sin(a) * 5, { size: 0.35 * K, color: hexOf(e.move), life: 0.6 }); } fx.ring(u.x, u.z, { r0: u.r * 2, r1: u.r * 0.4, color: 0xffffff, life: 0.25 }); tone(900, 180, 0.22, 'square', 0.12); break; }
@@ -582,9 +590,13 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
       }
       case 'ram': {
         const b = e.b, u = e.u, d = Math.hypot(u.x - b.x, u.z - b.z) || 1, x = b.x + (u.x - b.x) / d * b.R, z = b.z + (u.z - b.z) / d * b.R, mine = !b.cpu;
-        fx.star(x, Math.min(b.R, u.h * 0.6), z, { size: clamp(1.2 + e.dist * 0.5, 1.2, 4.5) * K, color: 0xffffff, life: 0.28 }); fx.puff(x, 0.3, z, 7, 0xf5efe0, 5, 0.4, 0.4); fx.ring(x, z, { r0: 0.4, r1: 1.5 + e.dist * 0.6, color: teams[b.team].hex, life: 0.3 });
-        if (u.v) { u.v.flash = 0.2; u.v.flashCol = 0xffffff; u.v.squash = 0.3; }
-        tone(210, 90, 0.14, 'square', mine ? 0.18 : 0.06); if (mine) bump(0.2 + Math.min(0.25, e.dist * 0.05));
+        const big = e.smash || e.dist > 3.5 * K;                 // a launch, not a nudge: it should look and sound like one
+        fx.star(x, Math.min(b.R, u.h * 0.6), z, { size: clamp(1.2 + e.dist * 0.5, 1.2, 5.5) * K, color: 0xffffff, life: big ? 0.36 : 0.28 }); fx.puff(x, 0.3, z, big ? 14 : 7, 0xf5efe0, 5, 0.4, 0.4); fx.ring(x, z, { r0: 0.4, r1: 1.5 + e.dist * 0.6, color: teams[b.team].hex, life: 0.3 });
+        if (big) { fx.ring(x, z, { r0: 0.3, r1: 2.5 + e.dist * 0.5, color: 0xffffff, life: 0.42, thin: true }); fx.burst(x, Math.min(b.R, u.h * 0.6), z, e.smash ? 16 : 9, teams[b.team].hex, 9, 0.34 * K, 0.5); }
+        if (u.v) { u.v.flash = big ? 0.32 : 0.2; u.v.flashCol = 0xffffff; u.v.squash = big ? 0.45 : 0.3; }
+        tone(210, 90, 0.14, 'square', mine ? 0.18 : 0.06);
+        if (big) { tone(e.smash ? 130 : 160, 45, 0.3, 'sawtooth', mine ? 0.2 : 0.07); tone(500, 1500, 0.28, 'sine', mine ? 0.1 : 0.04, 0.05); }
+        if (mine) bump((big ? 0.32 : 0.2) + Math.min(0.25, e.dist * 0.05));
         break;
       }
       case 'clash': { const a = e.a, b = e.b, x = (a.x + b.x) / 2, z = (a.z + b.z) / 2; if (e.speed < 3) break; fx.puff(x, Math.min(a.R, b.R), z, 10, 0xffffff, 6, 0.35, 0.4); fx.star(x, Math.min(a.R, b.R), z, { size: 2.5 * K, color: 0xffffff, life: 0.3 }); tone(170, 70, 0.22, 'sawtooth', 0.18); bump(0.25); if (e.loser) tone(900, 300, 0.3, 'triangle', 0.14); break; }
@@ -620,29 +632,32 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
 
   // ---- the muster: the ceremony before the fight.
   //   1. Every team's six step up by their corner, strongest first.
-  //   2. Each team then takes its turn in the light. The camera goes to its corner and a panel opens beside it. Every
-  //      critter the team rolled up that is not part of its six is shown, one after another, and each sends a spark
-  //      to the corner of the team's hexagon that it feeds: the hexagon grows as they are counted, so what the
-  //      collection is worth, and its shape, is seen being made.
-  //   3. Then the hexagon is spent on the six: one stat at a time, its colour flies from its corner to each of the
-  //      six fighters (their portraits on the panel light a pip, and on the floor they flash in that colour and
-  //      swell), and at the last they flare and roar.
-  // CPU teams go first and take less time; the player at this screen goes last. A press of the dash button hurries
-  // the counting along. Then they walk on: the monsters that lined up are the very ones that fight.
+  //   2. Each team then takes its turn in the light: the camera goes to its corner and a panel opens beside it.
+  //      - Everything the team rolled up is counted, a species to a tile with a tally on it. First the critters that
+  //        became its six: they fly to the six portraits, which come to life as they fill (so three little ones are
+  //        SEEN to have become the big one). Then all the rest: each sends a spark to the corner of the hexagon it
+  //        feeds, and the hexagon takes its shape as they land.
+  //      - The count ends by saying what it came to: the bonus on every corner, and the team's best stat by name.
+  //      - Then the hexagon is spent on the six: one stat at a time, a badge with that bonus on it flies from its
+  //        corner to the six on the floor, who take it with a flash in its colour; at the last they flare and roar.
+  //      What the team came out with stays on its corner panel for the fight, so the four can be compared.
+  // CPU teams go first and are quick about it; players get the full count, the one at this screen last. A press of
+  // the dash button hurries a count along. Then they walk on: the monsters that lined up are the very ones that fight.
   const muster = [];
   plans.forEach((p, k) => {
     const recs = sim.recs[k];
     if (!recs.length) return;
-    const [cx, cz] = CORNERS[k % 4], items = [];
-    for (const q of p.spareList || []) for (let i = 0; i < q.count; i++) items.push(q);
-    const stride = Math.max(1, Math.ceil(items.length / TILE_MAX)), tiles = [];           // (a truly huge haul is counted several to a tile)
-    for (let i = 0; i < items.length; i += stride) tiles.push(items.slice(i, i + stride));
-    const human = !!teams[k].human, pour = !tiles.length ? 0.35 : (human ? POUR_HUMAN : POUR_CPU) * clamp(0.45 + tiles.length / 60, 0.55, 1);
-    muster.push({ team: k, cx, cz, face: Math.atan2(-cx, -cz), recs, lined: [], tiles, shown: 0, run: [0, 0, 0, 0, 0, 0], bonus: p.bonus || [0, 0, 0, 0, 0, 0], vals: hexValues(p.bonus || [0, 0, 0, 0, 0, 0]),
-      human, pour, apply: tiles.length ? APPLY : 0.5, wave: -1, fin: false, done: false, over: false, stand: bench.filter((q) => q.k === k), tick: 0, ui: null });
+    const [cx, cz] = CORNERS[k % 4], human = !!teams[k].human, into = [], rest = [];
+    p.roster.slice(0, recs.length).forEach((r, j) => { for (const f of r.from || []) for (let i = 0; i < f.count; i++) into.push({ spec: f.spec, j }); });
+    for (const q of p.spareList || []) for (let i = 0; i < q.count; i++) rest.push({ spec: q.spec, add: q.add });
+    const bonus = p.bonus || [0, 0, 0, 0, 0, 0];
+    let top = 0; for (let i = 1; i < 6; i++) if (bonus[i] > bonus[top]) top = i;
+    const sixT = (human ? SIX_HUMAN : SIX_CPU) * clamp(into.length / 12, 0.5, 1), restT = !rest.length ? 0 : (human ? REST_HUMAN : REST_CPU) * clamp(0.4 + rest.length / 50, 0.5, 1);
+    muster.push({ team: k, cx, cz, face: Math.atan2(-cx, -cz), recs, lined: [], into, rest, shown: 0, run: [0, 0, 0, 0, 0, 0], bonus, top, vals: hexValues(bonus), human,
+      sixT, restT, give: !rest.length ? 0.3 : human ? GIVE_HUMAN : GIVE_CPU, gap: human ? 0.16 : 0.08, stage: 0, wave: 0, pend: [], fin: false, done: false, over: false, stand: bench.filter((q) => q.k === k), tick: 0, ui: null });
   });
   const order = muster.slice().sort((a, b) => (a.team === myTeam ? 2 : a.human ? 1 : 0) - (b.team === myTeam ? 2 : b.human ? 1 : 0) || a.team - b.team);
-  const turnLen = (c) => TURN_IN + c.pour + c.apply + TURN_OUT;
+  const turnLen = (c) => TURN_IN + c.sixT + c.restT + SETTLE + c.give + TURN_OUT;
   const musterLen = muster.length ? LINE_END + order.reduce((s, c) => s + turnLen(c), 0) + MUSTER_HOLD : 0;
   let turnI = -1, turnT = 0, musterCam = null, dashWas = false, endHold = 0;
   // two rows of three across the corner, the strongest three in front
@@ -654,21 +669,35 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
   const newActor = (spec, k) => { const a = buildActor(spec, k); a.root.scale.setScalar(0.0001); a.root.traverse((o) => { if (o.isMesh) o.castShadow = true; }); scene.add(a.root); return a; };
   const faceUrl = (spec) => { try { return (portrait && portrait(spec)) || ''; } catch (e) { return ''; } };
   const topStat = (add) => { let b = 0; for (let i = 1; i < 6; i++) if (add[i] > add[b]) b = i; return b; };
-  function drawHex(c) { if (hud) hexDraw(hud.panels[c.team].hex, c.vals); }
-  // a spark across the screen, from one HUD element to another
-  let domSparks = 0;
-  function domSpark(from, to, color, ms, done) {
-    if (!hud || quiet || domSparks > 70 || !from || !to) { if (done) done(); return; }
-    const a = from.getBoundingClientRect(), b = to.getBoundingClientRect(), x0 = a.left + a.width / 2, y0 = a.top + a.height / 2, x1 = b.left + b.width / 2, y1 = b.top + b.height / 2;
-    const s = el('i', 'ar-spk', hud.root); s.style.background = color; domSparks++;
+  const pct = (v) => '+' + Math.round(v * 100) + '%';
+  function crown(c) {                                           // what the team came out with, on its corner panel for the fight
+    if (!hud) return;
+    const p = hud.panels[c.team];
+    hexDraw(p.hex, c.vals);
+    if (c.bonus[c.top] > 0.004 && !p.best.firstChild) { p.best.innerHTML = statIcon(c.top) + '<b>' + pct(c.bonus[c.top]) + '</b>'; p.best.style.color = STAT_COL[c.top]; p.best.classList.add('ar-on'); }
+  }
+  // something flying across the screen from one HUD element to another (or to a point): a spark, or a badge
+  let domFlying = 0;
+  function domFly(from, to, { color, ms = 300, html = '', cls = 'ar-spk' }, done) {
+    if (!hud || quiet || domFlying > 80 || !from || !to) { if (done) done(); return; }
+    const a = from.getBoundingClientRect(), b = to.getBoundingClientRect ? to.getBoundingClientRect() : { left: to.x, top: to.y, width: 0, height: 0 };
+    const x0 = a.left + a.width / 2, y0 = a.top + a.height / 2, x1 = b.left + b.width / 2, y1 = b.top + b.height / 2;
+    const s = el('i', cls, hud.root, html); if (color) s.style.background = color; domFlying++;
     const bend = (vr() - 0.5) * 0.5, mx = (x0 + x1) / 2 - (y1 - y0) * bend, my = (y0 + y1) / 2 + (x1 - x0) * bend;
     let landed = false;
-    const land = () => { if (landed) return; landed = true; s.remove(); domSparks--; if (done && hud) done(); };
+    const land = () => { if (landed) return; landed = true; s.remove(); domFlying--; if (done && hud) done(); };
     try {
-      const an = s.animate([{ transform: `translate(${x0}px,${y0}px) scale(.5)` }, { transform: `translate(${mx}px,${my}px) scale(1.3)`, offset: 0.45 }, { transform: `translate(${x1}px,${y1}px) scale(.8)` }], { duration: ms, easing: 'cubic-bezier(.4,0,.8,1)' });
+      const an = s.animate([{ transform: `translate(${x0}px,${y0}px) translate(-50%,-50%) scale(.5)` }, { transform: `translate(${mx}px,${my}px) translate(-50%,-50%) scale(1.25)`, offset: 0.45 }, { transform: `translate(${x1}px,${y1}px) translate(-50%,-50%) scale(.9)` }], { duration: ms, easing: 'cubic-bezier(.4,0,.8,1)' });
       an.onfinish = an.oncancel = land;
     } catch (e) { /* no animations here */ }
     setTimeout(land, ms + 150);
+  }
+  // where the team's six are on the screen (for things that fly to them from the panel)
+  function sixOnScreen(c) {
+    let x = 0, z = 0, h = 0;
+    for (const q of c.lined) { x += q.x / c.lined.length; z += q.z / c.lined.length; h = Math.max(h, q.h); }
+    v3.set(x, h * 0.5, z).project(camera);
+    return { x: (v3.x + 1) / 2 * window.innerWidth, y: (1 - v3.y) / 2 * window.innerHeight };
   }
 
   // ---- the panel for the team whose turn it is
@@ -677,86 +706,109 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     const tm = teams[c.team], p = el('div', `ar-cer ar-pill ${c.cx < 0 ? 'ar-r' : 'ar-l'}`, hud.root);
     p.style.setProperty('--tc', tm.css);
     const head = el('div', 'ar-cer-head', p, `<i class="ar-dot" style="background:${tm.css}"></i>${teamLabel(tm)}`), count = el('span', 'ar-cer-n', head, '0');
-    // the count as a wall of tiles; beside it, a close-up of whoever is being counted, and the hexagon they feed
-    const body = el('div', 'ar-cer-body', p), grid = el('div', 'ar-cer-grid', body), side = el('div', 'ar-cer-side', body);
-    const now = el('div', 'ar-cer-now', side, '<i></i><b></b>'), hexw = el('div', 'ar-cer-hexw', side, hexSvg());
-    const labels = [0, 1, 2, 3, 4, 5].map((i) => { const b = el('b', 'ar-cer-pc ar-pc' + i, hexw, ''); b.style.color = STAT_COL[i]; return b; });
+    const body = el('div', 'ar-cer-body', p), grid = el('div', 'ar-cer-grid', body), hexw = el('div', 'ar-cer-hexw', body, hexSvg());
+    const labels = [0, 1, 2, 3, 4, 5].map((i) => { const b = el('div', 'ar-cer-pc ar-pc' + i, hexw, `<small>${STAT_SHORT[i]}</small><b></b>`); b.style.color = STAT_COL[i]; return b; });
+    const banner = el('div', 'ar-cer-best', hexw, '');
     const six = el('div', 'ar-cer-six', p);
     const faces = c.recs.map((r) => {
-      const f = el('div', 'ar-cer-f', six, `<img alt="" src="${faceUrl(r.spec)}"><em>${'★'.repeat(r.stars || 0)}</em><u>${'<i></i>'.repeat(6)}</u>`);
+      const f = el('div', 'ar-cer-f ar-wait', six, `<img alt="" src="${faceUrl(r.spec)}"><em>${'★'.repeat(r.stars || 0)}</em><u>${'<i></i>'.repeat(6)}</u>`);
       f.style.background = `radial-gradient(circle at 50% 35%, #fff 0%, ${typeColor(r.spec.types[0])} 140%)`;
-      return { root: f, pips: [...f.querySelectorAll('u i')] };
+      return { root: f, pips: [...f.querySelectorAll('u i')], need: 0, got: 0 };
     });
-    c.ui = { root: p, count, grid, now, nowFace: now.firstChild, nowN: now.lastChild, nowSpec: null, nowCount: 0, hex: hexw.firstChild, icons: [...hexw.querySelectorAll('.hx-ico')], labels, faces, n: 0, pc: [-1, -1, -1, -1, -1, -1] };
-    // tiles as big as will fit
-    const W = grid.clientWidth || 300, H = grid.clientHeight || 200, N = Math.max(1, c.tiles.length);
-    let cell = clamp(Math.floor(Math.sqrt(W * H / N)) - 2, 10, 72);
-    while (cell > 10 && Math.ceil(N / Math.max(1, Math.floor(W / (cell + 2)))) * (cell + 2) > H) cell--;
+    for (const e of c.into) faces[e.j].need++;
+    c.ui = { root: p, count, grid, tiles: new Map(), hex: hexw.firstChild, icons: [...hexw.querySelectorAll('.hx-ico')], labels, banner, faces, n: 0 };
+    // one tile per species, as big as will fit
+    const kinds = new Set(); for (const e of c.into) kinds.add(e.spec); for (const e of c.rest) kinds.add(e.spec);
+    const W = grid.clientWidth || 300, H = grid.clientHeight || 200, N = Math.max(1, kinds.size);
+    let cell = clamp(Math.floor(Math.sqrt(W * H / N)) - 3, 14, 84);
+    while (cell > 14 && Math.ceil(N / Math.max(1, Math.floor(W / (cell + 3)))) * (cell + 3) > H) cell--;
     grid.style.setProperty('--cell', cell + 'px');
     void p.offsetWidth; p.classList.add('ar-on');
   }
   function closePanel(c) { if (c.ui) { const p = c.ui.root; c.ui = null; p.classList.remove('ar-on'); setTimeout(() => p.remove(), 300); } }
-  function showLabels(c, bonus) {
-    if (!c.ui) return;
-    for (let i = 0; i < 6; i++) { const v = Math.round(bonus[i] * 100); if (v !== c.ui.pc[i]) { c.ui.pc[i] = v; c.ui.labels[i].textContent = v > 0 ? '+' + v + '%' : ''; } }
-  }
-  // one tile of the count: the critter is shown, what it is worth goes into the running total, and the hexagon follows
-  function countTile(c) {
-    const group = c.tiles[c.shown++], q = group[0], top = topStat(q.add);
-    for (const g of group) for (let i = 0; i < 6; i++) c.run[i] += g.add[i];
-    const bonus = teamBonus(c.run), n = (c.ui ? c.ui.n : 0) + group.length;
-    if (!c.ui) return;
-    c.ui.n = n; c.ui.count.textContent = String(n);
-    const t = el('i', 'ar-cer-t', c.ui.grid), url = faceUrl(q.spec);
-    t.style.backgroundColor = typeColor(q.spec.types[0]); if (url) t.style.backgroundImage = `url(${url})`;
-    const ui = c.ui, vals = hexValues(bonus);
-    if (ui.nowSpec !== q.spec) { ui.nowSpec = q.spec; ui.nowCount = 0; ui.nowFace.style.backgroundColor = typeColor(q.spec.types[0]); ui.nowFace.style.backgroundImage = url ? `url(${url})` : 'none'; ui.nowFace.style.borderColor = STAT_COL[top]; replay(ui.now, 'ar-nowin'); }
-    ui.nowCount += group.length; ui.nowN.textContent = '×' + ui.nowCount;
-    domSpark(t, ui.icons[top], STAT_COL[top], 300, () => { if (c.ui !== ui) return; hexDraw(ui.hex, vals); showLabels(c, bonus); replay(ui.icons[top], 'ping'); });
+  // one critter of the count: its species' tile (new, or one more on its tally), and where it goes
+  function countOne(c, e) {
+    const ui = c.ui;
+    if (e.add) for (let i = 0; i < 6; i++) c.run[i] += e.add[i];
+    if (!ui) return;
+    ui.n++; ui.count.textContent = String(ui.n);
+    let t = ui.tiles.get(e.spec);
+    if (!t) {
+      const root = el('i', 'ar-cer-t', ui.grid, '<b></b>'), url = faceUrl(e.spec);
+      root.style.backgroundColor = typeColor(e.spec.types[0]); if (url) root.style.backgroundImage = `url(${url})`;
+      t = { root, tag: root.firstChild, n: 0 }; ui.tiles.set(e.spec, t);
+    } else replay(t.root, 'ar-tick');
+    t.n++; if (t.n > 1) t.tag.textContent = '×' + t.n;
+    if (e.add) {                                                // a spare: to the corner of the hexagon it feeds
+      const top = topStat(e.add), vals = hexValues(teamBonus(c.run));
+      domFly(t.root, ui.icons[top], { color: STAT_COL[top] }, () => { if (c.ui !== ui) return; hexDraw(ui.hex, vals); replay(ui.icons[top], 'ping'); });
+    } else {                                                    // one of the six's own: to its portrait, which wakes when it has them all
+      const f = ui.faces[e.j];
+      domFly(t.root, f.root, { color: '#ffd23f' }, () => { if (c.ui !== ui) return; f.got++; if (f.got >= f.need) { f.root.classList.remove('ar-wait'); replay(f.root, 'ar-wake'); } else replay(f.root, 'ar-fed'); });
+    }
   }
   function turnStep(c, dt) {
-    const tm = teams[c.team], mine = c.team === myTeam, t = turnT - TURN_IN;
+    const tm = teams[c.team], mine = c.team === myTeam, t = turnT - TURN_IN, ui = c.ui;
     excite[c.team] = Math.max(excite[c.team], 0.7);
-    // ---- the count
-    if (t >= 0 && c.shown < c.tiles.length) {
-      const u = clamp(t / c.pour, 0, 1), want = Math.min(c.tiles.length, Math.ceil(Math.pow(u, 1.25) * c.tiles.length));
+    // ---- the count: first what became the six, then everything else
+    const all = c.into.length + c.rest.length;
+    if (t >= 0 && c.shown < all) {
+      const a = clamp(t / c.sixT, 0, 1), b = c.restT > 0 ? clamp((t - c.sixT) / c.restT, 0, 1) : t >= c.sixT ? 1 : 0;
+      const want = Math.min(all, Math.ceil(a * c.into.length) + Math.ceil(Math.pow(b, 1.2) * c.rest.length));
       let made = 0;
-      while (c.shown < want) { countTile(c); made++; }
-      if (made && (c.tick -= dt) <= 0) { c.tick = 0.055; const g = c.shown / c.tiles.length; tone(380 + 1100 * g, 420 + 1250 * g, 0.05, 'triangle', mine ? 0.085 : 0.05); }
-      if (made && c.stand.length) for (let i = 0; i < Math.min(made, 3); i++) { const q = c.stand[Math.floor(vr() * c.stand.length)]; fx.spark(q.x, q.s * 1.5, q.z, (vr() - 0.5) * 2, 9 + vr() * 5, (vr() - 0.5) * 2, STAT_HEX[Math.floor(vr() * 6)], (0.3 + vr() * 0.14) * K, 0.6, -12, true); }
+      while (c.shown < want) { const i = c.shown++; countOne(c, i < c.into.length ? c.into[i] : c.rest[i - c.into.length]); made++; }
+      if (made && (c.tick -= dt) <= 0) { c.tick = 0.055; const g = c.shown / all; tone(380 + 1100 * g, 420 + 1250 * g, 0.05, 'triangle', mine ? 0.085 : 0.04); }
+      if (made && c.stand.length && c.shown > c.into.length) for (let i = 0; i < Math.min(made, 3); i++) { const q = c.stand[Math.floor(vr() * c.stand.length)]; fx.spark(q.x, q.s * 1.5, q.z, (vr() - 0.5) * 2, 9 + vr() * 5, (vr() - 0.5) * 2, STAT_HEX[Math.floor(vr() * 6)], (0.3 + vr() * 0.14) * K, 0.6, -12, true); }
     }
-    // ---- the hexagon is spent on the six, a stat at a time
-    const ta = t - c.pour;
-    if (ta >= 0 && !c.tiles.length && !c.fin) { c.fin = true; if (mine) tone(392, 523, 0.2, 'triangle', 0.1); }
-    if (ta >= 0 && c.tiles.length) {
-      if (c.wave < 0) { c.wave = 0; if (c.ui) { hexDraw(c.ui.hex, c.vals); showLabels(c, c.bonus); replay(c.ui.hex.parentNode, 'ar-hexdone'); } tone(523, 784, 0.18, 'triangle', mine ? 0.14 : 0.07); }
-      while (c.wave < 6 && ta >= 0.22 + c.wave * WAVE_GAP) {
-        const i = c.wave++, on = c.bonus[i] > 0.004;
-        if (!on) continue;
-        if (c.ui) { replay(c.ui.icons[i], 'ping'); c.ui.faces.forEach((f) => domSpark(c.ui.icons[i], f.root, STAT_COL[i], 260, () => { f.pips[i].style.background = STAT_COL[i]; replay(f.pips[i], 'ar-lit'); replay(f.root, 'ar-fed'); })); }
-        for (const q of c.lined) {                                // and on the floor: each of the six takes it
+    // ---- what it came to: a number on every corner, and the best of them by name
+    const ts = t - c.sixT - c.restT;
+    if (ts >= 0 && c.stage < 1) {
+      c.stage = 1;
+      if (ui) {
+        for (const f of ui.faces) f.root.classList.remove('ar-wait');
+        hexDraw(ui.hex, c.vals);
+        if (c.rest.length) {
+          for (let i = 0; i < 6; i++) { ui.labels[i].lastChild.textContent = c.bonus[i] > 0.004 ? pct(c.bonus[i]) : ''; if (i === c.top) ui.labels[i].classList.add('ar-top'); }
+          ui.banner.innerHTML = statIcon(c.top) + `<span>${STAT_NAMES[c.top]}</span><b>${pct(c.bonus[c.top])}</b>`; ui.banner.style.setProperty('--sc', STAT_COL[c.top]); ui.banner.classList.add('ar-on');
+          replay(ui.hex.parentNode, 'ar-hexdone');
+        }
+      }
+      if (c.rest.length) { tone(523, 784, 0.16, 'triangle', mine ? 0.15 : 0.06); tone(1047, 1568, 0.22, 'triangle', mine ? 0.13 : 0.05, 0.1); }
+    }
+    // ---- the hexagon is spent on the six, a stat at a time: a badge flies to them, and they take it
+    const tg = ts - SETTLE;
+    if (tg >= 0 && c.rest.length) {
+      while (c.wave < 6 && tg >= c.wave * c.gap) {
+        const i = c.wave++;
+        if (c.bonus[i] <= 0.004) continue;
+        if (ui) { replay(ui.icons[i], 'ping'); domFly(ui.icons[i], sixOnScreen(c), { ms: FLY_MS, cls: 'ar-badge', html: statIcon(i) + '<b>' + pct(c.bonus[i]) + '</b>' }); ui.faces.forEach((f) => { f.pips[i].style.background = STAT_COL[i]; replay(f.pips[i], 'ar-lit'); }); }
+        c.pend.push({ at: turnT + FLY_MS / 1000, i });
+      }
+      for (let n = c.pend.length - 1; n >= 0; n--) if (turnT >= c.pend[n].at) {            // ...it lands
+        const i = c.pend.splice(n, 1)[0].i;
+        for (const q of c.lined) {
           q.kick = 1; q.col = STAT_HEX[i];
           fx.ring(q.x, q.z, { r0: 0.2, r1: q.h * 0.75 + 0.9, color: STAT_HEX[i], life: 0.34, opacity: 0.95, thin: true });
           for (let j = 0; j < 5; j++) { const a = vr() * 6.283; fx.spark(q.x + Math.cos(a) * q.h * 0.35, 0.2, q.z + Math.sin(a) * q.h * 0.35, 0, 5 + vr() * 5, 0, STAT_HEX[i], 0.3 * K, 0.5, -6, true); }
         }
-        const f = 523 * 1.122 ** i; tone(f, f * 1.5, 0.11, 'triangle', mine ? 0.15 : 0.07);
+        const f = 523 * 1.122 ** i; tone(f, f * 1.5, 0.11, 'triangle', mine ? 0.15 : 0.06);
       }
-      if (!c.fin && ta >= 0.22 + 6 * WAVE_GAP + 0.12) {           // all of it is in: the six flare, and roar
+      if (!c.fin && c.wave >= 6 && !c.pend.length && tg >= 6 * c.gap + FLY_MS / 1000 + 0.1) {       // all of it is in: the six flare, and roar
         c.fin = true;
         let mx = 0, mz = 0;
         for (const q of c.lined) { mx += q.x / c.lined.length; mz += q.z / c.lined.length; q.flare = 1; fx.burst(q.x, q.h * 0.6, q.z, 9, 0xffe169, 6, 0.3 * K, 0.55); q.actor.play('entrance', { dur: 0.9 }); }
-        fx.ring(mx, mz, { r0: 1, r1: L * 0.22, color: 0xffe169, life: 0.55, opacity: 0.95 }); fx.ring(mx, mz, { r0: 0.5, r1: L * 0.16, color: tm.hex, life: 0.75, thin: true });
-        const s = mine ? 1 : 0.84, vol = mine ? 0.17 : 0.07; [523, 659, 784, 1047].forEach((f, i) => tone(f * s, f * s * (i === 3 ? 1.5 : 1), i === 3 ? 0.34 : 0.09, 'triangle', vol, i * 0.07));
-        if (c.lined[0]) cry(c.lined[0].rec.spec, mine ? 0.1 : 0.05);
-        bump(mine ? 0.22 : 0.12);
-        if (c.ui) replay(c.ui.root, 'ar-bump');
+        fx.ring(mx, mz, { r0: 1, r1: L * 0.22, color: STAT_HEX[c.top], life: 0.55, opacity: 0.95 }); fx.ring(mx, mz, { r0: 0.5, r1: L * 0.16, color: tm.hex, life: 0.75, thin: true });
+        const s = mine ? 1 : 0.84, vol = mine ? 0.17 : 0.06; [523, 659, 784, 1047].forEach((f, i) => tone(f * s, f * s * (i === 3 ? 1.5 : 1), i === 3 ? 0.34 : 0.09, 'triangle', vol, i * 0.07));
+        if (c.lined[0]) cry(c.lined[0].rec.spec, mine ? 0.1 : 0.04);
+        bump(mine ? 0.22 : 0.1);
+        crown(c);
+        if (hud) { replay(hud.panels[c.team].root, 'ar-bump'); if (ui) replay(ui.root, 'ar-cerpop'); }
       }
     }
   }
   function endTurn(c) {
     if (c.done) return;
-    c.done = true; drawHex(c); closePanel(c);
-    if (hud) { replay(hud.panels[c.team].root, 'ar-bump'); replay(hud.panels[c.team].hex.parentNode, 'ar-hexdone'); }
+    c.done = true; crown(c); closePanel(c);
   }
   function musterStep(dt) {
     // ---- everyone steps up, and stands
@@ -791,14 +843,14 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
       turnI++; turnT = 0; c = order[turnI];
       if (!c) { musterCam = null; return false; }
       openPanel(c);
-      // the camera goes to its corner, leaving room beside it for the panel
-      musterCam = { x: c.cx * L * 0.1, z: c.cz * L * 0.22, f: 0.3 };
-      tone(330, 494, 0.16, 'triangle', c.team === myTeam ? 0.13 : 0.07);
+      // the camera goes to its corner, leaving room beside it for the panel (and keeping the six clear of the corner panels)
+      musterCam = { x: c.cx * L * 0.1, z: c.cz * L * (c.cz > 0 ? 0.3 : 0.2), f: 0.3 };
+      tone(330, 494, 0.16, 'triangle', c.team === myTeam ? 0.13 : 0.06);
     }
     // a press of dash (any player's) hurries the count to its end
     let dash = false;
     if (input) for (let k = 0; k < NT; k++) if (teams[k].human) { const st = input(k); if (st && st.dash) dash = true; }
-    if (dash && !dashWas && turnT > 0.2 && turnT < TURN_IN + c.pour) turnT = TURN_IN + c.pour;
+    if (dash && !dashWas && turnT > 0.2 && turnT < TURN_IN + c.sixT + c.restT) turnT = TURN_IN + c.sixT + c.restT;
     dashWas = dash;
     turnT += dt;
     turnStep(c, dt);
@@ -809,7 +861,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     musterCam = null;
     for (const c of muster) {
       if (c.over) continue;
-      c.over = true; c.done = true; drawHex(c); closePanel(c);
+      c.over = true; c.done = true; crown(c); closePanel(c);
       for (const q of c.lined) {
         const u = q.rec.unit;
         if (adopt && u && !u.v) { const v = ensure(u, q.actor), p = q.actor.root.position; q.actor.flash(0); v.pop = 1; v.hop = { x: p.x, z: p.z, t: 0, dur: 0.5 }; }
@@ -833,12 +885,14 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     hud = { root, panels: [] };
     teams.forEach((tm, k) => {
       const p = el('div', `ar-team ar-pill ar-c${k % 4}${isMe(tm) ? ' ar-me' : ''}`, root);
-      el('div', 'ar-tname', p, `<i class="ar-dot" style="background:${tm.css}"></i>${teamLabel(tm)}<span class="ar-out">OUT</span><span class="ar-ballx" title="ball lost"></span>`);
+      const nameRow = el('div', 'ar-tname', p, `<i class="ar-dot" style="background:${tm.css}"></i>${teamLabel(tm)}<span class="ar-out">OUT</span><span class="ar-ballx" title="ball lost"></span><span class="ar-ko" title="knocked off the edge by this team's ball"><i style="background:${tm.css}"></i><b>0</b></span>`);
+      const best = el('span', 'ar-best', p, '');                 // the team's best stat bonus, once its turn in the ceremony is over
+      const ko = nameRow.querySelector('.ar-ko');
       const fill = el('i', '', el('div', 'ar-hp', p)); fill.style.background = tm.css;
       const pips = el('div', 'ar-pips', p), list = [];
       for (let i = 0; i < sim.recs[k].length; i++) { const d = el('i', 'ar-pip', pips); d.style.background = tm.css; list.push({ e: d, s: '' }); }
       const hexBox = el('div', 'ar-hex', p, hexSvg());          // what the rest of the collection adds: it grows in the muster, and stays on the panel
-      hud.panels.push({ root: p, fill, pips: list, hex: hexBox.firstChild, icons: [...hexBox.querySelectorAll('.hx-ico')], w: -1 });
+      hud.panels.push({ root: p, fill, pips: list, hex: hexBox.firstChild, icons: [...hexBox.querySelectorAll('.hx-ico')], w: -1, ko, koN: ko.lastChild, best });
       if (!sim.recs[k].length) p.classList.add('ar-isout');
     });
     const top = el('div', 'ar-top', root);
@@ -847,7 +901,9 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     hud.big = el('div', 'ar-big', root); hud.sub = el('div', 'ar-pill ar-sub', root);
     hud.skip = el('div', 'ar-pill ar-skip', root, 'Hold Enter to skip<i></i>'); if (noSkip) hud.skip.style.display = 'none';
     hud.skipFill = hud.skip.lastChild;
-    if (myTeam >= 0) hud.keys = el('div', 'ar-pill ar-keys', root, '<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> roll <span></span> <kbd>Shift</kbd> dash');      // gone after the first dash
+    const KEYS = '<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> roll <span></span> <kbd>Shift</kbd> dash';
+    if (myTeam >= 0) hud.keys = el('div', 'ar-pill ar-keys', root, phase === 'muster' ? '<kbd>Shift</kbd> hurry' : KEYS);      // gone after the first dash
+    hud.keysHtml = KEYS;
     if (phase !== 'muster') root.classList.add('ar-fighting');
   }
   function big(text, anim, small) { if (!hud) return; hud.big.textContent = text; hud.big.classList.toggle('ar-small', !!small); hud.big.classList.remove('ar-punch', 'ar-stay'); replay(hud.big, anim); }
@@ -1059,7 +1115,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
   }
   function beginDrop() {
     phase = 'drop'; pt = 0; endMuster(true);
-    if (hud) hud.root.classList.add('ar-fighting');
+    if (hud) { hud.root.classList.add('ar-fighting'); if (hud.keys) hud.keys.innerHTML = hud.keysHtml; }
     const order = sim.field.slice().sort((a, b) => a.team - b.team || b.value - a.value); let k = -1, i = 0;
     for (const u of order) { if (u.team !== k) { k = u.team; i = 0; } if (u.v) continue; const v = ensure(u); v.fall = 0; v.delay = 0.2 + i++ * 0.08 + u.team * 0.05; v.fallDur = DROP_FALL; }
   }

@@ -873,7 +873,9 @@ function faceOf(spec) {
   const b = baseOf(spec);
   if (!faces.has(b.dex)) {
     faces.set(b.dex, thumbs[b.id] || '');
-    LOCAL.dexModel(b.dex).then((l) => { if (!l) return; try { faces.set(b.dex, renderFace(LOCAL.dexInstance(l))); squadStale = true; } catch (e) { console.warn('portrait', b.dex, e); } });
+    // (taken twice: a model's textures can still be on their way to the graphics card the first time, and come out black)
+    const snap = (l) => { try { faces.set(b.dex, renderFace(LOCAL.dexInstance(l))); squadStale = true; } catch (e) { console.warn('portrait', b.dex, e); } };
+    LOCAL.dexModel(b.dex).then((l) => { if (!l) return; snap(l); setTimeout(() => snap(l), 900); });
   }
   return faces.get(b.dex);
 }

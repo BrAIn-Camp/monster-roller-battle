@@ -9,7 +9,8 @@
 // the table works for the generated stand-ins and the local models alike.
 //
 //   planArmy(army, { specOf, teamIndex, limit })  ->  { roster, merges, before, after, bench, spares, spareList, spare, bonus }
-//     roster  : [{ spec, stars, boost, made, value, kind, ring, goal }]   the fighters, strongest first (at most `limit`)
+//     roster  : [{ spec, stars, boost, made, value, kind, ring, goal, from }]   the fighters, strongest first (at most `limit`)
+//                 from : [{ spec, count }] the critters it is made of, as they were brought
 //                 ring : 0..1, how close this kind is to its next form or star (1 = nothing further to become)
 //                 goal : { spec, stars } of what it becomes next, or null
 //     merges  : [{ from, to, stars, count }]            what fused, in order
@@ -174,6 +175,10 @@ export function planArmy(army, { specOf, teamIndex = 0, limit = SQUAD } = {}) {
   roster.sort((a, b) => b.value - a.value || a.spec.dex - b.spec.dex || b.spec.height - a.spec.height);
   const after = roster.length;
   roster.length = Math.min(roster.length, limit);
+  for (const r of roster) {                                     // what each fighter is made of, as it was brought: [{ spec, count }]
+    const n = new Map(); for (const q of r.raw) n.set(q, (n.get(q) || 0) + 1);
+    r.from = [...n].map(([key, count]) => ({ spec: kinds.get(key).spec, count }));
+  }
   // ---- everything that is not part of a fighter backs them
   const usedRaw = new Map(), spare = [0, 0, 0, 0, 0, 0], spareList = [];
   let spares = 0;
