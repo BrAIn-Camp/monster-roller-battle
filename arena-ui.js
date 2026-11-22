@@ -59,6 +59,7 @@ const STYLE = `
 @keyframes ar-tri2{0%{transform:translateX(0) scale(1)}62%{transform:translateX(1.13em) scale(.7);opacity:1}66%,100%{transform:translateX(1.13em) scale(.7);opacity:0}}
 @keyframes ar-tri3{0%{transform:translateX(0) scale(1)}62%{transform:translateX(.51em) scale(.7);opacity:1}66%,100%{transform:translateX(.51em) scale(.7);opacity:0}}
 .ar-fighting .ar-tally{display:none}
+.ar-card .ar-tri{margin:0 .35em;vertical-align:-.12em}
 .ar-root:not(.ar-fighting) .ar-hp,.ar-root:not(.ar-fighting) .ar-pips{display:none}
 .ar-pips{display:flex;flex-wrap:wrap;gap:.2em;margin-top:.35em}
 .ar-pip{width:.7em;height:.7em;border-radius:50%;border:2px solid #2b2540;transition:transform .2s,opacity .2s}

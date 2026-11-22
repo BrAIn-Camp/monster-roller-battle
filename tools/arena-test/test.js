@@ -8,7 +8,7 @@
 //   ?speed=0.25  slow motion (or 4 for fast forward)
 // Keys: WASD / arrows steer, Shift dashes, Space skips (in the game itself: hold Enter), R restarts, 1-8 restarts in that arena, P pauses.
 import * as THREE from 'three';
-import { ARENAS, createWheel, createBattle } from '../../arena.js';
+import { ARENAS, createWheel, createBattle, planTeams } from '../../arena.js';
 import { buildCritterGeometry } from '../../critters/kit.js';
 import { stadiumMeta, loadStadium, makeArenaActor } from '../../critters/stadium.js';
 import c1 from '../../critters/critters_1.js';
@@ -118,7 +118,7 @@ function start(arena) {
   wheel = battle = null; shown = false; teams = makeTeams();
   arena = arena || ARENAS.find((a) => a.id === Q.get('arena'));
   if (arena) begin(arena);
-  else wheel = createWheel({ arenas: ARENAS, pickIndex: Math.floor(rnd() * ARENAS.length), teams, sfx });
+  else { const pickIndex = Math.floor(rnd() * ARENAS.length); wheel = createWheel({ arenas: ARENAS, pickIndex, teams, plans: planTeams(teams, ARENAS[pickIndex], specOf), sfx }); }
   info.textContent = 'WASD / arrows: steer    Shift: dash    Space: skip    R: restart    1-8: pick an arena    P: pause';
 }
 function begin(arena) {

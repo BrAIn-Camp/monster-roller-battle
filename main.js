@@ -1579,7 +1579,7 @@ function startWheel(net = null) {            // net: the armies and the arena th
   if (!ARENA || !S.forecast) { startBattle(null); return; }
   S.state = 'wheel'; show('battle');
   planBattle(teams, S.forecast.arena);
-  wheel = ARENA.createWheel({ arenas: S.forecast.arenas, pickIndex: S.forecast.pick, teams, sfx: { tone, cry } });
+  wheel = ARENA.createWheel({ arenas: S.forecast.arenas, pickIndex: S.forecast.pick, teams, plans: S.battlePlans && S.battlePlans.plans, sfx: { tone, cry } });
 }
 function tickWheel(dt) {
   wheel.step(dt);
@@ -1608,6 +1608,11 @@ function startBattle(arena) {
   battleHold = 0;
 }
 function tickBattle(dt) {
+  if (battle.modern) {                          // the arena's music follows the fight: waiting, fighting, sudden death
+    const ph = battle.phase;
+    music.fight(ph === 'fight' ? (battle.sim.ramp > 1 ? 2 : 1) : ph === 'finish' || ph === 'done' ? -1 : 0);
+    music.tick();
+  }
   if (NET.on && battle.modern) { tickBattleNet(dt); return; }
   if (battle.modern) {
     // Skipping takes a held key (Enter, or Y on a pad), so a tap meant for the dash can never throw the fight away.
@@ -1627,7 +1632,7 @@ function endBattle(given = null) {            // given: the host's result (multi
   if (!battle) return;
   S.battleResult = given ? given[0] : battle.result(); S.battleStatus = given ? given[1] : battle.status();
   if (battle.destroy) battle.destroy();
-  battle = null;
+  battle = null; music.fight(-1);
   $('battleui').style.display = 'none';
   finish();
 }
@@ -1867,14 +1872,36 @@ function updateMini(dt) {
 // ---------- music: a small looping tune that speeds up with each phase (all synthesised) ----------
 const music = (() => {
   const SCALE = [0, 2, 4, 7, 9], TEMPO = [112, 124, 138, 168];
-  let on = false, phase = 0, step = 0, nextT = 0;
+  const MINOR = [0, 3, 5, 7, 10], FIGHT = [116, 150, 178];     // the arena's tune: waiting, fighting, sudden death
+  let on = false, phase = 0, step = 0, nextT = 0, arena = false, heat = 0;
   const note = (semi, oct) => 220 * Math.pow(2, (semi + oct * 12) / 12);
+  // The arena fight: a minor loop over a walking bass. Level 0 is the wait before GO (bass and a kick), 1 the fight
+  // (the tune, a snare, hats), 2 sudden death (faster, a step higher, the tune doubled).
+  function fightTick() {
+    const beat = 60 / FIGHT[heat] / 2;
+    if (nextT < ac.currentTime) nextT = ac.currentTime + 0.05;
+    while (nextT < ac.currentTime + 0.2) {
+      const when = nextT - ac.currentTime, bar = Math.floor(step / 16) % 4, s = step % 16, root = [0, 0, -4, -2][bar] + (heat === 2 ? 2 : 0);
+      if (s % 4 === 0) tone(150, 42, 0.12, 'sine', 0.11, when);                                              // kick
+      if (heat === 0 ? s % 4 === 0 : true) { const f = note(root - 12 + (heat && s % 4 === 3 ? 12 : 0), 0) / 2; tone(f, f, beat * 0.85, 'sawtooth', heat ? 0.045 : 0.06, when); }
+      if (heat >= 1 && (s % 2 === 0 || heat === 2)) { const k2 = (s * 5 + bar * 2 + (s % 3)) % 5, f = note(root + MINOR[k2], 1 + (heat === 2 && s % 4 === 2 ? 1 : 0)); tone(f, f, beat * 0.8, 'square', 0.02, when); }
+      if (heat >= 1 && s % 8 === 4) { tone(1900, 380, 0.07, 'square', 0.03, when); tone(3100, 1300, 0.05, 'sawtooth', 0.02, when); }      // snare
+      if (heat >= 1 && (s % 2 === 1 || heat === 2)) tone(5200, 3200, 0.02, 'square', 0.011, when);              // hat
+      step++; nextT += beat;
+    }
+  }
   return {
-    start() { on = true; step = 0; nextT = 0; phase = 0; },
-    stop() { on = false; },
+    start() { on = true; arena = false; step = 0; nextT = 0; phase = 0; },
+    stop() { on = false; arena = false; },
     setPhase(ph) { phase = ph; },
+    fight(level) {                          // level: 0 waiting, 1 fighting, 2 sudden death; -1 stops it
+      if (level < 0) { if (arena) { on = false; arena = false; } return; }
+      if (!arena) { arena = true; on = true; step = 0; nextT = 0; }
+      heat = level;
+    },
     tick() {
       if (!on || save.muted || !ac) return;
+      if (arena) { fightTick(); return; }
       const beat = 60 / TEMPO[phase] / 2;
       if (nextT < ac.currentTime) nextT = ac.currentTime + 0.05;
       while (nextT < ac.currentTime + 0.2) {
@@ -2397,7 +2424,7 @@ function startMatch() {                          // (host) everybody in the lobb
   for (let t = 1; t < TEAMS.length; t++) if (NET.peers[t]) room.send(NET.peers[t], [['go', cfg, t]]);
   beginMatch(cfg, 0);
 }
-function stopBattle() { if (battle) { if (battle.destroy) battle.destroy(); battle = null; } if (wheel) { wheel.destroy(); wheel = null; } $('battleui').style.display = 'none'; }
+function stopBattle() { music.fight(-1); if (battle) { if (battle.destroy) battle.destroy(); battle = null; } if (wheel) { wheel.destroy(); wheel = null; } $('battleui').style.display = 'none'; }
 function beginMatch(cfg, seat) {
   stopBattle();
   NET.on = true; NET.host = NET.room.host; NET.client = !NET.host; NET.seat = seat; NET.seats = cfg.kinds.slice();

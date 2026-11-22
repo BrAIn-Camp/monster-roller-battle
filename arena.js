@@ -2,7 +2,7 @@
 // the next stage of their line), and what is left fights on a platform with no walls while each team's trainer
 // pushes a ball around it. Fixed camera, minigame feel.
 //
-//   createWheel({ arenas, pickIndex, teams, sfx })     -> full-screen wheel overlay, then a result card
+//   createWheel({ arenas, pickIndex, teams, plans, sfx })  -> full-screen wheel overlay, then a result card
 //   planTeams(teams, arena, specOf)                    -> what each army merges into (also used to preload models)
 //   createBattle({ arena, teams, specOf, buildActor, ... })  -> the fight (scene + camera + its own DOM HUD)
 //
@@ -37,7 +37,7 @@ export const favouredCount = (arena, army) => (army || []).reduce((n, s) => n + 
 //  THE WHEEL
 // ====================================================================================================
 const SPIN = 4.5, SETTLE = 0.7, CARD_AT = 0.25, CARD_TIME = 3.2, WHEEL_TURNS = 5;
-export function createWheel({ arenas = ARENAS, pickIndex = 0, teams = [], sfx } = {}) {
+export function createWheel({ arenas = ARENAS, pickIndex = 0, teams = [], plans = null, sfx } = {}) {      // plans: from planTeams(), so the card can show what each army merges into
   const n = arenas.length, pick = (((pickIndex | 0) % n) + n) % n, seg = Math.PI * 2 / n, arena = arenas[pick];
   const tone = (...a) => { try { if (sfx && sfx.tone) sfx.tone(...a); } catch (e) { /* no audio */ } };
   // The wheel turns clockwise by `ang`. Segment i is centred i * seg clockwise from the top, so it sits under the
@@ -76,10 +76,16 @@ export function createWheel({ arenas = ARENAS, pickIndex = 0, teams = [], sfx } 
       ctx.beginPath(); ctx.arc(C, C, 46, 0, Math.PI * 2); ctx.fillStyle = '#ffe169'; ctx.fill(); ctx.lineWidth = 6; ctx.strokeStyle = '#2b2540'; ctx.stroke();
       ctx.beginPath(); ctx.arc(C, C, R, 0, Math.PI * 2); ctx.lineWidth = 10; ctx.stroke();
     }
-    const counts = teams.map((tm) => favouredCount(arena, tm.army)), top = Math.max(0, ...counts);
+    // per team: what it brought, what that merges into, and how many of those the arena favours
+    const fighters = teams.map((tm, k) => (plans && plans[k] ? plans[k].roster.map((r) => r.spec) : tm.army || []));
+    const counts = fighters.map((list) => favouredCount(arena, list)), top = Math.max(0, ...counts);
     card = el('div', 'ar-card', root,
       `<h4>The arena is</h4><h3>${arena.name}</h3><p>${arena.blurb}</p><div>Favoured: ${arena.types.map(chip).join('')}</div><table>` +
-      teams.map((tm, k) => `<tr><td><i class="ar-dot" style="background:${tm.css}"></i>${teamLabel(tm)}</td><td>★ ${counts[k]} favoured critter${counts[k] === 1 ? '' : 's'}<span style="opacity:.55;font-weight:700"> of ${(tm.army || []).length}</span>${top > 0 && counts[k] === top ? '<span class="ar-lucky">Lucky!</span>' : ''}</td></tr>`).join('') + '</table>');
+      teams.map((tm, k) => {
+        const brought = (tm.army || []).length, n = plans && plans[k] ? plans[k].after : brought, merged = n < brought;
+        return `<tr><td><i class="ar-dot" style="background:${tm.css}"></i>${teamLabel(tm)}</td><td><b>${brought}</b>${merged ? `<span class="ar-tri"><i></i><i></i><i></i></span><b>${n}</b>` : ''}</td>` +
+          `<td>★ ${counts[k]} favoured${top > 0 && counts[k] === top ? '<span class="ar-lucky">Lucky!</span>' : ''}</td></tr>`;
+      }).join('') + '</table>');
   }
   return {
     get done() { return done; },
