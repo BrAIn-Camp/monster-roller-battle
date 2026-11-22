@@ -1,6 +1,6 @@
 # Critter Roller
 
-Roll a ball around Crossway Continent and gather critters for five minutes against three other teams. Then a wheel picks an arena, three of a kind merge into something stronger, and the armies fight it out on a platform with no walls while you ram rivals off the edge. Play alone against CPU teams, or with up to four players online.
+Roll a ball around Crossway Continent and gather critters for five minutes against three other teams. Three of a kind merge into something stronger as you go, and your best six show on the HUD with everything else you collect adding to their stats. Then a wheel picks an arena and each team's six fight it out on a platform with no walls while you ram rivals off the edge. Play alone against CPU teams, or with up to four players online.
 
 **Play it:** https://brain-camp.github.io/monster-roller-battle/
 

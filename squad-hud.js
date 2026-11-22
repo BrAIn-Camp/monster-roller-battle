@@ -133,7 +133,10 @@ export function createSquadHud({ root, faceOf, typeColor = () => '#ccc', origin 
     const s = el('i', 'sq-spark', document.body); s.style.background = color;
     sparks++;
     const a = s.animate([{ transform: `translate(${o.x}px,${o.y}px) scale(.4)`, opacity: 0.2 }, { transform: `translate(${mx}px,${my}px) scale(1.5)`, opacity: 1, offset: 0.4 }, { transform: `translate(${x1}px,${y1}px) scale(.7)`, opacity: 1 }], { duration: TRAVEL, easing: 'cubic-bezier(.35,0,.7,1)' });
-    a.onfinish = a.oncancel = () => { s.remove(); sparks--; if (done) done(); };
+    // (a tab that is not being drawn never finishes an animation: the timer makes sure what the spark feeds still moves)
+    let landed = false;
+    const land = () => { if (landed) return; landed = true; s.remove(); sparks--; if (done) done(); };
+    a.onfinish = a.oncancel = land; setTimeout(land, TRAVEL + 200);
     return true;
   }
   // identities: the n-th monster of a kind keeps its card while it stays in the six

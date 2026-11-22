@@ -1606,7 +1606,7 @@ function planBattle(teams, arena) {
   S.battlePlans = null;
   if (!ARENA || !ARENA.planTeams || !arena) return;
   const plans = ARENA.planTeams(teams, arena, specOf), dexes = new Set();
-  for (const p of plans) for (const r of p.roster) dexes.add(baseOf(r.spec).dex);
+  for (const p of plans) for (const r of p.roster) { dexes.add(baseOf(r.spec).dex); faceOf(r.spec); }      // (and their portraits, for the results)
   LOCAL.preload([...dexes]);
   S.battlePlans = { arena, plans };
 }

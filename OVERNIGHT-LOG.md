@@ -3,6 +3,12 @@
 Branch `arena-overhaul`, one commit per piece of work, nothing pushed. This file is the running record: what was
 built, the decisions taken without you, and every bug or rough edge found along the way (fixed or not).
 
+> **Later on 22 November this changed to "the six"**: only a team's best six monsters fight, with nobody in reserve; the
+> rest of a collection adds to those six's stats instead of "backing" them; and the merge showcase before the fight was
+> replaced by a line-up and power-up. Where this log says 20 fighters, 12 on the floor, the bench or the merge intro, read
+> `DESIGN.md` section 6 instead. Balance after the change (800 headless fights): every fight decided by knockout, median
+> 50 s, 26% of knockouts are ring-outs, the strongest team wins 47%, seats 24 to 27%.
+
 ## In short
 
 Every item on the worklist is built, committed and running in the browser, with the models and without, in single

@@ -157,21 +157,46 @@ browser console starts any event at once for testing.
 
 ## 6. The finale
 
-Rebuilt on 21-22 November 2026 (the running record of that night is `OVERNIGHT-LOG.md`).
+Rebuilt on 21-22 November 2026 (the running record of that night is `OVERNIGHT-LOG.md`), and changed to "the six" later on
+the 22nd: only a team's best six monsters fight, and the player watches those six take shape during the round.
 
-**Files.** `arena.js` (the arena list and the wheel), `arena-merge.js` (merging), `arena-sim.js` (the fight, with no drawing in
-it), `arena-battle.js` (everything on screen), `arena-fx.js` (particles and effect shapes), `arena-ui.js` (style sheet).
+**Files.** `arena.js` (the arena list and the wheel), `arena-merge.js` (merging, the six, the stat bonus), `arena-sim.js` (the
+fight, with no drawing in it), `arena-battle.js` (everything on screen), `arena-fx.js` (particles and effect shapes),
+`arena-ui.js` (style sheet), `squad-hud.js` (the six and the stat hexagon on the round's HUD).
+
+**The six.** Three of a kind become one of the next stage of their line, again and again (9 -> 3 -> 1). Three of a kind that
+cannot evolve become a starred, bigger version (up to three stars). A merged monster is worth 1.5x what went into it. The
+strongest six of what that leaves are the team, and they are the only ones that fight. `planArmy` in `arena-merge.js` works
+this out from the army alone (no dice, no arena), so the round's HUD and every machine in a multiplayer game get the same answer.
+
+**Everything else is in their stats.** Each critter that is not part of one of the six adds to the team's six stats (HP,
+Attack, Defence, Sp. Atk, Sp. Def, Speed), the same for all six fighters. A critter's stat total is shared out by the cube of
+each stat, so it goes mostly to what that critter is best at: fast critters feed Speed, tanks feed HP and Defence. Each
+stat's bonus is 18% x s / (s + 5200), where s is that stat added up over the spares: the first critters count most and it can
+never pass +18%. About 100 spares gives +8 to 9% on each stat, which wins as often as a team made 30% stronger outright
+(`node tools/arena-test/headless.mjs bonus` measures it).
+
+**On the round's HUD** (`squad-hud.js`, timed mode only), down the right edge:
+- *Six cards*, strongest at the top: a portrait in a ring. The ring fills as the player closes in on that monster's next form
+  or star (two loose first-stage critters are two thirds of a second-stage one), and is a full gold ring when there is
+  nothing further to become. A small badge shows what it is becoming: the next form in silhouette, or a star.
+- Rolling up the third of a kind *evolves the card on the spot* (a flash, a burst, a jingle). The ball still carries the
+  three originals: if a rival knocks one off, the card steps back.
+- *A hexagon*, one corner per stat, which grows as spares are collected (drawn on a curve so the first few already show).
+- Every critter rolled up visibly goes somewhere: a spark flies from the ball to the card it feeds, or to the corners of
+  the hexagon it raises.
+- Each rival's strongest monster is a small portrait on its row of the standings.
+There are no markers in the world: players learn the lines and hunt for themselves. CPU teams do hunt (more keenly on
+Normal and Hard): a critter they already carry one or two of seems nearer to them (`hunt` in `DIFFS`, `main.js`).
 
 **The order of things.** The arena is chosen when the round starts so the oracle can hint at it. The wheel reveals it. Then:
 
-1. *Merge.* Three of a kind become one of the next stage of their line, again and again (9 -> 3 -> 1). Three of a kind that
-   cannot evolve become a starred, bigger version (up to three stars). A merged monster is worth 1.5x what went into it.
-   The strongest 20 fight (12 on the floor, 8 in reserve); the rest watch from a stand beside their team's corner and
-   "back" them for up to +50% health and damage (sparks fly from the stand to the fighters as they land).
-   Each team's best three merges are shown at a spot in front of its corner: three spin together, flash, and one stands
-   there. The results line up by the corner and walk on as the fighters they are.
-2. *Drop.* The rest of the fighters and the four balls fall in. 3, 2, 1, GO.
-3. *Fight.* See below. Reserves drop in at their corner as places open.
+1. *Muster* (about 6 s, all four teams at once, skippable). Each team's six step up by their corner, strongest first, in
+   two rows of three. Then the stand beside the corner (the spares, as a crowd) pours what it is worth into them: sparks in
+   the colours of the six stats stream from the stand to the fighters, the six swell and glow, and the team's hexagon grows
+   a corner at a time on its panel. The bigger the collection the longer it pours, so the biggest finishes last, with a flare.
+2. *Drop.* The six hop to their places and the four balls fall in. 3, 2, 1, GO.
+3. *Fight.* See below. Six a side, all on the floor from the start; nobody waits in reserve.
 4. *Finish.* The last knockout plays in slow motion with the camera pushed in, then the winners cheer.
 
 **The floor is a platform with no walls.** A monster whose middle goes past the edge is out, whatever health it had. One on
@@ -238,15 +263,16 @@ runs the real fight, and `tools/arena-test/headless.mjs` can run hundreds of the
 | Arena list | top of `arena.js` |
 | Everything that decides an arena fight (floor cap, knockback, ramp, ball rules, the edge) | `TUNE` at the top of `arena-sim.js` |
 | Signature moves | `MOVES` in `arena-sim.js` |
-| Merging (group size, stars, merge bonus, bench backing) | top of `arena-merge.js` |
-| Arena intro and finale timings, the camera | top of `arena-battle.js` |
+| Merging and the six (group size, stars, merge bonus, how many fight, what spares are worth) | top of `arena-merge.js` |
+| The six on the round's HUD (cards, rings, hexagon, sparks) | `squad-hud.js` |
+| The muster and finale timings, the camera | top of `arena-battle.js` |
 | Round length | `LEVEL.seconds` in `roster.js` |
 
 Tools: `node tools/map-image.mjs out.png 2` (picture of the map with every prop), `node tools/map-report.mjs [biome]` (size ladder and placement problems),
 `node tools/map-probe.mjs x z` (ground at a point). `tools/arena-test/` is a stand-alone page for the wheel and arena
 (options are listed at the top of its `test.js`). `node tools/arena-test/headless.mjs 400` runs 400 arena fights with no screen and
 reports how they go (share decided by knockout, length, ring-outs, whether the strongest army wins, seat fairness); add
-`tune=HP_SCALE:13` to try a number without editing, `smoke` for a quick sanity run.
+`tune=HP_SCALE:13` to try a number without editing, `smoke` for a quick sanity run, `bonus` for what a collection is worth.
 
 ## 8. Online play (not built)
 
