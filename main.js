@@ -4,7 +4,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { BOUNDS, STARTS, BIOMES, B, PLACES, REHOME, GUESTS, R_HUB, scenery, layout, ITEMS as MAP_ITEMS, SHAPES as MAP_SHAPES } from './map.js';
 import { createTerrain, vnoise, SEA_LEVEL, SEA_MIN_D } from './terrain.js';
 import { buildCritterGeometry, critterMaterial } from './critters/kit.js';
-import { loadStadium, makeStadiumInstance, stadiumMeta } from './critters/stadium.js';
+import * as LOCAL from './critters/local-mode.js';   // the local Stadium-model build; inert while its switch is off
 import { createBattle, power } from './battle.js';
 import { EVENTS } from './events.js';
 import { openRoom, openPublicRoom, cleanCode } from './net.js';
@@ -251,104 +251,6 @@ function buildCreature(spec, fine = false) {   // fine: the detailed shape, for 
   m.castShadow = true;
   return m;
 }
-// ---------- Stadium understudies ----------
-// Generated critters are one merged mesh each and batch into a handful of instanced
-// draws. A Stadium model is 17 separate meshes and cannot join them, so 240 of them in
-// the arena would be about 4000 draw calls. Instead a small pool shadows the nearest few
-// free critters: the generated mesh is hidden and the model is drawn at its world
-// transform. The cost is capped however many critters are about, and nothing else in the
-// game has to know -- everything still talks to o.group.
-// A model is worth drawing where it can actually be told apart from the generated mesh:
-// in front of the camera, and more than a couple of dozen pixels tall. Beyond that the
-// two are the same handful of pixels and the model costs 17 draw calls to prove it.
-// So the pool is driven by on-screen size and the view frustum, not a flat distance.
-// Tuned by measurement, after the body merge took a model from 17 draw calls to 2:
-// 240 models hold a locked 60 fps with a 19 ms worst frame, where 300 gives ~280 and
-// drops to 50. Below 5px the count stops climbing -- the frustum and the critters
-// actually in view run out first -- so there is nothing to gain going lower.
-// Density varies a lot by habitat, so the cap is the thing protecting the frame rate.
-let understudyMax = 240;                // live models at once
-let understudyPx = 5;                   // smallest on-screen height worth a model
-const ACQUIRE_PER_FRAME = 8;            // spread cloning over frames so movement does not hitch
-const POOL_PER_SPECIES = 6;             // spare instances kept rather than disposed
-const understudies = new Map();         // o -> { inst, dex } | 'loading'
-const uPool = new Map();                // dex -> [spare instances]
-const uScale = new V3(), uSphere = new THREE.Sphere(), uFrustum = new THREE.Frustum(), uProj = new THREE.Matrix4();
-
-function takeInstance(dex, loaded) {
-  const spares = uPool.get(dex);
-  if (spares && spares.length) return spares.pop();
-  return makeStadiumInstance(loaded);
-}
-function dropInstance(u) {
-  scene.remove(u.inst.root);
-  const spares = uPool.get(u.dex) || [];
-  if (spares.length < POOL_PER_SPECIES) { spares.push(u.inst); uPool.set(u.dex, spares); }
-  else u.inst.dispose();
-}
-function clearUnderstudies() {
-  for (const [o, u] of understudies) {
-    if (u !== 'loading') dropInstance(u);
-    o.understudy = false;
-  }
-  understudies.clear();
-}
-function tickUnderstudies(dt) {
-  if (!STADIUM_LOOK || understudyMax <= 0) { if (understudies.size) clearUnderstudies(); return; }
-  uProj.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
-  uFrustum.setFromProjectionMatrix(uProj);
-  const px = renderer.domElement.height || 1080, cam = camera.position;
-  const cand = [];
-  // Both lists, without building a third every frame: attach() splices a critter out of
-  // S.objects and into S.attached, so the ones stuck to the ball -- the closest things to
-  // the camera there are -- are only ever found in the second.
-  for (let list = 0; list < 2; list++) for (const o of (list ? S.attached : S.objects)) {
-    if (o.kind !== 'creature' || o.gone || !o.group.parent) continue;
-    // Critters stuck to the ball count too: they ride in o.group, which stick() reparents into
-    // the ball, so the world transform below follows them round. They are the nearest things
-    // there are, so they sort to the front of the budget. What they lose is the team tint
-    // setTeamLook paints on the generated mesh -- a textured model has nowhere to put it.
-    const p = o.group.position, dx = p.x - cam.x, dy = p.y - cam.y, dz = p.z - cam.z;
-    const d2 = dx * dx + dy * dy + dz * dz;
-    // a thing of height h at distance d covers about h / (1.04 * d) of the screen height at this fov
-    if (px * o.size / (1.04 * Math.sqrt(d2) + 1e-3) < understudyPx) continue;
-    uSphere.set(p, o.size);
-    if (!uFrustum.intersectsSphere(uSphere)) continue;                 // behind or beside the camera
-    cand.push({ o, d2 });
-  }
-  cand.sort((a, b) => a.d2 - b.d2);                                    // nearest first
-  const want = new Set(cand.slice(0, understudyMax).map((c) => c.o));
-  for (const [o, u] of [...understudies]) {
-    if (want.has(o)) continue;
-    if (u !== 'loading') dropInstance(u);
-    o.understudy = false;
-    understudies.delete(o);
-  }
-  let budget = ACQUIRE_PER_FRAME;
-  for (const o of want) {
-    if (understudies.has(o)) continue;
-    if (budget-- <= 0) break;
-    const dex = baseOf(o.spec).dex;
-    understudies.set(o, 'loading');
-    loadStadium(dex).then((l) => {
-      if (understudies.get(o) !== 'loading') return;                   // released while it loaded
-      if (!l) { understudies.delete(o); return; }
-      const inst = takeInstance(dex, l);
-      scene.add(inst.root);
-      understudies.set(o, { inst, dex });
-    });
-  }
-  for (const [o, u] of understudies) {
-    if (u === 'loading') continue;
-    o.understudy = true;
-    o.group.visible = false;     // the cull runs before this and would leave it on for a frame, drawing both
-    o.group.getWorldPosition(u.inst.root.position);
-    o.group.getWorldQuaternion(u.inst.root.quaternion);
-    u.inst.root.scale.copy(o.group.getWorldScale(uScale));
-    u.inst.update(dt);
-  }
-}
-
 const teamMats = TEAMS.map((tm) => new THREE.MeshLambertMaterial({ vertexColors: true, color: new THREE.Color(tm.hex).lerp(new THREE.Color(0xffffff), 0.35), emissive: tm.hex, emissiveIntensity: 0.22 }));
 function setTeamLook(o, team) { if (o.kind === 'creature') o.group.material = team === null ? critterMaterial : teamMats[team]; }
 
@@ -533,39 +435,17 @@ function drawWorld() {
 }
 
 // ---------- the balls ----------
-// Two looks, chosen by whether the Stadium models have been extracted on this machine.
-//   default  -- the original striped orb: a team-coloured sphere banded with rings.
-//   extracted -- a capture ball: two caps meeting at a dark seam with a latch button on
-//               the front, the upper cap in the team's colour and the lower varying per
-//               team so four of them stay apart at a glance while they tumble.
-// The capture-ball look is part of the same local-only layer as the models and the names:
-// it is never what the published build shows. See models/stadium/README.md.
-let STADIUM_LOOK = false;
-const BALL_LOWER = [0xf3ead7, 0xf3ead7, 0x3b4668, 0xe9c21f];   // cream, cream, slate, gold
-const BALL_SEAM = 0x2b2540;
-const CAP = new THREE.SphereGeometry(1, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2);
-// `own` marks the player's own ball, which wears more trim so it reads at a distance.
+// The original striped orb: a team-coloured sphere banded with rings. `own` marks the
+// player's own ball, which wears more trim so it reads at a distance. The local build
+// hands back its own parts instead; off, that is null and this is all there is.
 function styleBall(g, k, own) {
   g.clear();
-  if (STADIUM_LOOK) {
-    const top = new THREE.Mesh(CAP, mat(TEAMS[k].hex));
-    const low = new THREE.Mesh(CAP, mat(BALL_LOWER[k]));
-    low.rotation.x = Math.PI;
-    const seam = new THREE.Mesh(new THREE.TorusGeometry(1, 0.08, 8, 28), mat(BALL_SEAM));
-    seam.rotation.x = Math.PI / 2;
-    const rim = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.14, 18), mat(BALL_SEAM));
-    const btn = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 0.14, 16), mat(0xf7f4ec));
-    rim.rotation.x = Math.PI / 2; rim.position.z = 0.93;
-    btn.rotation.x = Math.PI / 2; btn.position.z = 0.97;
-    const parts = [top, low, seam, rim, btn];
-    if (own) { const trim = new THREE.Mesh(new THREE.TorusGeometry(1.03, 0.032, 6, 28), mat(0xffd23f)); trim.rotation.x = Math.PI / 2; parts.push(trim); }
-    for (const m of parts) { m.castShadow = true; g.add(m); }
-  } else {
-    P(g, 'sph', TEAMS[k].hex, [1, 1, 1], [0, 0, 0]);
-    for (const rot of own ? [[0, 0, 0], [Math.PI / 2, 0, 0], [0, 0, Math.PI / 2]] : [[Math.PI / 2, 0, 0]]) {
-      const ring = new THREE.Mesh(new THREE.TorusGeometry(1, 0.07, 6, 24), mat(own ? 0xffd23f : 0xffffff));
-      ring.rotation.set(rot[0], rot[1], rot[2]); ring.castShadow = true; g.add(ring);
-    }
+  const local = LOCAL.ballParts(k, own);
+  if (local) { for (const m of local) g.add(m); return; }
+  P(g, 'sph', TEAMS[k].hex, [1, 1, 1], [0, 0, 0]);
+  for (const rot of own ? [[0, 0, 0], [Math.PI / 2, 0, 0], [0, 0, Math.PI / 2]] : [[Math.PI / 2, 0, 0]]) {
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(1, 0.07, 6, 24), mat(own ? 0xffd23f : 0xffffff));
+    ring.rotation.set(rot[0], rot[1], rot[2]); ring.castShadow = true; g.add(ring);
   }
 }
 function buildCaptureBall(k, own) { const g = new THREE.Group(); styleBall(g, k, own); return g; }
@@ -981,10 +861,10 @@ function showDexPop(sp, isNew, count) {
   // arrives. The generated mesh is already on screen, so a slow load shows nothing odd,
   // and a pop that has been replaced or has expired drops its result on the floor.
   const seq = ++popSeq;
-  loadStadium(sp.dex).then((l) => {
+  LOCAL.dexModel(sp.dex).then((l) => {
     if (!l || seq !== popSeq || popT <= 0) return;
     popSpin.clear();
-    popInst = makeStadiumInstance(l);
+    popInst = LOCAL.dexInstance(l);
     popSpin.add(popInst.root);
     framePop(popInst.root);
   });
@@ -2914,7 +2794,6 @@ S.openDex = openDex;    // S.openDex(true) from the console shows every critter,
 S.grab = (n = 1) => { const near = S.objects.filter((o) => o.kind === 'creature' && !o.on && !o.gone)
   .sort((a, b) => Math.hypot(a.group.position.x - S.x, a.group.position.z - S.z) - Math.hypot(b.group.position.x - S.x, b.group.position.z - S.z));
   let k = 0; for (const o of near.slice(0, n)) { attach(o); k++; } return k + ' rolled up'; };   // S.grab(5) from the console, for testing pick-ups
-S.models = (n, px) => { understudyMax = n === undefined ? 240 : Math.max(0, n); if (px !== undefined) understudyPx = px; clearUnderstudies(); return `models: up to ${understudyMax} at once, down to ${understudyPx}px on screen`; };   // S.models(600, 4) for everything in view and ~42 fps, S.models(0) off
 S.dexPop = (n) => showDexPop(CREATURES[Math.max(1, Math.min(151, n)) - 1], true, 1);   // S.dexPop(4) from the console shows one entry's card
 
 // ---------- wiring ----------
@@ -2966,23 +2845,12 @@ function resize() {
 addEventListener('resize', resize);
 applyGfx();
 makeThumbs();
-// The names in critters/*.js are placeholders for the 151 slots. Where the models have
-// been extracted, each one carries its own name, so the card stops disagreeing with the
-// model standing on it. Renaming in place is enough: every screen reads spec.name live,
-// and the dex save is keyed by spec.id, so nothing already caught is lost.
-stadiumMeta().then((meta) => {
-  if (!meta) return;                                   // no models extracted: keep the placeholders
-  STADIUM_LOOK = true;
-  styleBall(core, S.team || 0, true);
-  let n = 0;
-  CREATURES.forEach((sp, i) => {
-    const m = meta[String(sp.dex)];
-    if (!m || !m.name) return;
-    sp.name = m.name;
-    TITANS[i].name = 'Titan ' + m.name;
-    n++;
-  });
-  console.log('stadium: renamed ' + n + ' critters from the extracted models');
+// The local Stadium-model build, if its switch is on and the models are there. Everything
+// it changes lives in critters/local-mode.js; this is the only place the game starts it.
+LOCAL.init({ scene, camera, renderer, S, baseOf, mat, TEAMS, CREATURES, TITANS }).then((live) => {
+  if (!live) return;
+  styleBall(core, S.team || 0, true);      // the ball was built before the switch was known
+  LOCAL.hooks(S);
 });
 populate();
 toMenu();
@@ -3038,8 +2906,8 @@ function tick(now) {
   last = now;
   pollPadButtons();
   tickDexPop(dt);
-  if (S.state === 'play') { update(dt); tickUnderstudies(dt); }
-  else if (understudies.size) clearUnderstudies();
+  if (S.state === 'play') { update(dt); LOCAL.tickWorld(dt); }
+  else LOCAL.clearWorld();
   if (S.state === 'intro') tickIntro(dt);
   else if (S.state === 'countdown') tickCountdown(dt);
   else if (S.state === 'timeup') tickTimeUp(dt);
