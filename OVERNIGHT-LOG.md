@@ -128,9 +128,9 @@ music and the multiplayer gating clean, and five smaller things, all fixed:
 | Knockouts that are ring-outs | 23% |
 | Signature moves per fight | about 80 (of which about 21 are rallies by the CPU balls); about a quarter are broken |
 | Balls lost per fight | 1.1 of 4 (CPU) |
-| The strongest army wins | about 50% (2nd strongest 28%, 3rd 15%, 4th 8%) |
+| The strongest army wins | 51% (2nd strongest 28%, 3rd 15%, 4th 5%) |
 | Wins by seat, identical armies | 25 / 26 / 27 / 23% over 3000 fights |
-| Between arenas | 49 to 54 s, ring-outs 21 to 32% |
+| Between arenas | 50 to 54 s, ring-outs 21 to 25% |
 
 What was changed to get there:
 - Health x1.5: fights were over in 40 s, before sudden death ever started.
