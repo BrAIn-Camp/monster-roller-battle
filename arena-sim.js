@@ -41,7 +41,7 @@ export const TUNE = {
   RAM_MIN: 2.5, RAM_PUSH: 0.3, RAM_DMG: 0.04, RAM_IMMUNE: 1.2,
   SCOOP_RATIO: 0.45, SCOOP_GROW: 0.8, SCOOP_GULP: 0.7, SCOOP_DRAG: 0.35,
   BALL_BASE: 1.05, BALL_SPREAD: 0.5, BALL_MAX_GROW: 1.5, BALL_GRIP: 4.5,
-  DASH_MULT: 2.0, DASH_TIME: 0.4, DASH_CD: 2.2,
+  DASH_MULT: 1.8, DASH_TIME: 0.34, DASH_CD: 2.2,           // (a dash covers about 8 m before the ball can stop: with no walls, more was a trap)
   CPU_SPEED: 0.9, CPU_THINK: [0.3, 0.55],
   CLASH_STUN: 1.0,
   FREEZE_HEAVY: 0.07, FREEZE_KO: 0.05, FREEZE_GAP: 0.5,   // hit-stop, and the least time between two of them

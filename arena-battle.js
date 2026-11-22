@@ -873,7 +873,11 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
       w.group.visible = dropIn > 0; w.group.position.set(b.x, R + (1 - bounceOut(dropIn)) * L * 0.4, b.z); w.roll.scale.setScalar(R);
       for (let i = 0; i < w.roll.children.length; i++) { const c = w.roll.children[i]; if (c.userData.arH) c.scale.setScalar(Math.min(c.userData.arH, R * 0.9) / R); }
       if (sp > 0.05 && fdt > 0) { v3.set(b.vz / sp, 0, -b.vx / sp); w.roll.quaternion.premultiply(q4.setFromAxisAngle(v3, sp * fdt / R)); }
-      w.ring.position.set(b.x, 0.03, b.z); w.ring.scale.setScalar(R * (1.25 + 0.35 * Math.max(0, b.gulp) / TUNE.SCOOP_GULP)); w.ring.visible = dropIn >= 1;
+      // the ring under a ball swells when it has just scooped; under the player's own it turns red when the ball is
+      // about to run out of floor (where it will be in half a second is past the edge)
+      const risk = b.team === myTeam && !w.dim && (Math.abs(b.x + b.vx * 0.5) > half - R * 0.3 || Math.abs(b.z + b.vz * 0.5) > half - R * 0.3);
+      if (risk !== w.risk) { w.risk = risk; w.ring.material = risk ? glass(0xff3b2e, 0.95) : glass(tm.hex, 0.9); if (risk) tone(880, 660, 0.08, 'square', 0.1); }
+      w.ring.position.set(b.x, 0.03, b.z); w.ring.scale.setScalar(R * (1.25 + 0.35 * Math.max(0, b.gulp) / TUNE.SCOOP_GULP + (risk ? 0.35 + 0.2 * Math.sin(T * 26) : 0))); w.ring.visible = dropIn >= 1;
       if (w.trainer) {
         const th = clamp(b.D * 0.7, 1.2, L * 0.09), back = R + th * 0.22;
         w.trainer.visible = dropIn >= 1; w.trainer.scale.setScalar(th); w.trainer.position.set(b.x - Math.sin(b.hd) * back, b.team === cheerTeam ? Math.abs(Math.sin(T * 7)) * 0.8 : 0, b.z - Math.cos(b.hd) * back); w.trainer.rotation.y = b.hd;
