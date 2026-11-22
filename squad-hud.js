@@ -29,7 +29,7 @@ const STAT_ICON = [                                             // a heart, a sw
 ];
 const DARK = '#2b2540';
 const AX = [0, 1, 2, 3, 4, 5].map((i) => { const a = Math.PI * 2 * i / 6 - Math.PI / 2; return [Math.cos(a), Math.sin(a)]; });       // HP at the top, then clockwise
-const R_IN = 5, R_OUT = 38, R_ICON = 49;
+const R_IN = 5, R_OUT = 39, R_ICON = 49;
 const hexPts = (r) => AX.map(([x, y], i) => ((Array.isArray(r) ? r[i] : r) * x).toFixed(1) + ',' + ((Array.isArray(r) ? r[i] : r) * y).toFixed(1)).join(' ');
 const radius = (v) => R_IN + (R_OUT - R_IN) * Math.max(0, Math.min(1, v));
 
@@ -39,7 +39,7 @@ export function hexSvg() {
   s += `<polygon class="hx-guide" points="${hexPts(radius(0.5))}"/><polygon class="hx-guide" points="${hexPts(radius(1))}"/>`;
   for (const [x, y] of AX) s += `<line class="hx-guide" x1="0" y1="0" x2="${(R_OUT * x).toFixed(1)}" y2="${(R_OUT * y).toFixed(1)}"/>`;
   s += `<polygon class="hx-fill" points="${hexPts(R_IN)}"/>`;
-  AX.forEach(([x, y], i) => { s += `<g class="hx-ico" data-i="${i}" transform="translate(${(R_ICON * x).toFixed(1)} ${(R_ICON * y).toFixed(1)})"><g><circle r="9.500" fill="${STAT_COL[i]}"/><g transform="translate(-6.500 -6.500) scale(.54)" fill="#fff">${STAT_ICON[i]}</g></g></g>`; });
+  AX.forEach(([x, y], i) => { s += `<g class="hx-ico" data-i="${i}" transform="translate(${(R_ICON * x).toFixed(1)} ${(R_ICON * y).toFixed(1)})"><g><circle r="8" fill="${STAT_COL[i]}"/><g transform="translate(-5.400 -5.400) scale(.45)" fill="#fff">${STAT_ICON[i]}</g></g></g>`; });
   return s + '</svg>';
 }
 export function hexDraw(svg, values) { svg.querySelector('.hx-fill').setAttribute('points', hexPts(values.map(radius))); }

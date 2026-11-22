@@ -1,23 +1,24 @@
 // THE ARENA FIGHT ON SCREEN: the scene, the fighters and their animations, every effect and sound, the HUD, and
-// the short intro that shows the armies merging before they are dropped in. The fight itself is arena-sim.js;
+// the muster before it: each team's six line up and the rest of its collection powers them up. The fight itself is arena-sim.js;
 // this file only watches it (sim.events, and the positions of things) and draws. Nothing here uses the fight's
 // dice, so drawing can never put two machines out of step.
 //
-//   merge  -> the showcase: three of a kind spin together and become one     (skipped when nobody merged)
-//   drop   -> the fighters and the balls fall in
+//   muster -> each team's six step up by their corner, then their stand pours its stats into them
+//   drop   -> the six hop to their places and the balls fall in
 //   countdown -> 3, 2, 1, GO     fight -> sim.step()     finish -> slow-motion last knockout, then the cheer
 import * as THREE from 'three';
 import { createSim, TUNE, CORNERS } from './arena-sim.js';
-import { planArmy, power } from './arena-merge.js';
+import { planArmy } from './arena-merge.js';
+import { hexSvg, hexDraw, hexValues, STAT_COL, HEX_STYLE } from './squad-hud.js';
 import { createFx, TYPE_HEX, TYPE_GLOW } from './arena-fx.js';
 import { el, setText, replay, injectStyle, isMe, teamLabel, chip, HAS_DOM, clamp } from './arena-ui.js';
 
 // ---------- timings and looks ----------
-const FUSE = 1.05;            // seconds for one "three become one"
-const GATHER = 0.6;           // share of that spent spinning together (the rest: the flash, and the new one landing)
-const SHOW_FUSES = 3;         // merges shown per team, one after another (its most valuable lines)
-const MERGE_START = 0.35, MERGE_HOLD = 0.6;           // a beat before the first one, and after the last
-const DROP_PHASE = 1.9, DROP_FALL = 0.42;
+const LINE_AT = 0.3, LINE_STEP = 0.2;                 // the muster: when the first of a team's six steps up, and the gap to the next
+const POUR_AT = 2.0, POUR_MIN = 0.7, POUR_SPAN = 3.0; // when the stands start to pour, and how long that takes (longer for a bigger collection)
+const MUSTER_HOLD = 0.55;                             // a beat after the last team is full
+const DROP_PHASE = 1.5, DROP_FALL = 0.42;
+const STAT_HEX = STAT_COL.map((c) => parseInt(c.slice(1), 16));
 const COUNT_STEP = 0.7;       // seconds per "3", "2", "1"
 const FREEZE = 1.5, CHEER = 4.2;                      // slow-motion last knockout, then the winners' celebration
 const SLOWMO = 0.22;
@@ -43,7 +44,7 @@ const smooth = (u) => u * u * (3 - 2 * u);
 
 // What each army merges into. Also used by the game to preload models while the wheel spins.
 export function planTeams(teams, arena, specOf) {
-  return teams.map((tm, k) => planArmy(tm.army || [], { arena, specOf, teamIndex: k, limit: TUNE.ROSTER_CAP }));
+  return teams.map((tm, k) => planArmy(tm.army || [], { specOf, teamIndex: k, limit: TUNE.ROSTER_CAP }));
 }
 
 // rand: the fight's dice (a seeded one in multiplayer, so every machine fights the same fight); input(team) gives a
@@ -64,7 +65,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
 
   // ---- the fight
   plans = plans || planTeams(teams, arena, specOf);
-  const sim = createSim({ arena, rand: dice || Math.random, input, teams: teams.map((tm, k) => ({ roster: plans[k].roster, backing: plans[k].backing, ballD: tm.ballD, human: tm.human })) });
+  const sim = createSim({ arena, rand: dice || Math.random, input, teams: teams.map((tm, k) => ({ roster: plans[k].roster, bonus: plans[k].bonus, ballD: tm.ballD, human: tm.human })) });
   const L = sim.L, half = sim.half, K = sim.K, DROP = L * 0.14;
   const total = sim.recs.reduce((n, r) => n + r.length, 0);
   const myTeam = teams.findIndex(isMe);
@@ -198,12 +199,12 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
   // the rally shown, not explained
   const GUIDE = 9, guideMesh = inst(GEO.disc, new THREE.MeshBasicMaterial({ color: 0xffe169, transparent: true, opacity: 0.9, depthWrite: false }), GUIDE);
   let guideOn = myTeam >= 0 ? 1 : 0, guideTo = null;
-  // The bench: whoever did not make the roster watches from a stand beside their team's corner. They are what the
-  // "backing" is (arena-merge.js), so as the fighters drop in, sparks fly from the stand to each of them; and they
-  // jump when their team scores.
+  // The stands: every critter that is not part of one of the six watches from a stand beside its team's corner.
+  // They are where the six's stat bonus comes from (arena-merge.js), and in the muster it is seen to: sparks pour
+  // from the stand into the fighters. After that they jump when their team scores.
   const BENCH_SHOWN = 36, bench = [], excite = new Array(NT).fill(0);
   teams.forEach((tm, k) => {
-    const n = Math.min(plans[k].bench, BENCH_SHOWN);
+    const n = Math.min(plans[k].spares || 0, BENCH_SHOWN);
     if (!n) return;
     const [cx, cz] = CORNERS[k % 4], wid = L * 0.085, len = L * 0.32, bx = cx * (half + wid * 0.5 + L * 0.12), bz = cz * half * 0.56;      // (well clear of the edge: that gap is where monsters fall)
     put(GEO.box, lam(arena.wall), bx, -0.3, bz, wid, 0.6, len, 0, scene);
@@ -220,7 +221,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
 
   // ---- fighters. A monster's drawing state hangs off it as u.v; the sim never looks at it.
   const views = [], dying = [];
-  function ensure(u, made) {                                    // made: an actor that already exists (from the merge showcase)
+  function ensure(u, made) {                                    // made: an actor that already exists (it lined up in the muster)
     if (u.v) return u.v;
     const actor = made || buildActor(u.spec, u.team);
     if (!made) { actor.root.scale.setScalar(0.0001); actor.root.traverse((o) => { if (o.isMesh) o.castShadow = true; }); scene.add(actor.root); }
@@ -582,115 +583,98 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     }
   }
 
-  // ---- the merge showcase. Each team has a spot in front of its corner where, one after another, three of a kind
-  // spin together and become one; the result hops back to a line-up by the corner. When the armies drop in, the
-  // ones in the line-up walk on as themselves: they are the same monsters that are about to fight.
-  const show = [];                                              // per team: { team, x, z, fuses, lined, ... }
-  let mergeLen = 0;
-  const sameKind = (a, b) => (a.base || a).dex === (b.base || b).dex && a.height === b.height && (a.stars || 0) === (b.stars || 0);
+  // ---- the muster. Before the fight each team's six step up by their corner, strongest first. Then the rest of the
+  // collection pours what it is worth into them: sparks stream from the team's stand in the colours of the six
+  // stats, the six swell and glow, and the team's hexagon (on its panel) grows a corner at a time. The bigger the
+  // collection the longer it pours, so the biggest finishes last. Then they walk on: the monsters that lined up are
+  // the very ones that fight.
+  const muster = [];
+  let musterLen = 0;
   plans.forEach((p, k) => {
-    if (!p.merges.length) return;
-    const finals = p.merges.filter((m) => !p.merges.some((o) => o.fromKey === m.toKey)).sort((a, b) => power(b.to) - power(a.to) || a.to.dex - b.to.dex);
-    const fuses = [];
-    for (const m of finals) {
-      const stages = [m]; let prev = p.merges.find((o) => o.toKey === m.fromKey);
-      while (prev) { stages.unshift(prev); prev = p.merges.find((o) => o.toKey === stages[0].fromKey); }       // (the line, earliest stage first)
-      const take = stages.slice(-Math.min(stages.length, SHOW_FUSES - fuses.length));
-      take.forEach((st, i) => fuses.push({ m: st, cont: i > 0, last: i === take.length - 1 }));
-      if (fuses.length >= SHOW_FUSES) break;
-    }
-    const [cx, cz] = CORNERS[k % 4], n = fuses.filter((f) => f.last).length;
-    show.push({ team: k, x: cx * L * 0.19, z: cz * L * 0.19, cx, cz, fuses, n, idx: -1, parts: [], result: null, lined: [], flashed: false, face: Math.atan2(-cx, -cz) });
-    mergeLen = Math.max(mergeLen, MERGE_START + fuses.length * FUSE + MERGE_HOLD);
+    const recs = sim.recs[k];
+    if (!recs.length) return;
+    const [cx, cz] = CORNERS[k % 4], vals = hexValues(p.bonus || [0, 0, 0, 0, 0, 0]), mag = vals.reduce((a, b) => a + b, 0) / 6;
+    const dur = mag > 0.004 ? POUR_MIN + POUR_SPAN * mag : 0;
+    muster.push({ team: k, cx, cz, face: Math.atan2(-cx, -cz), recs, lined: [], vals, mag, dur, done: dur === 0, doneT: 9, tick: 0, pinged: 0, over: false, stand: bench.filter((q) => q.k === k) });
+    musterLen = Math.max(musterLen, POUR_AT + dur + MUSTER_HOLD);
   });
-  const showH = (spec) => clamp(sim.hOf(spec) * 1.7, L * 0.085, L * 0.17);
-  const lineSpot = (c, j) => { const tx = -c.cz * Math.SQRT1_2, tz = c.cx * Math.SQRT1_2, off = (j - (c.n - 1) / 2) * L * 0.105; return [c.cx * L * 0.345 + tx * off, c.cz * L * 0.345 + tz * off]; };
+  const leadTeam = muster.some((c) => c.team === myTeam && c.dur > 0) ? myTeam : muster.reduce((a, c) => (!a || c.dur > a.dur ? c : a), null)?.team;      // whose pour is heard
+  // two rows of three across the corner, the strongest three in front
+  const lineSpot = (c, j) => {
+    const n = c.recs.length, front = Math.min(3, n), row = j < front ? 0 : 1, inRow = row ? n - front : front, col = row ? j - front : j;
+    const tx = -c.cz * Math.SQRT1_2, tz = c.cx * Math.SQRT1_2, off = (col - (inRow - 1) / 2) * L * 0.125, d = L * (row ? 0.385 : 0.3);
+    return [c.cx * d + tx * off, c.cz * d + tz * off];
+  };
   const newActor = (spec, k) => { const a = buildActor(spec, k); a.root.scale.setScalar(0.0001); a.root.traverse((o) => { if (o.isMesh) o.castShadow = true; }); scene.add(a.root); return a; };
-  function showcase(dt) {
-    for (const c of show) {
-      const t = pt - MERGE_START - c.team * 0.06, tm = teams[c.team];
-      for (const q of c.lined) {                                // the ones already made: hop to their place, then wait there
-        q.t += dt; const g = clamp(q.t / 0.4, 0, 1), e = smooth(g), root = q.actor.root;
-        root.position.set(q.x0 + (q.x - q.x0) * e, Math.sin(g * Math.PI) * q.h * 0.9 + (g >= 1 ? Math.abs(Math.sin((q.t - 0.4) * 6)) * q.h * 0.06 : 0), q.z0 + (q.z - q.z0) * e);
-        root.rotation.y = c.face; root.scale.setScalar(q.h * (1 + (q.h0 / q.h - 1) * (1 - e)));
-        if (g >= 1 && !q.landed) { q.landed = true; fx.puff(q.x, 0.15, q.z, 6, 0xf5efe0, 3, 0.35, 0.4); tone(180, 80, 0.1, 'triangle', 0.08); }
+  const pickStat = (vals) => { let sum = 0; for (const v of vals) sum += v; let r = vr() * sum; for (let i = 0; i < 6; i++) { r -= vals[i]; if (r <= 0) return i; } return 0; };
+  const cornerOf = (g, i) => smooth(clamp((g - i * 0.11) / 0.42, 0, 1));          // how far corner i of a hexagon has grown when the pour is g of the way through
+  function drawHex(c, g) {
+    if (!hud) return;
+    const p = hud.panels[c.team];
+    hexDraw(p.hex, c.vals.map((v, i) => v * cornerOf(g, i)));
+    while (c.pinged < 6 && cornerOf(g, c.pinged) >= 1) { if (c.vals[c.pinged] > 0.01 && g < 1.5) replay(p.icons[c.pinged], 'ping'); c.pinged++; }
+  }
+  function musterStep(dt) {
+    for (const c of muster) {
+      if (c.over) continue;
+      const tm = teams[c.team], mine = c.team === myTeam, t0 = pt - LINE_AT - c.team * 0.05;
+      while (c.lined.length < c.recs.length && t0 >= c.lined.length * LINE_STEP) {            // step up, one at a time
+        const j = c.lined.length, r = c.recs[j], [x, z] = lineSpot(c, j), actor = newActor(r.spec, c.team);
+        actor.play('entrance', { dur: 0.8 });
+        c.lined.push({ actor, rec: r, x, z, h: r.h, t: 0, phase: vr() * 6.28 });
+        fx.puff(x, 0.15, z, 6, 0xf5efe0, 3, 0.35, 0.4); fx.ring(x, z, { r0: 0.3, r1: r.h * 0.8 + 0.9, color: tm.hex, life: 0.32, opacity: 0.9 });
+        for (let i = 0; i < r.stars; i++) fx.star(x + (i - (r.stars - 1) / 2) * r.h * 0.34, r.h * 1.18 + 0.6, z, { size: r.h * 0.18 + 0.32, color: 0xffd23f, five: true, life: Math.max(0.6, musterLen - pt), spin: 0.5, lit: false });
+        const f = 392 * 1.122 ** j; tone(f, f * 1.5, 0.1, 'triangle', mine ? 0.14 : 0.04);
+        if (mine || (myTeam < 0 && c.team === 0)) cry(r.spec, 0.07);
+      }
+      const g = c.dur > 0 ? clamp((pt - POUR_AT) / c.dur, 0, 1) : pt >= POUR_AT ? 1 : 0, pouring = c.dur > 0 && pt >= POUR_AT && !c.done;
+      if (pouring) {
+        excite[c.team] = Math.max(excite[c.team], 0.45 + g * 0.55);
+        if (c.stand.length && c.lined.length) for (let i = 0, n = 2 + Math.round(c.mag * 4); i < n; i++) {
+          const q = c.stand[Math.floor(vr() * c.stand.length)], to = c.lined[Math.floor(vr() * c.lined.length)];
+          fx.spark(q.x, q.s * 1.4, q.z, (to.x - q.x) / 0.45, 8.1 + to.h * 1.2, (to.z - q.z) / 0.45, STAT_HEX[pickStat(c.vals)], (0.3 + vr() * 0.14) * K, 0.45, -36, true);
+        }
+        if (c.team === leadTeam && (c.tick -= dt) <= 0) { c.tick = 0.1; tone(420 + 880 * g, 450 + 940 * g, 0.06, 'triangle', 0.07); }
+        if (g >= 1) {                                           // full: the six flare, and roar
+          c.done = true; c.doneT = 0;
+          let mx = 0, mz = 0;
+          for (const q of c.lined) { mx += q.x / c.lined.length; mz += q.z / c.lined.length; fx.burst(q.x, q.h * 0.6, q.z, 7, 0xffe169, 5, 0.28 * K, 0.5); q.actor.play('entrance', { dur: 0.9 }); }
+          fx.ring(mx, mz, { r0: 1, r1: L * 0.2, color: 0xffe169, life: 0.5, opacity: 0.9 }); fx.ring(mx, mz, { r0: 0.5, r1: L * 0.15, color: tm.hex, life: 0.7, thin: true });
+          const s = mine ? 1 : 0.84, vol = mine ? 0.16 : 0.05; [523, 659, 784, 1047].forEach((f, i) => tone(f * s, f * s * (i === 3 ? 1.5 : 1), i === 3 ? 0.3 : 0.09, 'triangle', vol, i * 0.07));
+          if (mine || c.team === leadTeam) bump(0.14);
+          if (hud) { replay(hud.panels[c.team].root, 'ar-bump'); replay(hud.panels[c.team].hex.parentNode, 'ar-hexdone'); }
+        }
+      }
+      c.doneT += dt;
+      drawHex(c, g);
+      const flare = c.dur > 0 && c.doneT < 0.4 ? Math.sin(c.doneT / 0.4 * Math.PI) * 0.7 : 0;
+      for (const q of c.lined) {
+        q.t += dt;
+        const root = q.actor.root, up = clamp(q.t / 0.4, 0, 1), glow = pouring ? 0.1 + 0.4 * g * (0.6 + 0.4 * Math.sin(T * 18 + q.phase)) : flare;
+        root.position.set(q.x, Math.sin(up * Math.PI) * q.h * 0.5 + (up >= 1 ? Math.abs(Math.sin((q.t - 0.4) * 5 + q.phase)) * q.h * (0.04 + (pouring ? 0.06 * g : 0)) : 0), q.z);
+        root.rotation.y = c.face;
+        root.scale.setScalar(q.h * backOut(clamp(q.t / 0.3, 0, 1)) * (1 + (pouring ? 0.1 * g : 0) + flare * 0.22));
+        q.actor.flash(glow, pouring ? 0xffe169 : 0xffffff);
         q.actor.update(dt);
       }
-      if (t < 0 || c.idx >= c.fuses.length) continue;
-      if (t >= c.fuses.length * FUSE) { if (c.result) lineUp(c, c.fuses[c.fuses.length - 1].m.to); c.idx = c.fuses.length; continue; }
-      const fi = Math.min(c.fuses.length - 1, Math.floor(t / FUSE)), f = c.fuses[fi], st = f.m, k = clamp((t - fi * FUSE) / FUSE, 0, 1);
-      if (fi !== c.idx) {                                       // the next three (when a line carries on, the one just made is the first of them)
-        c.idx = fi; c.flashed = false;
-        if (c.result && !f.cont) lineUp(c, c.fuses[fi - 1].m.to);
-        for (const a of c.parts) freeActor(a.actor);
-        c.parts = [];
-        for (let i = 0; i < 3; i++) { const keep = i === 0 && f.cont && c.result; c.parts.push({ actor: keep ? c.result : newActor(st.from, c.team), a: i * 2.094 + fi * 0.7 + c.team, kept: !!keep }); }
-        c.result = null;
-        tone(330 + fi * 110, 520 + fi * 110, FUSE * 0.5, 'triangle', 0.06);
-      }
-      const h = showH(st.from), R = h * 0.8 + 0.9;
-      if (k < GATHER) {                                         // gather: pop in on a ring, then round and round, faster and tighter
-        const g = k / GATHER, r = R * (1 - g * g * g * 0.94), spin = g * g * 8.5;
-        c.parts.forEach((p) => {
-          const a = p.a + spin, root = p.actor.root, popK = p.kept ? 1 : clamp(g * 4.5, 0, 1);
-          root.position.set(c.x + Math.cos(a) * r, h * 0.35 * g * g + Math.abs(Math.sin(g * 14 + p.a)) * h * 0.08 * (1 - g), c.z + Math.sin(a) * r);
-          root.rotation.y = -a + Math.PI + g * 3; root.scale.setScalar(h * backOut(popK) * (1 - g * g * g * 0.4)); p.actor.update(dt); p.actor.flash(g * g * 0.8, 0xffffff);
-          if (vr() < 0.35 + g * 0.6) fx.spark(root.position.x, root.position.y + h * 0.5, root.position.z, 0, 0.6, 0, vr() < 0.6 ? tm.hex : 0xffffff, (0.25 + g * 0.2) * K, 0.4, 0, true);
-        });
-        if (g > 0.25) fx.spark(c.x + (vr() - 0.5) * R, 0.1, c.z + (vr() - 0.5) * R, 0, 4 + g * 6, 0, 0xffffff, 0.22 * K, 0.35, 0, true);
-      } else {
-        const hh = showH(st.to);
-        if (!c.flashed) {                                       // they meet: a flash, and one stands where three were
-          c.flashed = true;
-          for (const p of c.parts) freeActor(p.actor);
-          c.parts = [];
-          fx.flash(c.x, hh * 0.55, c.z, { r: hh * 0.75 + 0.5, color: 0xffffff, life: 0.22, opacity: 0.85 });
-          fx.ring(c.x, c.z, { r0: 0.4, r1: hh * 1.5 + 2.2, color: tm.hex, life: 0.5, opacity: 1 }); fx.ring(c.x, c.z, { r0: 0.2, r1: hh * 1.1 + 1.4, color: 0xffffff, life: 0.32, thin: true });
-          fx.burst(c.x, hh * 0.6, c.z, 22, 0xffffff, 8, 0.36 * K, 0.6); fx.burst(c.x, hh * 0.6, c.z, 14, tm.hex, 6.5, 0.42 * K, 0.75);
-          for (let i = 0; i < 10; i++) { const a = i / 10 * 6.283; fx.spark(c.x + Math.cos(a) * hh * 0.5, 0.2, c.z + Math.sin(a) * hh * 0.5, Math.cos(a) * 2, 7 + vr() * 4, Math.sin(a) * 2, 0xffe169, 0.3 * K, 0.7, -9, true); }
-          if (st.stars) for (let i = 0; i < st.stars; i++) fx.star(c.x + (i - (st.stars - 1) / 2) * hh * 0.42, hh * 1.25 + 0.7, c.z, { size: hh * 0.24 + 0.45, color: 0xffd23f, five: true, life: FUSE * (1 - GATHER) + 0.25, spin: 0.5, lit: false });
-          c.result = newActor(st.to, c.team); c.result.play('entrance', { dur: 0.8 });
-          const fq = 523 * 1.19 ** fi; tone(fq, fq, 0.1, 'triangle', 0.16); tone(fq * 1.26, fq * 1.26, 0.1, 'triangle', 0.16, 0.08); tone(fq * 1.5, fq * 2, 0.3, 'triangle', 0.18, 0.16);
-          cry(st.to, 0.08); bump(0.1);
-          if (hud) replay(hud.panels[c.team].root, 'ar-bump');
-        }
-        const g = (k - GATHER) / (1 - GATHER), root = c.result.root;
-        root.position.set(c.x, Math.abs(Math.sin(Math.min(1, g * 1.5) * Math.PI)) * hh * 0.3, c.z); root.rotation.y = c.face + (1 - smooth(Math.min(1, g * 1.6))) * 6.283; root.scale.setScalar(hh * backOut(clamp(g * 2.6, 0, 1))); c.result.update(dt);
-      }
     }
   }
-  function lineUp(c, spec) {                                    // the one just made takes its place by the corner
-    if (!c.result) return;
-    const [x, z] = lineSpot(c, c.lined.length);
-    c.lined.push({ actor: c.result, spec, x0: c.x, z0: c.z, x, z, t: 0, h0: showH(spec), h: sim.hOf(spec), landed: false });
-    c.result = null;
-  }
-  const leaving = [];                                           // made in the showcase but not on the floor at the start: up and away
-  function endShowcase(adoptThem) {
-    for (const c of show) {
-      for (const p of c.parts) freeActor(p.actor);
-      c.parts = [];
-      if (c.result) lineUp(c, c.fuses[Math.max(0, Math.min(c.idx, c.fuses.length - 1))].m.to);
+  // The muster is over: whoever lined up is handed to the fight as the monster they are (adopt), or let go.
+  function endMuster(adopt) {
+    for (const c of muster) {
+      if (c.over) continue;
+      c.over = true; drawHex(c, 9);
       for (const q of c.lined) {
-        const u = adoptThem && sim.field.find((o) => o.team === c.team && !o.v && sameKind(o.spec, q.spec));
-        if (u) { const v = ensure(u, q.actor), p = q.actor.root.position; v.pop = 1; v.hop = { x: p.x, z: p.z, t: 0, dur: 0.5 }; }
-        else if (adoptThem) leaving.push({ actor: q.actor, t: 0, h: q.h, x: q.x, z: q.z, team: c.team });
+        const u = q.rec.unit;
+        if (adopt && u && !u.v) { const v = ensure(u, q.actor), p = q.actor.root.position; q.actor.flash(0); v.pop = 1; v.hop = { x: p.x, z: p.z, t: 0, dur: 0.5 }; }
         else freeActor(q.actor);
       }
-      c.lined = []; c.idx = c.fuses.length;
-    }
-  }
-  function drawLeaving(dt) {
-    for (let i = leaving.length - 1; i >= 0; i--) {
-      const q = leaving[i]; q.t += dt; const g = clamp(q.t / 0.35, 0, 1), root = q.actor.root;
-      root.position.y = g * g * q.h * 4; root.scale.setScalar(q.h * (1 - g) + 0.0001);
-      if (vr() < 0.8) fx.spark(q.x + (vr() - 0.5) * q.h, root.position.y + vr() * q.h, q.z + (vr() - 0.5) * q.h, 0, 6, 0, vr() < 0.5 ? teams[q.team].hex : 0xffffff, 0.3 * K, 0.4, 0, true);
-      if (g >= 1) { freeActor(q.actor); leaving.splice(i, 1); }
+      c.lined = [];
     }
   }
 
   // ---- state
-  let phase = total ? (mergeLen > 0 ? 'merge' : 'drop') : 'done', pt = 0, countN = -1, finished = !total, cheering = !total, hudT = 0, lowTick = 99;
+  let phase = total ? (muster.length ? 'muster' : 'drop') : 'done', pt = 0, countN = -1, finished = !total, cheering = !total, hudT = 0, lowTick = 99;
   const cam = { x: 0, z: 0, f: -0.42 };                         // where the camera has drifted to: a slide over the floor, and how far in (it opens from high up and settles)
   const winner = () => sim.winner;
 
@@ -699,16 +683,16 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
   if (HAS_DOM) {
     injectStyle();
     const root = el('div', 'ar-root', document.body);
+    if (!document.getElementById('ar-hex-style')) { const st = el('style', '', document.head); st.id = 'ar-hex-style'; st.textContent = HEX_STYLE; }
     hud = { root, panels: [] };
     teams.forEach((tm, k) => {
-      const p = el('div', `ar-team ar-pill ar-c${k % 4}${isMe(tm) ? ' ar-me' : ''}`, root), plan = plans[k];
+      const p = el('div', `ar-team ar-pill ar-c${k % 4}${isMe(tm) ? ' ar-me' : ''}`, root);
       el('div', 'ar-tname', p, `<i class="ar-dot" style="background:${tm.css}"></i>${teamLabel(tm)}<span class="ar-out">OUT</span><span class="ar-ballx" title="ball lost"></span>`);
       const fill = el('i', '', el('div', 'ar-hp', p)); fill.style.background = tm.css;
       const pips = el('div', 'ar-pips', p), list = [];
       for (let i = 0; i < sim.recs[k].length; i++) { const d = el('i', 'ar-pip', pips); d.style.background = tm.css; list.push({ e: d, s: '' }); }
-      if (plan.bench > 0) el('span', 'ar-bench', pips, `+${plan.bench}`).title = `${plan.bench} more back them from the bench: +${Math.round((plan.backing - 1) * 100)}% health and damage`;
-      const tally = el('div', 'ar-tally', p, plan.before > plan.after ? `<b>${plan.before}</b><span class="ar-tri"><i></i><i></i><i></i></span><b class="ar-to">${plan.after}</b>` : `<b>${plan.before}</b>`);
-      hud.panels.push({ root: p, fill, pips: list, tally, n: tally.firstChild, w: -1, bench: plan.bench });
+      const hexBox = el('div', 'ar-hex', p, hexSvg());          // what the rest of the collection adds: it grows in the muster, and stays on the panel
+      hud.panels.push({ root: p, fill, pips: list, hex: hexBox.firstChild, icons: [...hexBox.querySelectorAll('.hx-ico')], w: -1 });
       if (!sim.recs[k].length) p.classList.add('ar-isout');
     });
     const top = el('div', 'ar-top', root);
@@ -718,7 +702,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     hud.skip = el('div', 'ar-pill ar-skip', root, 'Hold Enter to skip<i></i>'); if (noSkip) hud.skip.style.display = 'none';
     hud.skipFill = hud.skip.lastChild;
     if (myTeam >= 0) hud.keys = el('div', 'ar-pill ar-keys', root, '<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> roll <span></span> <kbd>Shift</kbd> dash');      // gone after the first dash
-    if (phase !== 'merge') root.classList.add('ar-fighting');
+    if (phase !== 'muster') root.classList.add('ar-fighting');
   }
   function big(text, anim, small) { if (!hud) return; hud.big.textContent = text; hud.big.classList.toggle('ar-small', !!small); hud.big.classList.remove('ar-punch', 'ar-stay'); replay(hud.big, anim); }
   function pipFlash(k) { if (hud) replay(hud.panels[k].root, 'ar-bump'); }
@@ -850,19 +834,15 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
       if (myTeam >= 0 && sim.balls[myTeam].gone && phase === 'fight' && input) { const st = input(myTeam); if (st && st.dash && excite[myTeam] < 0.5) { excite[myTeam] = 1; tone(660, 990, 0.12, 'triangle', 0.1); tone(990, 1320, 0.14, 'triangle', 0.1, 0.1); } }
       for (let i = 0; i < bench.length; i++) { const q = bench[i], e = excite[q.k], hop = Math.abs(Math.sin(T * (4 + e * 5) + q.phase)) * q.s * (0.12 + e * 0.9); m4.makeScale(q.s, q.s * 1.2, q.s).setPosition(q.x, 0.06 + q.s * 0.6 + hop, q.z); crowd.setMatrixAt(i, m4); }
       crowd.instanceMatrix.needsUpdate = true;
-      if (phase === 'drop' && pt > 0.25 && pt < 1.6 && sim.field.length) for (let j = 0; j < 3; j++) {            // their backing, sent to the fighters as they land
-        const q = bench[Math.floor(vr() * bench.length)], mates = sim.field.filter((u) => u.team === q.k), u = mates[Math.floor(vr() * mates.length)];
-        if (u) fx.spark(q.x, q.s * 1.4, q.z, (u.x - q.x) / 0.5, 7, (u.z - q.z) / 0.5, vr() < 0.5 ? teams[q.k].hex : 0xffe169, 0.34 * K, 0.5, -28, true);
-      }
     }
     for (const m of [ringMesh, auraMesh, barBg, barLag, barFill, barCharge, starMesh, markMesh]) { m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true; }
-    drawDying(fdt); drawLeaving(dt);
+    drawDying(fdt);
     for (let i = timed.length - 1; i >= 0; i--) { timed[i].t -= fdt; if (timed[i].t <= 0) { timed[i].h.release(0.2); timed.splice(i, 1); } }
     if (fight && live) drawFlying(fdt);
     // balls
     for (const w of ballViews) {
       const b = w.b, sp = Math.hypot(b.vx, b.vz), R = b.R, tm = teams[b.team];
-      const dropIn = phase === 'merge' ? 0 : phase === 'drop' ? clamp((pt - 0.5 - b.team * 0.12) / 0.9, 0, 1) : 1;
+      const dropIn = phase === 'muster' ? 0 : phase === 'drop' ? clamp((pt - 0.15 - b.team * 0.1) / 0.9, 0, 1) : 1;
       if (w.fallen) {                                           // over the edge: it keeps its speed and drops out of the world
         w.vy -= 32 * fdt; w.y += w.vy * fdt; w.fx += b.vx * fdt; w.fz += b.vz * fdt;
         w.group.position.set(w.fx, w.y, w.fz); w.roll.scale.setScalar(R);
@@ -917,7 +897,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
         gx = clamp((x0 + x1) / 2, -half * 0.6, half * 0.6) * pan; gz = clamp((z0 + z1) / 2, -half * 0.6, half * 0.6) * pan;
       }
     }
-    const ck = Math.min(1, dt * (phase === 'finish' && pt < FREEZE ? 4 : gf < cam.f ? 2.2 : phase === 'merge' || phase === 'drop' ? 1.6 : 0.7));      // quick to pull back, slow to close in
+    const ck = Math.min(1, dt * (phase === 'finish' && pt < FREEZE ? 4 : gf < cam.f ? 2.2 : phase === 'muster' || phase === 'drop' ? 1.6 : 0.7));      // quick to pull back, slow to close in
     cam.x += (gx - cam.x) * ck; cam.z += (gz - cam.z) * ck; cam.f += (gf - cam.f) * ck;
     camera.position.copy(camBase); camera.position.x += cam.x; camera.position.z += cam.z; camera.position.addScaledVector(camDir, cam.f);
     camera.position.x += (vr() - 0.5) * shake * 0.7; camera.position.y += (vr() - 0.5) * shake * 0.7;
@@ -941,7 +921,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     for (const t of timed) t.h.release(0.2); timed.length = 0;
   }
   function beginDrop() {
-    phase = 'drop'; pt = 0; endShowcase(true);
+    phase = 'drop'; pt = 0; endMuster(true);
     if (hud) hud.root.classList.add('ar-fighting');
     const order = sim.field.slice().sort((a, b) => a.team - b.team || b.value - a.value); let k = -1, i = 0;
     for (const u of order) { if (u.team !== k) { k = u.team; i = 0; } if (u.v) continue; const v = ensure(u); v.fall = 0; v.delay = 0.2 + i++ * 0.08 + u.team * 0.05; v.fallDur = DROP_FALL; }
@@ -962,7 +942,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
       if (destroyed || finished) return;
       T += dt; pt += dt; sndBudget = Math.min(3, sndBudget + dt * 14);
       let fdt = dt;
-      if (phase === 'merge') { showcase(dt); if (pt >= mergeLen) beginDrop(); }
+      if (phase === 'muster') { musterStep(dt); if (pt >= musterLen) beginDrop(); }
       else if (phase === 'drop') { if (pt >= DROP_PHASE) { phase = 'countdown'; pt = 0; countN = -1; } }
       if (phase === 'countdown') {                              // 3, 2, 1, GO! Nothing moves until GO
         const c = Math.floor(pt / COUNT_STEP);
@@ -984,12 +964,12 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     },
     resize: resizeView,
     skipHold(f) { if (hud && hud.skipF !== f) { hud.skipF = f; hud.skipFill.style.width = (clamp(f, 0, 1) * 100).toFixed(0) + '%'; } },      // how far through the hold-to-skip
-    status() { const st = sim.status(); st.forEach((s, k) => { s.brought = plans[k].before; s.merged = plans[k].after; s.bench = plans[k].bench; }); return st; },
+    status() { const st = sim.status(); st.forEach((s, k) => { s.brought = plans[k].before; s.merged = plans[k].after; s.spares = plans[k].spares; }); return st; },
     result() { return sim.result(); },
     skip() {                                                    // play the rest out instantly: 30 Hz, every ball CPU-driven, no effects
       if (destroyed || finished || noSkip) return;                // (a multiplayer fight is stepped by its host: skipping one copy would part it from the rest)
       quiet = true; fx.quiet = true; sim.auto = true;
-      endShowcase(false); for (const q of leaving) freeActor(q.actor); leaving.length = 0;
+      endMuster(false);
       for (let i = 0; i < 9000 && !sim.finished; i++) { sim.step(1 / 30); sim.events.length = 0; }
       for (const d of dying) freeActor(d.v.actor); dying.length = 0;
       for (const v of views.slice()) { if (!v.u.alive) { forget(v); freeActor(v.actor); } else { v.fall = -1; v.pop = 1; v.delay = 0; v.hop = null; dropTele(v); } }
@@ -1003,7 +983,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     destroy() {
       if (destroyed) return; destroyed = true;
       if (hud) { hud.root.remove(); hud = null; }
-      endShowcase(false);
+      endMuster(false);
       for (const a of [...actors]) freeActor(a);
       fx.dispose();
       for (const m of mats.values()) m.dispose(); for (const o of owned) o.dispose();

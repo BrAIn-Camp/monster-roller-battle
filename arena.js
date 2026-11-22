@@ -76,15 +76,15 @@ export function createWheel({ arenas = ARENAS, pickIndex = 0, teams = [], plans 
       ctx.beginPath(); ctx.arc(C, C, 46, 0, Math.PI * 2); ctx.fillStyle = '#ffe169'; ctx.fill(); ctx.lineWidth = 6; ctx.strokeStyle = '#2b2540'; ctx.stroke();
       ctx.beginPath(); ctx.arc(C, C, R, 0, Math.PI * 2); ctx.lineWidth = 10; ctx.stroke();
     }
-    // per team: what it brought, what that merges into, and how many of those the arena favours
-    const fighters = teams.map((tm, k) => (plans && plans[k] ? plans[k].roster.map((r) => r.spec) : tm.army || []));
+    // per team: its six, as dots: a star for each one this arena favours
+    const fighters = teams.map((tm, k) => (plans && plans[k] ? plans[k].roster.map((r) => r.spec) : (tm.army || []).slice(0, 6)));
     const counts = fighters.map((list) => favouredCount(arena, list)), top = Math.max(0, ...counts);
     card = el('div', 'ar-card', root,
       `<h4>The arena is</h4><h3>${arena.name}</h3><p>${arena.blurb}</p><div>Favoured: ${arena.types.map(chip).join('')}</div><table>` +
       teams.map((tm, k) => {
-        const brought = (tm.army || []).length, n = plans && plans[k] ? plans[k].after : brought, merged = n < brought;
-        return `<tr><td><i class="ar-dot" style="background:${tm.css}"></i>${teamLabel(tm)}</td><td><b>${brought}</b>${merged ? `<span class="ar-tri"><i></i><i></i><i></i></span><b>${n}</b>` : ''}</td>` +
-          `<td>★ ${counts[k]} favoured${top > 0 && counts[k] === top ? '<span class="ar-lucky">Lucky!</span>' : ''}</td></tr>`;
+        const six = fighters[k].map((sp) => (isFavoured(arena, sp) ? '<b>★</b>' : `<i style="background:${tm.css}"></i>`)).join('');
+        return `<tr><td><i class="ar-dot" style="background:${tm.css}"></i>${teamLabel(tm)}</td><td><span class="ar-six">${six}</span></td>` +
+          `<td>${top > 0 && counts[k] === top ? '<span class="ar-lucky">Lucky!</span>' : ''}</td></tr>`;
       }).join('') + '</table>');
   }
   return {

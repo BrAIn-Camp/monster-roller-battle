@@ -46,7 +46,7 @@ const STYLE = `
 .ar-flag small{display:block;font-size:.72em;font-weight:700}
 .ar-pop{position:absolute;transform:translate(-50%,-50%);color:#fff;font-size:.95em;padding:.05em .6em;border-radius:.7em;border:2px solid #2b2540;white-space:nowrap;opacity:0;text-shadow:0 1px 0 rgba(0,0,0,.35)}
 .ar-pop.ar-on{animation:ar-rise 1.2s ease-out both}
-.ar-skip{position:absolute;right:1em;bottom:7.4em;font-size:.8em;background:#bfe7ff;overflow:hidden;opacity:.85}
+.ar-skip{position:absolute;right:15.5em;bottom:1em;font-size:.8em;background:#bfe7ff;overflow:hidden;opacity:.85}
 .ar-skip i{position:absolute;left:0;bottom:0;height:.28em;width:0;background:#2b2540}
 .ar-team{width:12.5em}
 .ar-tname{white-space:nowrap}
@@ -67,6 +67,16 @@ const STYLE = `
 .ar-pip.ar-out{background:#2b2540!important;opacity:.3;transform:scale(.72)}
 .ar-pip.ar-sc{background:#fff!important}
 .ar-bench{font-size:.68em;line-height:1;align-self:center;margin-left:.2em;padding:.12em .4em;border-radius:.6em;background:#2b2540;color:#fff;opacity:.75}
+.ar-hex{width:9.5em;margin:.25em auto .1em}
+.ar-hex svg{display:block;width:100%;overflow:visible}
+.ar-fighting .ar-hex{position:absolute;right:.5em;bottom:.3em;width:2.6em;margin:0}
+.ar-fighting .ar-hex .hx-ico,.ar-fighting .ar-hex .hx-guide{display:none}
+.ar-fighting .ar-pips{margin-right:2.9em;min-height:1.7em;align-items:center}
+.ar-hexdone svg{animation:ar-hexdone .6s ease-out}
+@keyframes ar-hexdone{0%{filter:none;transform:scale(1)}30%{filter:brightness(1.35) drop-shadow(0 0 .5em #ffe169);transform:scale(1.13)}100%{filter:none;transform:scale(1)}}
+.ar-six{display:inline-flex;gap:.22em;align-items:center;vertical-align:middle}
+.ar-six i{width:.8em;height:.8em;border-radius:50%;border:2px solid #2b2540}
+.ar-six b{font-size:1.15em;line-height:.8;color:#ffd23f;-webkit-text-stroke:3px #2b2540;paint-order:stroke fill}
 .ar-bump{animation:ar-bump .3s ease-out}
 @keyframes ar-bump{0%{transform:scale(1)}40%{transform:scale(1.08)}100%{transform:scale(1)}}
 .ar-ballx{display:none;float:right;width:1em;height:1em;border-radius:50%;border:2px solid #2b2540;margin-left:.3em;background:linear-gradient(135deg,transparent 42%,#c22 42%,#c22 58%,transparent 58%),#ddd}

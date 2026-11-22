@@ -32,11 +32,12 @@ const GROW = 3;           // d^3 += GROW * size^3 * mass per pickup: tuned so a 
 const MAX_ON_BALL = 300;  // the newest this-many things are drawn on a ball; older ones still count and still fight
 // CPU difficulty (chosen on the menu). speed = share of the player's top speed; dash = how keenly they use the charge dash
 // (0 = never); band = how much a CPU that is ahead of the player eases off (and one behind hurries); think = how slowly they
-// pick their next target (1 = normal).
+// pick their next target (1 = normal); hunt = how much nearer a critter seems to them when it is one they already
+// carry one or two of, so that it would bring a merge closer (1 = they do not care, and take whatever is nearest).
 const DIFFS = {
-  easy:   { label: 'Easy',   speed: 0.78, dash: 0,   band: 0.3,  floor: 0.6,  think: 1.6 },
-  normal: { label: 'Normal', speed: 0.94, dash: 0.6, band: 0.18, floor: 0.75, think: 1 },
-  hard:   { label: 'Hard',   speed: 1.04, dash: 1.5, band: 0.06, floor: 0.92, think: 0.65 },
+  easy:   { label: 'Easy',   speed: 0.78, dash: 0,   band: 0.3,  floor: 0.6,  think: 1.6,  hunt: 1 },
+  normal: { label: 'Normal', speed: 0.94, dash: 0.6, band: 0.18, floor: 0.75, think: 1,    hunt: 0.7 },
+  hard:   { label: 'Hard',   speed: 1.04, dash: 1.5, band: 0.06, floor: 0.92, think: 0.65, hunt: 0.45 },
 };
 let DIFF = DIFFS.normal, CPU_SPEED = DIFF.speed;
 // The four teams. Team 0 is the player. A team's critters are tinted in its colour once rolled up.
@@ -1493,10 +1494,13 @@ function updateRivals(dt, frozen) {
     else if (R.retarget <= 0) {
       R.retarget = (0.45 + rand() * 0.3) * DIFF.think;                 // CPUs dither: they only look for a new target every second or two
       let best = null, bd = 1e9;
+      // Only a team's best six fight, and three of a kind merge into something stronger: so a CPU keeps count of
+      // what it carries and goes a little out of its way for a critter that would bring a merge closer.
+      if (DIFF.hunt < 1 && (R.wantT = (R.wantT || 0) - 1) <= 0) { R.wantT = 4; R.want = new Map(); for (const sp of R.army) { const dex = baseOf(sp).dex; R.want.set(dex, (R.want.get(dex) || 0) + 1); } }
       for (const o of S.objects) {
         if (o.fly || o.cool > 0 || o.noPick || o.size > R.d * pickRatio(R) || o.size < R.d * 0.08 || R.avoid.has(o)) continue;
         const p = o.group.position, worth = 0.35 + o.size / (R.d * PICK_RATIO);       // bigger pickups are worth a longer trip
-        const d = Math.hypot(p.x - R.x, p.z - R.z) * (o.kind === 'creature' ? 0.6 : 1) / worth;
+        const d = Math.hypot(p.x - R.x, p.z - R.z) * (o.kind === 'creature' ? 0.6 * (DIFF.hunt < 1 && R.want && R.want.get(baseOf(o.spec).dex) % 3 ? DIFF.hunt : 1) : 1) / worth;
         if (d < bd && d < (60 + R.d * 6) / worth && groundAt(p.x, p.z) - g0 < R.d * 0.4 && (R.d >= SEA_MIN_D || MODS.iced || T.waterAt(p.x, p.z) !== 2)) { bd = d; best = o; }
       }
       R.target = best; if (best) R.chasing = best;
@@ -1602,7 +1606,7 @@ function planBattle(teams, arena) {
   S.battlePlans = null;
   if (!ARENA || !ARENA.planTeams || !arena) return;
   const plans = ARENA.planTeams(teams, arena, specOf), dexes = new Set();
-  for (const p of plans) { for (const r of p.roster) dexes.add(baseOf(r.spec).dex); for (const m of p.merges) { dexes.add(baseOf(m.from).dex); dexes.add(baseOf(m.to).dex); } }
+  for (const p of plans) for (const r of p.roster) dexes.add(baseOf(r.spec).dex);
   LOCAL.preload([...dexes]);
   S.battlePlans = { arena, plans };
 }
@@ -1712,8 +1716,10 @@ S.skipBattle = skipBattle;
 function battleRows() {
   const res = S.battleResult, st = S.battleStatus;
   if (!res || !st) return '';
+  const plans = S.battlePlans && S.battlePlans.plans;          // each team's six, as faces
+  const sixFaces = (k) => (plans && plans[k] ? `<span class="six">${plans[k].roster.map((r) => `<img alt="" title="${r.spec.name}" src="${faceOf(r.spec)}">`).join('')}</span>` : '');
   let h = S.battleArena ? `<tr><td>Arena</td><td>${S.battleArena.name} (favours ${S.battleArena.types.join(', ')})</td></tr>` : '';
-  h += S.battleTeams.map((tm, k) => `<tr><td><span class="dot" style="background:${tm.css}"></span> ${k === S.team ? 'You' : tm.name + (tm.human ? '' : ' (CPU)')}${res.winner === k ? ' ★' : ''}</td><td>${st[k].brought !== undefined ? `${st[k].brought} critter${st[k].brought === 1 ? '' : 's'}${st[k].merged < st[k].brought ? ` merged into ${st[k].merged}` : ''}, ${st[k].alive} left standing${st[k].ballOut ? ', ball lost' : ''}` : `${st[k].all} fought, ${st[k].alive} left standing`}</td></tr>`).join('');
+  h += S.battleTeams.map((tm, k) => `<tr><td><span class="dot" style="background:${tm.css}"></span> ${k === S.team ? 'You' : tm.name + (tm.human ? '' : ' (CPU)')}${res.winner === k ? ' ★' : ''}</td><td>${st[k].brought !== undefined ? `${sixFaces(k)}${st[k].brought} critter${st[k].brought === 1 ? '' : 's'} rolled up, ${st[k].alive} of ${st[k].all} left standing${st[k].ballOut ? ', ball lost' : ''}` : `${st[k].all} fought, ${st[k].alive} left standing`}</td></tr>`).join('');
   if (res.rallies && res.ringOuts) { const me = S.team, n = (v, one, many) => `${v} ${v === 1 ? one : many}`; h += `<tr><td>Your ball in the arena</td><td>${n(res.ringOuts[me], 'monster', 'monsters')} rammed off the edge, ${n(res.rallies[me], 'rally', 'rallies')}</td></tr>`; }
   if (res.mvp) h += `<tr><td>Top fighter</td><td>${res.mvp.name} (${res.mvp.team === S.team ? 'yours' : TEAMS[res.mvp.team].name}), ${res.mvp.kills} knock-outs</td></tr>`;
   if (res.timedOut) h += '<tr><td colspan="2">Decided on remaining health after the time limit.</td></tr>';
