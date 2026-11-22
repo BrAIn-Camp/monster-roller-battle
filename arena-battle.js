@@ -691,7 +691,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
 
   // ---- state
   let phase = total ? (mergeLen > 0 ? 'merge' : 'drop') : 'done', pt = 0, countN = -1, finished = !total, cheering = !total, hudT = 0, lowTick = 99;
-  const cam = { x: 0, z: 0, f: 0 };                             // where the camera has drifted to: a slide over the floor, and how far in
+  const cam = { x: 0, z: 0, f: -0.42 };                         // where the camera has drifted to: a slide over the floor, and how far in (it opens from high up and settles)
   const winner = () => sim.winner;
 
   // ---- HUD (DOM). Everything is cached so nothing is rewritten unless it changed.
@@ -846,6 +846,8 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     guideMesh.count = ng; guideMesh.instanceMatrix.needsUpdate = true;
     if (bench.length) {                                         // the stands: a restless crowd, on its feet when its team scores or wins
       for (let k = 0; k < NT; k++) excite[k] = Math.max(k === cheerTeam ? 1 : 0, excite[k] - dt * 0.9);
+      // a player whose ball has gone can still get their stand on its feet with the dash button (it changes nothing in the fight)
+      if (myTeam >= 0 && sim.balls[myTeam].gone && phase === 'fight' && input) { const st = input(myTeam); if (st && st.dash && excite[myTeam] < 0.5) { excite[myTeam] = 1; tone(660, 990, 0.12, 'triangle', 0.1); tone(990, 1320, 0.14, 'triangle', 0.1, 0.1); } }
       for (let i = 0; i < bench.length; i++) { const q = bench[i], e = excite[q.k], hop = Math.abs(Math.sin(T * (4 + e * 5) + q.phase)) * q.s * (0.12 + e * 0.9); m4.makeScale(q.s, q.s * 1.2, q.s).setPosition(q.x, 0.06 + q.s * 0.6 + hop, q.z); crowd.setMatrixAt(i, m4); }
       crowd.instanceMatrix.needsUpdate = true;
       if (phase === 'drop' && pt > 0.25 && pt < 1.6 && sim.field.length) for (let j = 0; j < 3; j++) {            // their backing, sent to the fighters as they land
@@ -915,7 +917,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
         gx = clamp((x0 + x1) / 2, -half * 0.6, half * 0.6) * pan; gz = clamp((z0 + z1) / 2, -half * 0.6, half * 0.6) * pan;
       }
     }
-    const ck = Math.min(1, dt * (phase === 'finish' && pt < FREEZE ? 4 : gf < cam.f ? 2.2 : 0.7));      // quick to pull back, slow to close in
+    const ck = Math.min(1, dt * (phase === 'finish' && pt < FREEZE ? 4 : gf < cam.f ? 2.2 : phase === 'merge' || phase === 'drop' ? 1.6 : 0.7));      // quick to pull back, slow to close in
     cam.x += (gx - cam.x) * ck; cam.z += (gz - cam.z) * ck; cam.f += (gf - cam.f) * ck;
     camera.position.copy(camBase); camera.position.x += cam.x; camera.position.z += cam.z; camera.position.addScaledVector(camDir, cam.f);
     camera.position.x += (vr() - 0.5) * shake * 0.7; camera.position.y += (vr() - 0.5) * shake * 0.7;
