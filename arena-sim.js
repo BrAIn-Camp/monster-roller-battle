@@ -12,13 +12,13 @@ import { STATS, TYPE_CHART } from './critters/battle-data.js';
 
 // ---------- tuning (one object, so the balance test can vary it) ----------
 export const TUNE = {
-  FIELD_CAP: 12,            // monsters per team on the floor at once
-  ROSTER_CAP: 20,           // and in total: the rest back them from the bench (arena-merge.js)
+  FIELD_CAP: 6,             // monsters per team: the six (arena-merge.js). Both the same: nobody waits in reserve,
+  ROSTER_CAP: 6,            // and the rest of a collection is in the six's stats rather than on the floor
   RAMP_AT: 45,              // seconds before every hit starts to climb
   RAMP_RATE: 0.07,          // damage gains this much per second after that
   RAMP_KB: 0.6,             // and knockback this share of it
   TIME_HARD: 150,           // a safety net only: decided on health if it somehow lasts this long
-  HP_SCALE: 15, DMG_BASE: 8, DMG_RATIO: 22,
+  HP_SCALE: 22, DMG_BASE: 8, DMG_RATIO: 22,
   FAV_DMG: 1.25, FAV_TAKEN: 0.8, FAV_SPEED: 1.1,       // the edge an arena gives its three favoured types
   REINFORCE_EVERY: 0.8,     // seconds between reserves dropping in at a team's corner
   DROP_TIME: 0.8,           // a reserve cannot be hurt, or act, while it falls in
@@ -26,7 +26,7 @@ export const TUNE = {
   // Drawn heights. A typical monster is H_TARGET of the arena side; others are scaled by the ROOT of how much
   // taller or shorter they really are, within H_MIN..H_MAX times typical. So a sea serpent towers over a mouse,
   // but nothing is a speck and nothing blots out the floor. (Stats still use the real height.)
-  H_TARGET: 0.066, H_MIN: 0.62, H_MAX: 2.4,
+  H_TARGET: 0.085, H_MIN: 0.62, H_MAX: 2.4,
   HIT_DELAY: 0.14,          // a melee swing lands this long after it starts (so the blow meets the animation)
   SHOT_SPEED: 0.62,         // ranged attacks fly this many arena sides per second
   // knockback: metres slid = kb x (KB_FLAT + KB_FRAC x damage share x (1 + KB_WEAK x health lost)) / weight
@@ -64,7 +64,7 @@ function sin(x) {                                     // a polynomial, good to n
 const cos = (x) => sin(x + PI / 2);
 const fade = (x) => 1 / (1 + x * (1 + x * (0.5 + x * (1 / 6 + x / 24))));     // e^-x for the small x of one step
 function cbrt(v) { if (v <= 0) return 0; let g = Math.sqrt(Math.sqrt(v)) + 0.1; for (let i = 0; i < 24; i++) g = (2 * g + v / (g * g)) / 3; return g; }
-const DEF = [50, 50, 50, 50, 50, 50];
+const DEF = [50, 50, 50, 50, 50, 50], NONE = [0, 0, 0, 0, 0, 0];
 export const CORNERS = [[-1, 1], [-1, -1], [1, -1], [1, 1]];          // team 0 bottom-left of the screen, then clockwise
 
 export function typeMult(att, defs) { let m = 1; for (const d of defs) m *= (TYPE_CHART[att] && TYPE_CHART[att][d] !== undefined ? TYPE_CHART[att][d] : 1); return m; }
@@ -100,14 +100,15 @@ export const MOVES = {
 export const moveTypeOf = (spec) => (spec.types[0] === 'normal' && spec.types[1] && MOVES[spec.types[1]] ? spec.types[1] : MOVES[spec.types[0]] ? spec.types[0] : 'normal');
 
 // ---------- setting up ----------
-// teams: [{ roster: [{ spec, stars, boost, value }], backing, ballD, human }]   (roster from arena-merge.js)
+// teams: [{ roster: [{ spec, stars, boost, value }], bonus, ballD, human }]   (roster and bonus from arena-merge.js;
+// bonus is the share the team's spare critters add to each of the six stats, the same for every fighter)
 // rand: the dice. input(team) -> { x, z, dash } for a human-steered ball.
 export function createSim({ arena, teams, rand = Math.random, input = null }) {
   const NT = teams.length, events = [];
   const emit = (e) => { events.push(e); };
 
   // ---- sizes: the arena, and how big everything is drawn in it
-  const recs = teams.map((tm) => (tm.roster || []).slice(0, T.ROSTER_CAP).map((r) => ({ spec: r.spec, stars: r.stars || 0, boost: (r.boost || 1) * (tm.backing || 1), value: r.value, made: r.made || 1, fav: isFavoured(arena, r.spec) })));
+  const recs = teams.map((tm) => (tm.roster || []).slice(0, T.ROSTER_CAP).map((r) => ({ spec: r.spec, stars: r.stars || 0, boost: r.boost || 1, bonus: tm.bonus || NONE, value: r.value, made: r.made || 1, fav: isFavoured(arena, r.spec) })));
   const onStart = recs.map((r) => Math.min(r.length, T.FIELD_CAP));
   const heights = []; let biggest = 0;
   recs.forEach((r) => r.forEach((c) => { heights.push(c.spec.height); biggest = Math.max(biggest, c.spec.height); }));
@@ -118,7 +119,7 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
   const hOf = (spec) => hRef * clamp(Math.sqrt(spec.height / median), T.H_MIN, T.H_MAX);
   const spdK = clamp(L / 40, 0.8, 1.5);
   function unitStats(c) {
-    const b = STATS[c.spec.dex] || DEF, m = Math.sqrt(c.spec.height), special = b[3] > b[1];
+    const b0 = STATS[c.spec.dex] || DEF, b = b0.map((v, i) => v * (1 + (c.bonus[i] || 0))), m = Math.sqrt(c.spec.height), special = b0[3] > b0[1];
     return {
       maxHp: b[0] * T.HP_SCALE * m * c.boost, atk: special ? b[3] : b[1], special, def: b[2], spd: b[4], m: m * c.boost,
       interval: clamp(1.7 - b[5] / 140, 0.65, 1.6),              // faster monsters attack more often

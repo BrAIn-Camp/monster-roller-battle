@@ -7,6 +7,8 @@
 //     verbose    one line per fight
 //     moves      a table of the signature moves: how often each is used and what one use is worth
 //     mirror     all four teams bring the same army: any difference in who wins is the seat, not the army
+//     bonus      what the spare critters are worth: the same six against themselves, one side with its spares'
+//                stat bonus and one without, beside the same test with one side simply made 15/30/60% stronger
 //     tune=HP_SCALE:13,RAMP_AT:40   try other tuning values (the names in TUNE, arena-sim.js)
 //
 // The project's .js files are ES modules with no package.json beside them, so node will not import them where
@@ -56,12 +58,14 @@ function makeArmy(rnd, n) {
   return army;
 }
 const plan = (army, arena, k, merged = true) => (merged
-  ? MERGE.planArmy(army, { arena, specOf, teamIndex: k, limit: SIM.TUNE.ROSTER_CAP })
-  : { roster: army.map((spec) => ({ spec, stars: 0, boost: 1, made: 1, value: MERGE.power(spec) })).sort((a, b) => b.value - a.value).slice(0, SIM.TUNE.ROSTER_CAP), backing: 1, merges: [], before: army.length, after: army.length, bench: 0 });
+  ? MERGE.planArmy(army, { specOf, teamIndex: k, limit: SIM.TUNE.ROSTER_CAP })
+  : { roster: army.map((spec) => ({ spec, stars: 0, boost: 1, made: 1, value: MERGE.power(spec) })).sort((a, b) => b.value - a.value).slice(0, SIM.TUNE.ROSTER_CAP), bonus: [0, 0, 0, 0, 0, 0], merges: [], before: army.length, after: army.length, bench: 0 });
 
-function fight(seed, { armies, arena, unmerged = -1, check = false, dt = 1 / 30 }) {
+function fight(seed, { armies, arena, unmerged = -1, check = false, dt = 1 / 30, noBonus = null, stronger = null }) {
   const rnd = dice(seed);
   const teams = armies.map((army, k) => Object.assign(plan(army, arena, k, k !== unmerged), { ballD: 1 + rnd() * 9, human: false }));
+  if (noBonus) teams.forEach((t, k) => { if (noBonus === true || noBonus.includes(k)) t.bonus = [0, 0, 0, 0, 0, 0]; });
+  if (stronger) teams.forEach((t, k) => { if (stronger[k]) t.roster = t.roster.map((r) => Object.assign({}, r, { boost: r.boost * Math.sqrt(stronger[k]) })); });
   const sim = SIM.createSim({ arena, teams, rand: rnd });
   const tally = { ko: 0, ring: 0, ringByBall: 0, ballout: 0, fire: 0, breaks: 0, rally: 0, scoop: 0, ram: 0, hazHits: 0, firstKo: -1 };
   let steps = 0, digest = 0;
@@ -90,7 +94,7 @@ function fight(seed, { armies, arena, unmerged = -1, check = false, dt = 1 / 30 
     if (steps % 30 === 0) for (const u of sim.field) digest = (digest * 31 + Math.round(u.x * 1000) + Math.round(u.hp)) | 0;
   }
   const res = sim.result(), st = sim.status();
-  return { sim, res, st, tally, steps, digest, teams, strength: teams.map((t) => t.roster.reduce((s, r) => s + MERGE.strength(r.spec, r.boost * t.backing), 0)) };
+  return { sim, res, st, tally, steps, digest, teams, strength: teams.map((t) => t.roster.reduce((s, r) => s + MERGE.strength(r.spec, r.boost), 0) * (1 + t.bonus[0]) * (1 + Math.max(t.bonus[1], t.bonus[3]))) };
 }
 
 const pct = (a, b) => (b ? (100 * a / b).toFixed(0) + '%' : '-');
@@ -109,9 +113,14 @@ if (flag('smoke') || true) {
   }
   // merging never loses or invents a critter: what went into the roster adds up to what was brought
   for (let i = 0; i < 300; i++) {
-    const army = makeArmy(rnd, 1 + Math.floor(rnd() * 260)), p = MERGE.planArmy(army, { arena: ARENAS[i % 8], specOf, teamIndex: i % 4 });
+    const army = makeArmy(rnd, 1 + Math.floor(rnd() * 260)), p = MERGE.planArmy(army, { specOf, teamIndex: i % 4, limit: Infinity });
     const made = p.roster.reduce((n, r) => n + r.made, 0);
     if (made !== army.length || p.after !== p.roster.length || p.before !== army.length) { console.error(`FAIL merge: ${army.length} critters became a roster made of ${made}`); process.exitCode = 1; break; }
+    if (p.spares !== 0 || p.spare.some((v) => v !== 0)) { console.error('FAIL merge: with everyone fighting there should be no spares', p.spares, p.spare); process.exitCode = 1; break; }
+    const six = MERGE.planArmy(army, { specOf, teamIndex: i % 4 });
+    if (six.roster.length !== Math.min(6, p.after) || six.spares !== army.length - six.roster.reduce((n, r) => n + r.made, 0)) { console.error('FAIL merge: the six do not add up'); process.exitCode = 1; break; }
+    if (six.roster.some((r, j) => r.kind !== p.roster[j].kind || !(r.ring > 0 && r.ring <= 1) || (r.ring === 1) !== !r.goal)) { console.error('FAIL merge: the six are not the strongest six, or a ring is out of range'); process.exitCode = 1; break; }
+    if (six.bonus.some((v) => !(v >= 0 && v < MERGE.BONUS_MAX))) { console.error('FAIL merge: a bonus is out of range', six.bonus); process.exitCode = 1; break; }
     if (p.roster.some((r) => !(r.boost >= 1 && r.boost <= MERGE.MAX_BOOST) || r.stars > MERGE.MAX_STARS)) { console.error('FAIL merge: a boost or star count is out of range'); process.exitCode = 1; break; }
     for (let j = 1; j < p.roster.length; j++) if (p.roster[j].value > p.roster[j - 1].value + 1e-9) { console.error('FAIL merge: roster is not strongest first'); process.exitCode = 1; break; }
   }
@@ -121,6 +130,31 @@ if (flag('smoke') || true) {
     if (sizes.filter((n) => n).length === 1 && r.res.winner !== sizes.findIndex((n) => n)) { console.error('FAIL: a lone army did not win', sizes, r.res.winner); process.exitCode = 1; }
   }
   if (flag('smoke')) { console.log(process.exitCode ? 'SMOKE FAILED' : 'smoke ok', `(${Date.now() - t0} ms)`); process.exit(); }
+}
+
+// ---- 1b. what a collection is worth (see BONUS_MAX in arena-merge.js)
+if (flag('bonus')) {
+  const rnd = dice(SEED * 31), N = Math.max(100, nums[0] || 300);
+  console.log('');
+  console.log('  spare critters  bonus on each stat (HP Atk Def SpA SpD Spe), averaged over 60 armies');
+  for (const n of [10, 25, 50, 100, 150, 200]) {
+    const sum = [0, 0, 0, 0, 0, 0]; let spares = 0;
+    for (let i = 0; i < 60; i++) { const p = MERGE.planArmy(makeArmy(rnd, n), { specOf }); p.bonus.forEach((v, j) => { sum[j] += v; }); spares += p.spares; }
+    console.log(`  ${String(n).padStart(5)} brought, ${(spares / 60).toFixed(0).padStart(3)} spare    ` + sum.map((v) => '+' + (v / 60 * 100).toFixed(0).padStart(2) + '%').join(' '));
+  }
+  const duel = (label, opts) => {
+    let win = 0, n = 0;
+    for (let f = 0; f < N; f++) {
+      const army = makeArmy(rnd, opts.size || 110), seat = f % 2;
+      const r = fight(500 + f, Object.assign({ armies: [army, army], arena: ARENAS[f % 8] }, opts.make(seat)));
+      if (r.res.winner >= 0) { n++; if (r.res.winner === seat) win++; }
+    }
+    console.log(`  ${label.padEnd(44)} wins ${pct(win, n)} of ${n} duels against the same six`);
+  };
+  console.log('');
+  for (const size of [30, 60, 110, 200]) duel(`bonus from an army of ${size}`, { size, make: (seat) => ({ noBonus: [1 - seat] }) });
+  for (const k of [1.15, 1.3, 1.6, 2]) duel(`simply ${Math.round((k - 1) * 100)}% stronger (health x damage)`, { make: (seat) => ({ noBonus: true, stronger: seat ? [0, k] : [k, 0] }) });
+  process.exit();
 }
 
 // ---- 2. many fights
