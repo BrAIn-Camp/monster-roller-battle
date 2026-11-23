@@ -501,19 +501,29 @@ const groundAt = (x, z) => (iceOn && tW[T.index(x, z)] === 2 ? SEA_LEVEL + 0.04 
 let seaMesh = null;
 const terrainChunks = [];             // { x, y, z, r, blades, tufts }: where each chunk of the ground is, and its grass
 (function buildTerrainMesh() {
-  // A top face per tile, plus a cliff face wherever a tile's edge stands above its neighbour's. The map is cut into
+  // The top of the ground, plus a cliff face wherever a tile's edge stands above its neighbour's. The map is cut into
   // eight chunks each way, every chunk its own mesh, so that the ground out of view is not drawn (it was one mesh of
   // half a million triangles, drawn whole every frame).
+  // The ground is level terraces, so a stretch of tiles at one height is ONE big face, however many tiles it covers
+  // (it was a face a tile, a metre square, all the way to the horizon: more than half of every triangle on screen).
+  // What made that impossible was each tile having its own colour in its corners; the colours are in a picture now,
+  // a pixel a tile, laid over the ground from above. Ramps keep a face a tile. Cliff faces keep their colours in
+  // their corners, and look up the one white pixel the picture has spare (its last row).
   const CH = Math.ceil(Math.max(NX, NZ) / 8), CX = Math.ceil(NX / CH), CZ = Math.ceil(NZ / CH);
   const parts = [];
-  for (let k = 0; k < CX * CZ; k++) parts.push({ pos: [], col: [], blades: [], tufts: [] });
+  for (let k = 0; k < CX * CZ; k++) parts.push({ pos: [], col: [], uv: [], idx: [], blades: [], tufts: [] });
   const partAt = (x, z) => parts[clamp(Math.floor((z - BOUNDS.z1) / CH), 0, CZ - 1) * CX + clamp(Math.floor((x - BOUNDS.x1) / CH), 0, CX - 1)];
-  let pos, col;
-  const c = new THREE.Color(), cliff = new THREE.Color();
+  let part;
+  const c = new THREE.Color(), cliff = new THREE.Color(), WHITE = new THREE.Color(1, 1, 1);
   const hOf = (i, j, x, z) => { const k = j * NX + i; return tR[k] ? T.rampH(T.ramps[tR[k]], x, z) : tH[k]; };
-  const quad = (ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz, cc) => {
-    pos.push(ax, ay, az, bx, by, bz, cx, cy, cz, ax, ay, az, cx, cy, cz, dx, dy, dz);
-    for (let n = 0; n < 6; n++) col.push(cc.r, cc.g, cc.b);
+  // (the picture is kept a little dark and the material turns it back up, so a tile brighter than white can be had)
+  const PW = NX, PH = NZ + 1, BRIGHT = 1.125, paint = new Uint8Array(PW * PH * 4).fill(255);
+  const quad = (ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz, cc) => {      // cc: a cliff's colour; none: a top, coloured by the picture
+    const n = part.pos.length / 3;
+    part.pos.push(ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz);
+    part.idx.push(n, n + 1, n + 2, n, n + 2, n + 3);
+    if (cc) for (let q = 0; q < 4; q++) { part.col.push(cc.r / BRIGHT, cc.g / BRIGHT, cc.b / BRIGHT); part.uv.push(0.5 / PW, (NZ + 0.5) / PH); }
+    else { part.col.push(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1); part.uv.push((ax - BOUNDS.x1) / PW, (az - BOUNDS.z1) / PH, (bx - BOUNDS.x1) / PW, (bz - BOUNDS.z1) / PH, (cx - BOUNDS.x1) / PW, (cz - BOUNDS.z1) / PH, (dx - BOUNDS.x1) / PW, (dz - BOUNDS.z1) / PH); }
   };
   const side = (i, j, ni, nj, xa, za, xb, zb) => {      // edge from (xa,za) to (xb,zb), shared with tile (ni,nj)
     if (ni < 0 || nj < 0 || ni >= NX || nj >= NZ) return;
@@ -523,14 +533,59 @@ const terrainChunks = [];             // { x, y, z, r, blades, tufts }: where ea
       quad(xa, a0, za, xb, a1, zb, xb, Math.min(a1, b1), zb, xa, Math.min(a0, b0), za, cliff);
     }
   };
+  // First, which stretch each level tile belongs to: as far along its row as the height holds (within the chunk),
+  // then as many rows down as all of that does.
+  const MERGE = new URLSearchParams(location.search).get('ground') !== 'tiles';      // (?ground=tiles: a face a tile, as it was, for comparing)
+  const stretch = new Int32Array(NX * NZ), stretches = [];
   for (let j = 0; j < NZ; j++) for (let i = 0; i < NX; i++) {
-    const part = parts[Math.floor(j / CH) * CX + Math.floor(i / CH)];
-    pos = part.pos; col = part.col;
+    const k = j * NX + i;
+    if (tR[k] || stretch[k]) continue;
+    const h = tH[k], iEnd = Math.min(NX, (Math.floor(i / CH) + 1) * CH), jEnd = Math.min(NZ, (Math.floor(j / CH) + 1) * CH);
+    let w = 1, d = 1;
+    while (MERGE && i + w < iEnd && !stretch[k + w] && !tR[k + w] && tH[k + w] === h) w++;
+    rows: while (MERGE && j + d < jEnd) { for (let q = 0; q < w; q++) { const kk = k + d * NX + q; if (stretch[kk] || tR[kk] || tH[kk] !== h) break rows; } d++; }
+    stretches.push([i, j, w, d]);
+    for (let dj = 0; dj < d; dj++) for (let q = 0; q < w; q++) stretch[k + dj * NX + q] = stretches.length;
+  }
+  // The colours, the ramps and the cliffs, tile by tile.
+  for (let j = 0; j < NZ; j++) for (let i = 0; i < NX; i++) {
+    const k = j * NX + i;
+    part = parts[Math.floor(j / CH) * CX + Math.floor(i / CH)];
     const x0 = BOUNDS.x1 + i, z0 = BOUNDS.z1 + j, x1 = x0 + 1, z1 = z0 + 1;
-    c.setHex(tC[j * NX + i]).multiplyScalar(0.9 + 0.2 * vnoise(x0 / 7, z0 / 7) + ((i + j) & 1 ? 0.012 : -0.012));
-    quad(x0, hOf(i, j, x0, z0), z0, x0, hOf(i, j, x0, z1), z1, x1, hOf(i, j, x1, z1), z1, x1, hOf(i, j, x1, z0), z0, c);
+    c.setHex(tC[k]).multiplyScalar((0.9 + 0.2 * vnoise(x0 / 7, z0 / 7) + ((i + j) & 1 ? 0.012 : -0.012)) / BRIGHT).convertLinearToSRGB();
+    paint[k * 4] = Math.round(clamp(c.r, 0, 1) * 255); paint[k * 4 + 1] = Math.round(clamp(c.g, 0, 1) * 255); paint[k * 4 + 2] = Math.round(clamp(c.b, 0, 1) * 255);
+    if (tR[k]) quad(x0, hOf(i, j, x0, z0), z0, x0, hOf(i, j, x0, z1), z1, x1, hOf(i, j, x1, z1), z1, x1, hOf(i, j, x1, z0), z0, null);
     side(i, j, i + 1, j, x1, z0, x1, z1); side(i, j, i - 1, j, x0, z0, x0, z1);
     side(i, j, i, j + 1, x0, z1, x1, z1); side(i, j, i, j - 1, x0, z0, x1, z0);
+  }
+  // Then a face for each stretch. Where a neighbour has a corner part of the way along one of its edges (a cliff
+  // face's, a ramp's, another stretch's), the stretch is given a corner there too and is drawn as a fan about its
+  // middle. Without that the long edge and the short ones beside it are not drawn to quite the same pixels, and
+  // the sky shows through the seam as a sprinkle of dots (measured: 1,700 over sixty views; with it, as few as a
+  // face a tile gives).
+  const at = (i, j) => (i < 0 || j < 0 || i >= NX || j >= NZ ? -1 : j * NX + i);
+  const corner = (a, b, h) => !(a < 0 && b < 0) && !(a >= 0 && b >= 0 && !tR[a] && !tR[b] && tH[a] === h && tH[b] === h && stretch[a] === stretch[b]);
+  const ring = [];
+  for (const [i, j, w, d] of stretches) {
+    const h = tH[j * NX + i], x0 = BOUNDS.x1 + i, z0 = BOUNDS.z1 + j;
+    part = parts[Math.floor(j / CH) * CX + Math.floor(i / CH)];
+    ring.length = 0;
+    ring.push(x0, z0);
+    for (let t = 1; t < d; t++) if (corner(at(i - 1, j + t - 1), at(i - 1, j + t), h)) ring.push(x0, z0 + t);
+    ring.push(x0, z0 + d);
+    for (let t = 1; t < w; t++) if (corner(at(i + t - 1, j + d), at(i + t, j + d), h)) ring.push(x0 + t, z0 + d);
+    ring.push(x0 + w, z0 + d);
+    for (let t = d - 1; t > 0; t--) if (corner(at(i + w, j + t - 1), at(i + w, j + t), h)) ring.push(x0 + w, z0 + t);
+    ring.push(x0 + w, z0);
+    for (let t = w - 1; t > 0; t--) if (corner(at(i + t - 1, j - 1), at(i + t, j - 1), h)) ring.push(x0 + t, z0);
+    const n = ring.length / 2, first = part.pos.length / 3;
+    for (let q = 0; q < n; q++) { part.pos.push(ring[q * 2], h, ring[q * 2 + 1]); part.col.push(1, 1, 1); part.uv.push((ring[q * 2] - BOUNDS.x1) / PW, (ring[q * 2 + 1] - BOUNDS.z1) / PH); }
+    if (n === 4) part.idx.push(first, first + 1, first + 2, first, first + 2, first + 3);
+    else {
+      const mx = x0 + w / 2, mz = z0 + d / 2;
+      part.pos.push(mx, h, mz); part.col.push(1, 1, 1); part.uv.push((mx - BOUNDS.x1) / PW, (mz - BOUNDS.z1) / PH);
+      for (let q = 0; q < n; q++) part.idx.push(first + n, first + q, first + (q + 1) % n);
+    }
   }
 
   // the sea: a see-through sheet at sea level, with the open ocean floor beyond the map well below it
@@ -555,7 +610,11 @@ const terrainChunks = [];             // { x, y, z, r, blades, tufts }: where ea
   }
   for (const [x, z] of tuftSpots) { const h = 0.12 + rand() * 0.2; d.position.set(x, groundAt(x, z) + h / 2, z); d.scale.set(0.07, h, 0.07); d.updateMatrix(); partAt(x, z).tufts.push(...d.matrix.elements); }
 
-  const ground = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
+  const picture = new THREE.DataTexture(paint, PW, PH, THREE.RGBAFormat, THREE.UnsignedByteType);
+  picture.colorSpace = THREE.SRGBColorSpace; picture.magFilter = THREE.NearestFilter; picture.minFilter = THREE.LinearMipmapLinearFilter; picture.generateMipmaps = true;
+  picture.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy()); picture.needsUpdate = true;
+  const ground = new THREE.MeshLambertMaterial({ map: picture, vertexColors: true, color: new THREE.Color(BRIGHT, BRIGHT, BRIGHT), side: THREE.DoubleSide });
+  let groundTris = 0;
   const grass = (list, material) => {
     if (!list.length) return null;
     const m = new THREE.InstancedMesh(G.cone, material, list.length / 16);
@@ -568,13 +627,17 @@ const terrainChunks = [];             // { x, y, z, r, blades, tufts }: where ea
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(part.pos, 3));
     geo.setAttribute('color', new THREE.Float32BufferAttribute(part.col, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(part.uv, 2));
+    geo.setIndex(part.pos.length / 3 > 65535 ? new THREE.Uint32BufferAttribute(part.idx, 1) : new THREE.Uint16BufferAttribute(part.idx, 1));
     geo.computeVertexNormals(); geo.computeBoundingSphere();
+    groundTris += part.idx.length / 3;
     const m = new THREE.Mesh(geo, ground);
     m.receiveShadow = true; m.matrixAutoUpdate = false;
     scene.add(m);
     const bs = geo.boundingSphere;
     terrainChunks.push({ x: bs.center.x, y: bs.center.y, z: bs.center.z, r: bs.radius, blades: grass(part.blades, mat(0x4c9e4a)), tufts: grass(part.tufts, mat(0x58a850)) });
   }
+  terrainChunks.triangles = groundTris;
 })();
 // Grass is only worth drawing near by: a tuft is a few pixels tall from 100 m. Each chunk's grass is shown while the
 // camera is within range of the chunk (QUAL.grass scales the range; the lowest setting has no tufts, and keeps the tall
