@@ -523,19 +523,22 @@ const terrainChunks = [];             // { x, y, z, r, blades, tufts }: where ea
   const hOf = (i, j, x, z) => { const k = j * NX + i; return tR[k] ? T.rampH(T.ramps[tR[k]], x, z) : tH[k]; };
   // (the picture is kept a little dark and the material turns it back up, so a tile brighter than white can be had)
   const PW = NX, PH = NZ + 1, BRIGHT = 1.125, paint = new Uint8Array(PW * PH * 4).fill(255);
-  const quad = (ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz, cc) => {      // cc: a cliff's colour; none: a top, coloured by the picture
+  const quad = (ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz, cc, flip) => {      // cc: a cliff's colour; none: a top, coloured by the picture. flip: corners the other way round
     const n = part.pos.length / 3;
-    part.pos.push(ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz);
+    if (flip) part.pos.push(ax, ay, az, dx, dy, dz, cx, cy, cz, bx, by, bz); else part.pos.push(ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz);
     part.idx.push(n, n + 1, n + 2, n, n + 2, n + 3);
     if (cc) for (let q = 0; q < 4; q++) { part.col.push(cc.r / BRIGHT, cc.g / BRIGHT, cc.b / BRIGHT); part.uv.push(0.5 / PW, (NZ + 0.5) / PH); }
     else { part.col.push(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1); part.uv.push((ax - BOUNDS.x1) / PW, (az - BOUNDS.z1) / PH, (bx - BOUNDS.x1) / PW, (bz - BOUNDS.z1) / PH, (cx - BOUNDS.x1) / PW, (cz - BOUNDS.z1) / PH, (dx - BOUNDS.x1) / PW, (dz - BOUNDS.z1) / PH); }
   };
-  const side = (i, j, ni, nj, xa, za, xb, zb) => {      // edge from (xa,za) to (xb,zb), shared with tile (ni,nj)
+  // (every face is wound so that its front is the side it is seen from: a top from above, a cliff from the lower
+  // ground. So the ground is drawn from one side only, and the backs of the cliffs on the far side of every rise,
+  // which were drawn and lit only to be covered over, are not drawn at all.)
+  const side = (i, j, ni, nj, xa, za, xb, zb, flip) => {      // edge from (xa,za) to (xb,zb), shared with tile (ni,nj)
     if (ni < 0 || nj < 0 || ni >= NX || nj >= NZ) return;
     const a0 = hOf(i, j, xa, za), a1 = hOf(i, j, xb, zb), b0 = hOf(ni, nj, xa, za), b1 = hOf(ni, nj, xb, zb);
     if (a0 > b0 + 1e-4 || a1 > b1 + 1e-4) {
       cliff.setHex(tC[j * NX + i]).multiplyScalar(0.5 + 0.22 * vnoise(xa / 5 + za / 5, a0 * 0.9));   // the ground's own colour, darker and banded
-      quad(xa, a0, za, xb, a1, zb, xb, Math.min(a1, b1), zb, xa, Math.min(a0, b0), za, cliff);
+      quad(xa, a0, za, xb, a1, zb, xb, Math.min(a1, b1), zb, xa, Math.min(a0, b0), za, cliff, flip);
     }
   };
   // First, which stretch each level tile belongs to: as far along its row as the height holds (within the chunk),
@@ -560,8 +563,8 @@ const terrainChunks = [];             // { x, y, z, r, blades, tufts }: where ea
     c.setHex(tC[k]).multiplyScalar((0.9 + 0.2 * vnoise(x0 / 7, z0 / 7) + ((i + j) & 1 ? 0.012 : -0.012)) / BRIGHT).convertLinearToSRGB();
     paint[k * 4] = Math.round(clamp(c.r, 0, 1) * 255); paint[k * 4 + 1] = Math.round(clamp(c.g, 0, 1) * 255); paint[k * 4 + 2] = Math.round(clamp(c.b, 0, 1) * 255);
     if (tR[k]) quad(x0, hOf(i, j, x0, z0), z0, x0, hOf(i, j, x0, z1), z1, x1, hOf(i, j, x1, z1), z1, x1, hOf(i, j, x1, z0), z0, null);
-    side(i, j, i + 1, j, x1, z0, x1, z1); side(i, j, i - 1, j, x0, z0, x0, z1);
-    side(i, j, i, j + 1, x0, z1, x1, z1); side(i, j, i, j - 1, x0, z0, x1, z0);
+    side(i, j, i + 1, j, x1, z0, x1, z1, false); side(i, j, i - 1, j, x0, z0, x0, z1, true);
+    side(i, j, i, j + 1, x0, z1, x1, z1, true); side(i, j, i, j - 1, x0, z0, x1, z0, false);
   }
   // Then a face for each stretch. Where a neighbour has a corner part of the way along one of its edges (a cliff
   // face's, a ramp's, another stretch's), the stretch is given a corner there too and is drawn as a fan about its
@@ -618,7 +621,7 @@ const terrainChunks = [];             // { x, y, z, r, blades, tufts }: where ea
   const picture = new THREE.DataTexture(paint, PW, PH, THREE.RGBAFormat, THREE.UnsignedByteType);
   picture.colorSpace = THREE.SRGBColorSpace; picture.magFilter = THREE.NearestFilter; picture.minFilter = THREE.LinearMipmapLinearFilter; picture.generateMipmaps = true;
   picture.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy()); picture.needsUpdate = true;
-  const ground = new THREE.MeshLambertMaterial({ map: picture, vertexColors: true, color: new THREE.Color(BRIGHT, BRIGHT, BRIGHT), side: THREE.DoubleSide });
+  const ground = new THREE.MeshLambertMaterial({ map: picture, vertexColors: true, color: new THREE.Color(BRIGHT, BRIGHT, BRIGHT) });
   let groundTris = 0;
   const grass = (list, material) => {
     if (!list.length) return null;
