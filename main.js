@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { BOUNDS, STARTS, BIOMES, B, PLACES, REHOME, GUESTS, R_HUB, scenery, layout, ITEMS as MAP_ITEMS, SHAPES as MAP_SHAPES } from './map.js';
 import { createTerrain, vnoise, SEA_LEVEL, SEA_MIN_D } from './terrain.js';
 import { buildCritterGeometry, critterMaterial } from './critters/kit.js';
@@ -252,6 +252,31 @@ function shapeGeometry(spec, color, far = false) {      // far: the same shape f
   return geo;
 }
 const triangles = (geo) => (geo.index ? geo.index.count : geo.attributes.position.count) / 3;
+// The plain-coloured parts that are a group's own children, made one mesh in the shared material: one draw call for
+// a figure's body (or a limb, or a ball) in place of one for each of its twenty-odd boxes. Parts in groups of their
+// own (a limb on its pivot) are left for a call of their own.
+function fuse(g) {
+  const parts = [], old = [];
+  for (const n of g.children) {
+    if (!n.isMesh) continue;
+    n.updateMatrix();
+    const pg = n.geometry.index ? n.geometry.toNonIndexed() : n.geometry.clone();
+    for (const a of Object.keys(pg.attributes)) if (a !== 'position' && a !== 'normal') pg.deleteAttribute(a);
+    pg.applyMatrix4(n.matrix);
+    const c = n.material.color, col = new Float32Array(pg.attributes.position.count * 3);
+    for (let i = 0; i < col.length; i += 3) { col[i] = c.r; col[i + 1] = c.g; col[i + 2] = c.b; }
+    pg.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    parts.push(pg); old.push(n);
+  }
+  if (parts.length < 2) return g;
+  const loose = mergeGeometries(parts), m = new THREE.Mesh(mergeVertices(loose), itemMat);
+  for (const pg of parts) pg.dispose();
+  loose.dispose();
+  m.castShadow = old[0].castShadow; m.userData.fused = true;
+  for (const n of old) { g.remove(n); if (n.userData.fused) n.geometry.dispose(); }
+  g.add(m);
+  return g;
+}
 
 // ---------- simpler shapes for things that are small on screen ----------
 // Most of what is in view is far away and a few pixels tall, and was drawn with every triangle it has up close.
@@ -444,15 +469,20 @@ function aimSun(x, y, z, d) {                 // the shadow box follows the ball
 }
 (function buildClouds() {
   const white = new THREE.MeshBasicMaterial({ color: 0xffffff, fog: false });
-  const puff = new THREE.SphereGeometry(1, 12, 8);
+  const puff = new THREE.SphereGeometry(1, 12, 8), m = new THREE.Object3D();
   for (let i = 0; i < 24; i++) {
     const a = rand() * Math.PI * 2, R = 120 + rand() * 560, y = 170 + rand() * 90, s = 14 + rand() * 22;
+    const puffs = [];                           // (a cloud's five puffs are one mesh)
     for (let k = 0; k < 5; k++) {
-      const m = new THREE.Mesh(puff, white);
       m.scale.set(s * (0.7 + rand() * 0.6), s * 0.38, s * (0.6 + rand() * 0.4));
       m.position.set(Math.cos(a) * R + (k - 2) * s * 0.75, y + rand() * s * 0.2, Math.sin(a) * R + (rand() - 0.5) * s);
-      scene.add(m);
+      m.updateMatrix();
+      puffs.push(puff.clone().applyMatrix4(m.matrix));
     }
+    const cloud = new THREE.Mesh(mergeGeometries(puffs), white);
+    cloud.matrixAutoUpdate = false;
+    scene.add(cloud);
+    for (const p of puffs) p.dispose();
   }
 })();
 
@@ -706,14 +736,16 @@ function drawWorld() {
 // player's own ball, which wears more trim so it reads at a distance. The local build
 // hands back its own parts instead; off, that is null and this is all there is.
 function styleBall(g, k, own) {
+  for (const m of g.children) if (m.userData.fused) m.geometry.dispose();
   g.clear();
   const local = LOCAL.ballParts(k, own);
-  if (local) { for (const m of local) g.add(m); return; }
+  if (local) { for (const m of local) g.add(m); fuse(g); return; }
   P(g, 'sph', TEAMS[k].hex, [1, 1, 1], [0, 0, 0]);
   for (const rot of own ? [[0, 0, 0], [Math.PI / 2, 0, 0], [0, 0, Math.PI / 2]] : [[Math.PI / 2, 0, 0]]) {
     const ring = new THREE.Mesh(new THREE.TorusGeometry(1, 0.07, 6, 24), mat(own ? 0xffd23f : 0xffffff));
     ring.rotation.set(rot[0], rot[1], rot[2]); ring.castShadow = true; g.add(ring);
   }
+  fuse(g);
 }
 function buildCaptureBall(k, own) { const g = new THREE.Group(); styleBall(g, k, own); return g; }
 
@@ -746,6 +778,7 @@ function buildTrainer(hex) {
   const armL = limb(hex, [.085, .23, .095], [.195, .65, .01]), armR = limb(hex, [.085, .23, .095], [-.195, .65, .01]);
   for (const arm of [armL, armR]) { P(arm, 'box', CREAM, [.09, .04, .1], [0, -.215, 0]); P(arm, 'sph', SKIN, [.05, .05, .05], [0, -.27, 0]); }   // cuffs and hands
   g.userData = { legL, legR, armL, armR };
+  for (const part of [g, legL, legR, armL, armR]) fuse(part);       // five draw calls a figure, not twenty-eight
   poseTrainer(g, 0, false);
   return g;
 }
