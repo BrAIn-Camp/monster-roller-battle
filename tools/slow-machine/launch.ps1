@@ -3,7 +3,7 @@ param([string]$Mask = '0x30000', [int]$Port = 9333, [string]$Gpu = 'real', [stri
 # processes inherit. 0x30000 is two of the efficiency cores of this machine.
 $dir = Join-Path $PSScriptRoot ("profile-" + $Port)
 [System.Diagnostics.Process]::GetCurrentProcess().ProcessorAffinity = [IntPtr][Convert]::ToInt64($Mask, 16)
-$flags = @('--headless=new', "--remote-debugging-port=$Port", "--user-data-dir=$dir", "--window-size=$Size", '--no-first-run', '--mute-audio',
+$flags = @('--headless=new', "--remote-debugging-port=$Port", "--user-data-dir=`"$dir`"", "--window-size=$Size", '--no-first-run', '--mute-audio',
   '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--autoplay-policy=no-user-gesture-required')
 if ($Gpu -eq 'soft') { $flags += '--use-angle=swiftshader'; $flags += '--enable-unsafe-swiftshader' }
 $flags += 'about:blank'

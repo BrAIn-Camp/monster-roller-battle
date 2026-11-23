@@ -710,39 +710,83 @@ function growBatch(b) {
   const m = new THREE.InstancedMesh(b.geo, b.material, cap);
   m.frustumCulled = false; m.castShadow = b.casts; m.matrixAutoUpdate = false; m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   if (b.geo.userData.still) m.morphTargetInfluences = b.held ? b.geo.userData.still.rest : b.geo.userData.infl;      // (a model's still: see askModel)
-  if (old) { m.instanceMatrix.array.set(old.instanceMatrix.array.subarray(0, b.n * 16)); batchGroup.remove(old); old.dispose(); }
+  if (old) { m.instanceMatrix.array.set(old.instanceMatrix.array.subarray(0, b.n * 16)); old.removeFromParent(); old.dispose(); }
   m.onAfterRender = () => { b.lo = -1; b.hi = 0; };
   b.mesh = m; b.cap = cap; b.arr = m.instanceMatrix.array; b.from = 0; b.lo = -1; b.hi = 0;      // (it goes in the scene when it has something to draw: see drawWorld)
 }
-const DRAW = { things: 0, batches: 0, sent: 0, held: 0, far: 0, props: 0, sendAll: false };            // last frame's count, for the readout
-// The things stuck to one ball. Where each is in the world is the ball's place times its own on the ball.
-const heldM = new THREE.Matrix4(), heldW = new THREE.Matrix4();
+const DRAW = { things: 0, batches: 0, sent: 0, held: 0, far: 0, props: 0, frame: 0, sendAll: false };            // last frame's count, for the readout
+// The things stuck to one ball. They are drawn in batches of the ball's own, in the ball's frame: a thing's matrix
+// there is its place on the ball, which only changes when the ball picks something up or loses it (everything is
+// then seated afresh: seatOn), so that is the only time the batches are filled and sent. In between, a rolling ball
+// is one matrix to move, however much is stuck to it. (They were in batches shared between the balls, in the world's
+// frame: every stuck thing had a new matrix worked out and sent to the graphics card every frame, which with four
+// full balls in view was most of what a frame cost on a slow processor.)
+//   bg.userData.held   { group, map, ... }: the group the batches hang from (moved with the ball each frame; not the
+//                      ball's own group, whose children the game counts) and the batches by shape and material
+// Whether a thing is drawn as its plainer shape, casts a shadow or is too small to draw from above the menu is
+// decided when the batches are filled, by the ball's distance; so they are also filled afresh every twentieth
+// frame, and more often while a stuck critter's model is still on its way.
+const heldSphere = new THREE.Sphere();
+let heldBalls = 0;
+function dropHeld(bg) {
+  const h = bg.userData.held;
+  if (!h) return;
+  for (const b of h.map.values()) if (b.mesh) { b.mesh.removeFromParent(); b.mesh.dispose(); }
+  scene.remove(h.group); bg.userData.held = null;
+}
 function drawHeld(bg, list, inGame, near, pxH) {
-  if (!list.length || !bg.visible || !bg.parent) return 0;
-  heldM.compose(bg.position, bg.quaternion, bg.scale);
-  const big = S.d * 0.07;
-  let n = 0;
+  let h = bg.userData.held;
+  if (!h) {
+    h = bg.userData.held = { group: new THREE.Group(), map: new Map(), list: null, ver: -1, near: false, inGame: false, pending: false, n: 0, rad: 0, stamp: 0, turn: heldBalls++ * 5 };
+    h.group.matrixAutoUpdate = false; scene.add(h.group);
+  }
+  const hg = h.group;
+  if (!list.length || !bg.visible || !bg.parent) { hg.visible = false; return 0; }
+  hg.matrix.compose(bg.position, bg.quaternion, bg.scale); hg.matrixWorldNeedsUpdate = true;
+  if (h.list !== list || h.ver !== (list.ver | 0) || h.near !== near || h.inGame !== inGame || (DRAW.frame + h.turn) % (h.pending ? 6 : 20) === 0) fillHeld(bg, h, list, inGame, near, pxH);
+  heldSphere.center.copy(bg.position); heldSphere.radius = h.rad * (near ? 2.6 : 1.05);      // (a shadow may be in view when the ball is not)
+  hg.visible = h.n > 0 && viewFrustum.intersectsSphere(heldSphere);
+  return hg.visible ? h.n : 0;
+}
+function fillHeld(bg, h, list, inGame, near, pxH) {
+  h.list = list; h.ver = list.ver | 0; h.near = near; h.inGame = inGame; h.pending = false;
+  for (const b of h.map.values()) { b.n = 0; b.from = -1; }
+  const big = S.d * 0.07, dist = camera.position.distanceTo(bg.position), stamp = -1 - (++h.stamp);
+  let n = 0, rad = 0;
   for (const o of list) {
     const g = o.group, geo = g.geometry;
-    if (geo === noGeo || g.parent !== bg || !g.visible) continue;      // (its model has not arrived: stick() asked for it)
+    if (g.parent !== bg || !g.visible) continue;
+    if (geo === noGeo) { h.pending = true; continue; }       // (its model has not arrived: stick() asked for it)
     let bs = geo.boundingSphere;
     if (!bs) { geo.computeBoundingSphere(); bs = geo.boundingSphere; }
+    const r = (bs.radius + bs.center.length()) * g.scale.x, reach = g.position.length() + r;
+    if (reach > rad) rad = reach;
+    if (!inGame && r * 1.05 * pxH < 1.5 * dist) continue;              // (from high above the menu: a speck)
     const casts = near && o.size > big;                                // (as for the free ones: specks need no shadow)
     g.updateMatrix();
-    heldW.multiplyMatrices(heldM, g.matrix);
-    viewSphere.center.copy(bs.center).applyMatrix4(heldW); viewSphere.radius = bs.radius * g.scale.x * (casts ? 2.6 : 1.05);
-    if (!viewFrustum.intersectsSphere(viewSphere)) continue;
-    const dist = camera.position.distanceTo(viewSphere.center);
-    if (!inGame && viewSphere.radius * pxH < 1.5 * dist) continue;
     let dg = geo, dm = g.material;
-    if (viewSphere.radius < QUAL.lod * dist * (geo.userData.still ? CRITTER_LOD : 1) && !casts) { const f = farShape(geo, dm); if (f) { dg = f; dm = f.userData.mat || dm; DRAW.far++; } }
-    const held = !!dg.userData.still;
-    let b = casts ? o.bS : o.bN;
-    if (!b || b.geo !== dg || b.material !== dm || b.held !== held) { b = batchFor(dg, dm, casts, held); if (casts) o.bS = b; else o.bN = b; }
-    batchPut(b, o, heldW.elements, -1 - (o.mv = (o.mv | 0) + 1));      // (a ball rolls: a new matrix every frame)
+    if (r * 1.05 < QUAL.lod * Math.max(0.01, dist - reach) * (geo.userData.still ? CRITTER_LOD : 1) && !casts) { const f = farShape(geo, dm); if (f) { dg = f; dm = f.userData.mat || dm; DRAW.far++; } }
+    const key = dg.uuid + dm.uuid + (casts ? 's' : '');
+    let b = h.map.get(key);
+    if (!b) { b = { geo: dg, material: dm, casts, held: true, cap: 0, n: 0, mesh: null, arr: null, who: [], ver: [], from: -1, lo: -1, hi: 0 }; h.map.set(key, b); }
+    batchPut(b, o, g.matrix.elements, stamp);
     n++;
   }
-  return n;
+  for (const [key, b] of h.map) {
+    const m = b.mesh;
+    if (!b.n) { if (m) { m.removeFromParent(); m.dispose(); } h.map.delete(key); continue; }      // (nothing of that shape on this ball any more)
+    m.count = b.n;
+    if (!m.parent) h.group.add(m);
+    const st = b.geo.userData.still;
+    if (st) { const want = st.movingMat && b.material === st.mat && b.geo.morphAttributes.position ? st.movingMat : b.material; if (m.material !== want) m.material = want; }
+    if (b.from >= 0) {
+      b.lo = b.lo < 0 ? b.from : Math.min(b.lo, b.from); b.hi = Math.max(b.hi, b.n * 16);
+      const a = m.instanceMatrix;
+      if (a.clearUpdateRanges) { a.clearUpdateRanges(); a.addUpdateRange(b.lo, b.hi - b.lo); }
+      a.needsUpdate = true;
+    }
+  }
+  h.n = n; h.rad = rad;
 }
 // ---------- props that stay put are baked into the map ----------
 // There are 4,700 props of 419 kinds, in several colours each, so a batch per shape came to 370 draw calls for the
@@ -932,7 +976,7 @@ function drawWorld() {
   showGrass();
   viewFrustum.setFromProjectionMatrix(viewM.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
   for (const b of batches.values()) { b.n = 0; b.from = -1; }
-  DRAW.far = 0;
+  DRAW.far = 0; DRAW.frame++;
   const inGame = S.state !== 'menu' && S.state !== 'dex';      // behind the menu everything is shown, from far above
   const pxH = renderer.domElement.height || 1080;
   bakeSome(S.state === 'play' ? 1.5 : 6);
@@ -1660,6 +1704,7 @@ function bump(map, key, n) { map[key] = (map[key] || 0) + n; }
 // Things stay on the ball's surface at their true size. Each time the ball grows they are pushed back out to the
 // new surface, so nothing sinks in or disappears (beyond the MAX_ON_BALL drawing cap).
 function seatOn(list, r) {
+  list.ver = (list.ver | 0) + 1;                   // (what is on the ball, or where on it, has changed: its batches are to be filled afresh, see drawHeld)
   for (const a of list) {
     a.ldist = Math.max(r * 0.55, r - a.size * 0.2);
     a.group.scale.setScalar(a.size);
@@ -1945,7 +1990,7 @@ function updateCreature(o, dt, B) {
 // ---------- rivals: three CPU players rolling their own balls on the same map ----------
 const rivals = [];
 function makeRivals() {
-  for (const R of rivals) { scene.remove(R.ball); scene.remove(R.trainer); }
+  for (const R of rivals) { dropHeld(R.ball); scene.remove(R.ball); scene.remove(R.trainer); }
   for (let i = 0; i < TEAMS.length; i++) $('tag' + i).style.display = 'none';
   rivals.length = 0;
   if (S.mode !== 'timed') return;
@@ -2737,7 +2782,7 @@ function puppetThing(o, dt, dist) {
 }
 // Takes a thing off whichever ball it is on and puts it back in the world (where it goes next is the caller's business).
 function unstick(Bq, o) {
-  if (Bq) { const i = Bq.attached.indexOf(o); if (i >= 0) Bq.attached.splice(i, 1); }
+  if (Bq) { const i = Bq.attached.indexOf(o); if (i >= 0) Bq.attached.splice(i, 1); Bq.attached.ver = (Bq.attached.ver | 0) + 1; }
   if (o.group.parent && o.group.parent !== worldGroup) worldGroup.attach(o.group);
   else if (!o.group.parent) { worldGroup.add(o.group); if (Bq) o.group.position.set(Bq.x, Bq.y, Bq.z); }
   o.group.scale.setScalar(o.size); o.group.visible = true;
