@@ -378,8 +378,18 @@ costs and where it went; it works in a hidden tab. Measured with it at 1920x1080
 - **Title screen.** Anything that would be under about three pixels from up there is left out: 5,560 things to 3,250.
 - **What is left** (start of a round, 8 ms): the rules 1.6 ms, filling the batches 0.6, handing about 570 draws to the card
   2.4, the card itself 3.3. Shadows are 0.3 ms of that and the grass nothing; rendering at the screen's own resolution
-  instead of 1.5 times it saves 0.3. Late in a round the dear thing is the stuck critters: each is its own draw, and with
-  four full balls in view there are 950 of them, 3 ms. Putting those through the batches is the next saving worth having.
+  instead of 1.5 times it saves 0.3.
+- **The things stuck to balls go through the batches too** (22 November 2026). Each used to be its own draw. Now every
+  thing's own mesh is on a layer the camera does not look at, and `drawHeld` copies each stuck thing's place (the ball's
+  times its own on the ball) into the same batches as the free ones; a model's still gets a second batch whose weights
+  stay at rest, so the stuck ones hold still. With four full balls in view (`__game.fill()`, 1,200 stuck things, 1920x1080):
+  1,740 draws to 625, and the main thread's share of drawing the frame 7.8 ms to 3.9. The whole frame as `bench` times it
+  falls less, 11.0 ms to 9.6, because `bench` waits for the card after every frame and the card's own work no longer
+  hides behind the main thread's; frames drawn back to back with no wait go from 4.5 ms to 3.6. At "low" graphics
+  `bench` reads slightly worse (7.7 to 8.2) while back to back is still better (3.7 to 3.1). `__game.gfx.loose(true)`
+  draws them one by one again, for comparing.
+- **Tried and dropped:** leaving out the stuck things hidden behind their own ball (about a third of them, 300,000
+  triangles). No measurable gain: the card is not short of triangles.
 
 ## Drawing cost (measured and trimmed 20 November 2026)
 
@@ -389,7 +399,7 @@ Measured in single player with a 3 m ball: 3,981 draw calls and 5.0 million tria
 - Each imported model is baked into one mesh in the shared item material (`loadModel`), instead of one mesh per colour.
 - A thing is drawn out to 130 times its size (about half a degree on screen), not 300.
 - Only things near the ball and at least 7% of its width cast shadows; the shadow map is 1024 on the medium level.
-- Instancing (`drawWorld` in `main.js`): the things lying about the map keep their own meshes for the game to move, but those are not drawn. Each frame, every thing that is switched on and on screen has its matrix copied into a batch, one `InstancedMesh` per shape and material (and a second, shadow-casting batch for the few near the ball). A thing stuck on a ball is drawn the ordinary way. Every item is now a single mesh (a model is baked to one normalised geometry). With a 3 m ball: 740 draw calls and 1.9 million triangles a frame.
+- Instancing (`drawWorld` in `main.js`): the things lying about the map keep their own meshes for the game to move, but those are not drawn. Each frame, every thing that is switched on and on screen has its matrix copied into a batch, one `InstancedMesh` per shape and material (and a second, shadow-casting batch for the few near the ball). A thing stuck on a ball was drawn the ordinary way then (it goes through the batches now: see above). Every item is now a single mesh (a model is baked to one normalised geometry). With a 3 m ball: 740 draw calls and 1.9 million triangles a frame.
 - Not done yet: dropping the logarithmic depth buffer, splitting the terrain (493,000 triangles, drawn whole) into chunks. The terrain has to stay double-sided: its cliff faces are not wound consistently.
 - Reliable messages are sent in packets of about a kilobyte and only as fast as the link takes them (`netFlush`). Sent as one lump per frame, a wave of critters, the refill or an event's effects made a single very large message, which on a slow link held up everything else, the ball positions included. The refill is now sent as numbers into the starting layout (`rf`), and each event-effect shape is described once per round.
 - PeerJS refuses any JSON message of 16,300 bytes or more. `room.send` in `net.js` now splits a long message into numbered pieces that are joined at the other end, and a connection error no longer counts as the player leaving (only the connection closing does). Before this, the armies sent at the end of a full round were too long: the host got an error, dropped the player, and their screen stayed on TIME UP. Armies are also sent as runs of the same critter, which keeps that message to a few kilobytes.

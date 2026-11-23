@@ -276,8 +276,8 @@ function askModel(m) {
   LOCAL.still(baseOf(m.userData.spec).dex).then((s) => {
     if (!s) { m.geometry = genGeometry(m.userData.spec, m.userData.fine); return; }
     m.geometry = s.geo; m.userData.om = s.mat;
-    // (The still can breathe: see stadium.js. A critter's own mesh is only ever drawn when it is stuck to a ball,
-    // and there it holds still; the free ones are drawn in batches, and it is the batch that breathes.)
+    // (The still can breathe: see stadium.js. A critter's own mesh is not what is drawn: it is the batch that
+    // breathes, or holds still for the ones stuck to a ball. See drawWorld.)
     m.morphTargetInfluences = s.rest;
     if (m.material !== goldMat) m.material = s.mat;
     if (S.state !== 'menu' && S.state !== 'dex') LOCAL.wake(s);
@@ -411,31 +411,60 @@ let seaMesh = null;
 const worldGroup = new THREE.Group();
 scene.add(worldGroup);
 
-// ---------- drawing the free things: one draw call per shape, not per thing ----------
-// Everything lying about the map (S.objects) keeps its own mesh for the game to move, scale and hide, but those meshes
-// are not drawn (worldGroup is invisible). Instead, every frame, each thing that is switched on and on screen has its
-// matrix copied into a batch: one InstancedMesh per shape and material, so 60 pebbles cost one draw call, not 60.
+// ---------- drawing the things: one draw call per shape, not per thing ----------
+// Everything on the map keeps its own mesh for the game to move, scale and hide, but those meshes are never drawn
+// themselves: the free ones (S.objects) live in worldGroup, which is invisible, and every thing's mesh is on THING_LAYER,
+// which the camera does not look at, so one stuck to a ball (that ball's child) is passed over too. Instead, every
+// frame, each thing that is switched on and on screen has its matrix copied into a batch: one InstancedMesh per shape
+// and material, so 60 pebbles cost one draw call, not 60, and so do 60 of them stuck to four different balls.
 // Things that cast a shadow go in a second batch of the same shape that does (they are few: only those near the ball).
-// A thing stuck on a ball is that ball's child and is drawn in the ordinary way.
+// A model's still (see askModel) has two more: the free ones breathe, the ones stuck to a ball hold still.
+const THING_LAYER = 1;
 worldGroup.visible = false; worldGroup.matrixWorldAutoUpdate = false;
 const batchGroup = new THREE.Group(), batches = new Map();
 scene.add(batchGroup);
 const viewFrustum = new THREE.Frustum(), viewM = new THREE.Matrix4(), viewSphere = new THREE.Sphere();
-function batchFor(geo, material, casts) {
-  const key = geo.uuid + material.uuid + (casts ? 's' : '');
+function batchFor(geo, material, casts, held = false) {
+  const key = geo.uuid + material.uuid + (casts ? 's' : '') + (held ? 'h' : '');
   let b = batches.get(key);
-  if (!b) { b = { geo, material, casts, cap: 0, n: 0, mesh: null, arr: null }; batches.set(key, b); }
+  if (!b) { b = { geo, material, casts, held, cap: 0, n: 0, mesh: null, arr: null }; batches.set(key, b); }
   return b;
 }
 function growBatch(b) {
   const cap = Math.max(8, b.cap * 2), old = b.mesh;
   const m = new THREE.InstancedMesh(b.geo, b.material, cap);
   m.frustumCulled = false; m.castShadow = b.casts; m.matrixAutoUpdate = false; m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-  if (b.geo.userData.infl) m.morphTargetInfluences = b.geo.userData.infl;      // (a model's still, breathing: see askModel)
+  if (b.geo.userData.still) m.morphTargetInfluences = b.held ? b.geo.userData.still.rest : b.geo.userData.infl;      // (a model's still: see askModel)
   if (old) { m.instanceMatrix.array.set(old.instanceMatrix.array.subarray(0, b.n * 16)); batchGroup.remove(old); old.dispose(); }
   batchGroup.add(m); b.mesh = m; b.cap = cap; b.arr = m.instanceMatrix.array;
 }
-const DRAW = { things: 0, batches: 0 };            // last frame's count, for the readout
+const DRAW = { things: 0, batches: 0, held: 0, loose: false };            // last frame's count, for the readout
+// The things stuck to one ball. Where each is in the world is the ball's place times its own on the ball.
+const heldM = new THREE.Matrix4(), heldW = new THREE.Matrix4();
+function drawHeld(bg, list, inGame, near, pxH) {
+  if (!list.length || !bg.visible || !bg.parent) return 0;
+  heldM.compose(bg.position, bg.quaternion, bg.scale);
+  const big = S.d * 0.07;
+  let n = 0;
+  for (const o of list) {
+    const g = o.group, geo = g.geometry;
+    if (geo === noGeo || g.parent !== bg || !g.visible) continue;      // (its model has not arrived: stick() asked for it)
+    let bs = geo.boundingSphere;
+    if (!bs) { geo.computeBoundingSphere(); bs = geo.boundingSphere; }
+    const casts = near && o.size > big;                                // (as for the free ones: specks need no shadow)
+    g.updateMatrix();
+    heldW.multiplyMatrices(heldM, g.matrix);
+    viewSphere.center.copy(bs.center).applyMatrix4(heldW); viewSphere.radius = bs.radius * g.scale.x * (casts ? 2.6 : 1.05);
+    if (!viewFrustum.intersectsSphere(viewSphere)) continue;
+    if (!inGame && viewSphere.radius * pxH < 1.5 * camera.position.distanceTo(viewSphere.center)) continue;
+    const held = !!geo.userData.still;
+    let b = casts ? o.bS : o.bN;
+    if (!b || b.geo !== geo || b.material !== g.material || b.held !== held) { b = batchFor(geo, g.material, casts, held); if (casts) o.bS = b; else o.bN = b; }
+    if (b.n >= b.cap) growBatch(b);
+    b.arr.set(heldW.elements, b.n * 16); b.n++; n++;
+  }
+  return n;
+}
 function drawWorld() {
   camera.updateMatrixWorld();
   viewFrustum.setFromProjectionMatrix(viewM.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
@@ -463,17 +492,25 @@ function drawWorld() {
     if (!inGame && viewSphere.radius * pxH < 1.5 * camera.position.distanceTo(p)) continue;
     if (o.kind === 'creature' || o.fly || o.mx !== p.x || o.my !== p.y || o.mz !== p.z || o.ms !== sc) { g.updateMatrix(); o.mx = p.x; o.my = p.y; o.mz = p.z; o.ms = sc; }    // (things that have not moved keep their matrix)
     let b = casts ? o.bS : o.bN;
-    if (!b || b.geo !== geo || b.material !== g.material) { b = batchFor(geo, g.material, casts); if (casts) o.bS = b; else o.bN = b; }
+    if (!b || b.geo !== geo || b.material !== g.material || b.held) { b = batchFor(geo, g.material, casts); if (casts) o.bS = b; else o.bN = b; }
     if (b.n >= b.cap) growBatch(b);
     b.arr.set(g.matrix.elements, b.n * 16); b.n++; things++;
   }
+  // and the things stuck to the balls (shadows only fall near the player's ball: see aimSun)
+  let held = 0;
+  if (!DRAW.loose) {
+    const sh = inGame && QUAL.shadows, reach = S.d * 14 + 12;
+    held += drawHeld(ball, S.attached, inGame, sh, pxH);
+    for (const R of rivals) held += drawHeld(R.ball, R.attached, inGame, sh && Math.hypot(R.x - S.x, R.z - S.z) < reach + R.d, pxH);
+  }
+  things += held; DRAW.held = held;
   let used = 0;
   for (const b of batches.values()) {
     const m = b.mesh;
     if (!m) continue;
     m.count = b.n; m.visible = b.n > 0;
     if (b.n) { used++; const a = m.instanceMatrix; if (a.clearUpdateRanges) { a.clearUpdateRanges(); a.addUpdateRange(0, b.n * 16); } a.needsUpdate = true; }
-    if (b.n && inGame && b.geo.userData.still) LOCAL.wake(b.geo.userData.still);      // (a model on show in a round starts to breathe)
+    if (b.n && inGame && !b.held && b.geo.userData.still) LOCAL.wake(b.geo.userData.still);      // (a model on show in a round starts to breathe)
   }
   DRAW.things = things; DRAW.batches = used;
 }
@@ -716,6 +753,7 @@ function populateSeeded(seed) {
     group.scale.setScalar(size);
     group.position.set(x, groundAt(x, z), z);
     group.rotation.y = opt.rot ?? rand() * Math.PI * 2;
+    group.layers.set(THING_LAYER);                 // (never drawn itself: see drawWorld)
     worldGroup.add(group);
     const o = { id: opt.id ?? S.nextId, kind: e.kind, spec: e.spec, size, rad, group, bonus: opt.bonus ?? 1, on: false, fly: null, cool: 0, contrib: 0, ldist: 0, vis: size, lump: new V3(), spawnT: 0 };
     S.nextId = Math.max(S.nextId, o.id) + 1; S.byId.set(o.id, o);
@@ -2561,7 +2599,8 @@ function toLobby() {
 function dropToMenu(msg) { stopBattle(); $('count').className = ''; toMenu(); menuView(msg ? 'mvMulti' : 'mvHome'); $('netMsg').textContent = msg || ''; }
 function leaveRoom(msg) { const room = NET.room; NET.room = null; if (room) room.close(); dropToMenu(msg); }
 S.net = NET; S.lob = LOB; S.netClaim = claim;      // debug hooks
-S.gfx = { renderer, scene, camera, worldGroup, sun, setQuality, drawWorld, batches, DRAW };      // debug hooks for measuring drawing cost
+// (gfx.loose(true) draws the things stuck to balls one by one, as they were before they went through the batches)
+S.gfx = { renderer, scene, camera, worldGroup, sun, setQuality, drawWorld, batches, DRAW, loose(on = true) { DRAW.loose = !!on; if (on) camera.layers.enable(THING_LAYER); else camera.layers.disable(THING_LAYER); return DRAW.loose; } };      // debug hooks for measuring drawing cost
 
 // ---------- main update ----------
 const rollAxis = new V3();
@@ -2767,6 +2806,13 @@ S.rivals = rivals; S.H = H; S.markers = markers; S.eventIcons = () => [...EVENTS
 S.render = () => { tickDexPop(0.016); if (S.state === 'battle' && battle) { battle.step(0.016); renderer.render(battle.scene, battle.camera); } else { drawWorld(); renderer.render(scene, camera); } };   // draw one frame now (for background tabs)
 // Playtest helper: S.autoplay(seconds) rolls a simple bot through the level in fast-forward and returns a log.
 // It chases the nearest thing it can roll up on its own level, and wanders when stuck. Start a level first.
+// __game.fill(n): sticks the n nearest things to every ball at once, critters before the rest, for looking at (and
+// measuring) full balls without playing a round to get them.
+S.fill = (n = 300) => allBalls().map((B) => {
+  const d2 = (o) => (o.group.position.x - B.x) ** 2 + (o.group.position.z - B.z) ** 2 + (o.kind === 'creature' ? 0 : 1e9);
+  for (const o of S.objects.filter((o) => !o.on && !o.gone && !o.noPick).sort((a, b) => d2(a) - d2(b)).slice(0, n)) give(B, o);
+  return B.attached.length;
+});
 S.autoplay = (seconds, everySec = 30) => {
   const gs = S.autoGate || (S.autoGate = { wedge: Math.floor(rand() * 8) });
   const was = S.state; S.state = 'sim';
