@@ -407,6 +407,11 @@ renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 const SKY = 0x9ad8f5;
 const scene = new THREE.Scene();
+// The scene itself never moves. Left to itself three.js works its (unchanging) matrix out again every frame, takes that
+// for a change, and so multiplies out a fresh world matrix for every single object below it, the 7,000 hidden ones
+// that are only drawn through batches included: a sixth of a frame on a slow processor. With this off, a thing gets a
+// new world matrix when it or something above it has moved, and not otherwise.
+scene.matrixAutoUpdate = false;
 scene.background = new THREE.Color(SKY);
 scene.fog = new THREE.Fog(SKY, 60, 260);
 const camera = new THREE.PerspectiveCamera(55, 1, 0.05, 2500);
@@ -558,7 +563,12 @@ scene.add(worldGroup);
 const THING_LAYER = 1;
 worldGroup.visible = false; worldGroup.matrixWorldAutoUpdate = false;
 const batchGroup = new THREE.Group(), batches = new Map();
+batchGroup.matrixAutoUpdate = false; batchGroup.matrixWorldAutoUpdate = false;      // (the batches sit at the origin for good: nothing to work out for the 1,700 of them)
 scene.add(batchGroup);
+// A thing's own mesh is never drawn, so it never needs a world matrix: where it is on screen is worked out when it is
+// put in a batch. This stands in for the method that would work one out, which a ball would otherwise call every
+// frame for each of the hundreds of things stuck to it.
+const noWorld = () => {};
 const viewFrustum = new THREE.Frustum(), viewM = new THREE.Matrix4(), viewSphere = new THREE.Sphere();
 function batchFor(geo, material, casts, held = false) {
   const key = geo.uuid + material.uuid + (casts ? 's' : '') + (held ? 'h' : '');
@@ -594,7 +604,7 @@ function growBatch(b) {
   m.onAfterRender = () => { b.lo = -1; b.hi = 0; };
   batchGroup.add(m); b.mesh = m; b.cap = cap; b.arr = m.instanceMatrix.array; b.from = 0; b.lo = -1; b.hi = 0;
 }
-const DRAW = { things: 0, batches: 0, sent: 0, held: 0, far: 0, loose: false, sendAll: false };            // last frame's count, for the readout
+const DRAW = { things: 0, batches: 0, sent: 0, held: 0, far: 0, sendAll: false };            // last frame's count, for the readout
 // The things stuck to one ball. Where each is in the world is the ball's place times its own on the ball.
 const heldM = new THREE.Matrix4(), heldW = new THREE.Matrix4();
 function drawHeld(bg, list, inGame, near, pxH) {
@@ -663,7 +673,7 @@ function drawWorld() {
   }
   // and the things stuck to the balls (shadows only fall near the player's ball: see aimSun)
   let held = 0;
-  if (!DRAW.loose) {
+  {
     const sh = inGame && QUAL.shadows, reach = S.d * 14 + 12;
     held += drawHeld(ball, S.attached, inGame, sh, pxH);
     for (const R of rivals) held += drawHeld(R.ball, R.attached, inGame, sh && Math.hypot(R.x - S.x, R.z - S.z) < reach + R.d, pxH);
@@ -924,6 +934,7 @@ function populateSeeded(seed) {
     group.position.set(x, groundAt(x, z), z);
     group.rotation.y = opt.rot ?? rand() * Math.PI * 2;
     group.layers.set(THING_LAYER);                 // (never drawn itself: see drawWorld)
+    group.updateMatrixWorld = noWorld;
     worldGroup.add(group);
     const o = { id: opt.id ?? S.nextId, kind: e.kind, spec: e.spec, size, rad, group, bonus: opt.bonus ?? 1, on: false, fly: null, cool: 0, contrib: 0, ldist: 0, vis: size, lump: new V3(), spawnT: 0 };
     S.nextId = Math.max(S.nextId, o.id) + 1; S.byId.set(o.id, o);
@@ -2782,7 +2793,7 @@ function dropToMenu(msg) { stopBattle(); $('count').className = ''; toMenu(); me
 function leaveRoom(msg) { const room = NET.room; NET.room = null; if (room) room.close(); dropToMenu(msg); }
 S.net = NET; S.lob = LOB; S.netClaim = claim;      // debug hooks
 // (gfx.loose(true) draws the things stuck to balls one by one, as they were before they went through the batches)
-S.gfx = { renderer, scene, camera, worldGroup, sun, setQuality, drawWorld, batches, DRAW, QUALITY, terrainChunks, get watchFps() { return watchFps; }, get FPS() { return FPS; }, get level() { return qualLevel; }, loose(on = true) { DRAW.loose = !!on; if (on) camera.layers.enable(THING_LAYER); else camera.layers.disable(THING_LAYER); return DRAW.loose; } };      // debug hooks for measuring drawing cost
+S.gfx = { renderer, scene, camera, worldGroup, sun, setQuality, drawWorld, batches, DRAW, QUALITY, terrainChunks, get watchFps() { return watchFps; }, get FPS() { return FPS; }, get level() { return qualLevel; } };      // debug hooks for measuring drawing cost
 
 // ---------- main update ----------
 const rollAxis = new V3();
