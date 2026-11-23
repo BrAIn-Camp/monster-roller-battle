@@ -228,6 +228,10 @@ function loadModel(path) {
 }
 // A generated shape is drawn once per colour and merged into a single mesh, so each thing on the map is one draw call.
 const itemMat = new THREE.MeshLambertMaterial({ vertexColors: true }), itemGeo = new Map();
+// The same again for the meshes that are drawn singly (the baked props, the figures, the balls). The batches are
+// instanced and these are not, which are two different programs, and one material drawn both ways in a frame has
+// its program worked out afresh at every change-over.
+const solidMat = itemMat.clone();
 function shapeGeometry(spec, color, far = false) {      // far: the same shape from the plainer parts
   const key = spec.id + '|' + color + (far ? '|far' : '');
   let geo = itemGeo.get(key);
@@ -274,7 +278,7 @@ function fuse(g) {
     parts.push(pg); old.push(n);
   }
   if (parts.length < 2) return g;
-  const loose = mergeGeometries(parts), m = new THREE.Mesh(mergeVertices(loose), itemMat);
+  const loose = mergeGeometries(parts), m = new THREE.Mesh(mergeVertices(loose), solidMat);
   for (const pg of parts) pg.dispose();
   loose.dispose();
   m.castShadow = old[0].castShadow; m.userData.fused = true;
@@ -456,6 +460,7 @@ scene.add(sun, sun.target);
 const SUN_DIR = new V3(0.45, 1, 0.35).normalize();
 let QUAL = QUALITY[0], qualLevel = 0;
 let wakeAll = false;                  // every sleeping thing is to be looked at afresh (see update)
+let clock = 0;                        // seconds of play since the page loaded: what the things' sleep goes by (the round's own clock, S.time, starts again at nought)
 function setQuality(level) {
   qualLevel = clamp(level, 0, QUALITY.length - 1); QUAL = QUALITY[qualLevel];
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, QUAL.res));
@@ -704,7 +709,7 @@ function growBatch(b) {
   if (b.geo.userData.still) m.morphTargetInfluences = b.held ? b.geo.userData.still.rest : b.geo.userData.infl;      // (a model's still: see askModel)
   if (old) { m.instanceMatrix.array.set(old.instanceMatrix.array.subarray(0, b.n * 16)); batchGroup.remove(old); old.dispose(); }
   m.onAfterRender = () => { b.lo = -1; b.hi = 0; };
-  batchGroup.add(m); b.mesh = m; b.cap = cap; b.arr = m.instanceMatrix.array; b.from = 0; b.lo = -1; b.hi = 0;
+  b.mesh = m; b.cap = cap; b.arr = m.instanceMatrix.array; b.from = 0; b.lo = -1; b.hi = 0;      // (it goes in the scene when it has something to draw: see drawWorld)
 }
 const DRAW = { things: 0, batches: 0, sent: 0, held: 0, far: 0, props: 0, sendAll: false };            // last frame's count, for the readout
 // The things stuck to one ball. Where each is in the world is the ball's place times its own on the ball.
@@ -822,7 +827,7 @@ function packCell(c, near, fresh) {
   for (let i = 0; i < n; i++) {
     const g = geos[i];
     if (g) {
-      const o = items[i], e = o.bm, s = 127 / (o.bs || 1);
+      const o = items[i], e = o.bm, s = 127 / (o.bks || 1);
       const P = g.attributes.position.array, N = g.attributes.normal.array, C = g.attributes.color.array, cnt = P.length / 3;
       for (let j = 0, w = v * 3; j < cnt * 3; j += 3, w += 3) {
         const x = P[j], y = P[j + 1], z = P[j + 2], a = N[j], b = N[j + 1], d = N[j + 2];
@@ -842,7 +847,7 @@ function packCell(c, near, fresh) {
   geo.setAttribute('color', new THREE.BufferAttribute(col, 3, true));
   geo.setIndex(new THREE.BufferAttribute(idx, 1));
   geo.computeBoundingSphere();
-  const mesh = new THREE.Mesh(geo, itemMat);
+  const mesh = new THREE.Mesh(geo, solidMat);
   mesh.matrixAutoUpdate = false; mesh.visible = false;
   propGroup.add(mesh);
   return { mesh, end };
@@ -865,9 +870,9 @@ function bakeCell(c) {
     const o = items[i], g = o.group, p = g.position, geo = g.geometry, bs = geo.boundingSphere;
     g.updateMatrix();
     o.bm = Float32Array.from(g.matrix.elements); o.bgeo = geo; o.bi = i;
-    o.bx = p.x; o.by = p.y; o.bz = p.z; o.bs = g.scale.x; o.brx = g.rotation.x; o.bry = g.rotation.y; o.brz = g.rotation.z;
+    o.bkx = p.x; o.bky = p.y; o.bkz = p.z; o.bks = g.scale.x; o.brx = g.rotation.x; o.bry = g.rotation.y; o.brz = g.rotation.z;
     c.bigs[i] = o.big;
-    y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y + (bs.center.y + bs.radius) * o.bs);
+    y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y + (bs.center.y + bs.radius) * o.bks);
   }
   c.y0 = n ? y0 : 0; c.y1 = n ? y1 : 0;
   c.far = packCell(c, false, true);
@@ -969,8 +974,10 @@ function drawWorld() {
   for (const b of batches.values()) {
     const m = b.mesh;
     if (!m) continue;
-    m.count = b.n; m.visible = b.n > 0;
-    if (b.n) used++;
+    m.count = b.n;
+    // (only the batches with something in them are in the scene: there are 1,700 of them, most of them empty at any
+    // one time, and three.js looks at every object in the scene every frame)
+    if (b.n) { used++; if (!m.parent) batchGroup.add(m); } else if (m.parent) batchGroup.remove(m);
     // (a still that has its poses is drawn with the shared material for moving shapes: see shareSkins in stadium.js)
     if (b.n && b.geo.userData.still) { const st = b.geo.userData.still, want = st.movingMat && b.material === st.mat && b.geo.morphAttributes.position ? st.movingMat : b.material; if (m.material !== want) m.material = want; }
     if (DRAW.sendAll && b.n) b.from = 0;             // (debug: as it was, every batch sent every frame)
@@ -1228,7 +1235,14 @@ function populateSeeded(seed) {
     group.layers.set(THING_LAYER);                 // (never drawn itself: see drawWorld)
     group.updateMatrixWorld = noWorld;
     worldGroup.add(group);
-    const o = { id: opt.id ?? S.nextId, kind: e.kind, spec: e.spec, size, rad, group, bonus: opt.bonus ?? 1, on: false, fly: null, cool: 0, contrib: 0, ldist: 0, vis: size, lump: new V3(), spawnT: 0 };
+    // (Every field a thing is ever given is here from the start, critter or not, and in one order. The loops that go
+    // through all 7,000 of them every frame read two or three fields of each, and that read is several times slower
+    // when the things have been built up differently from one another.)
+    const o = { id: opt.id ?? S.nextId, kind: e.kind, spec: e.spec, size, rad, group, bonus: opt.bonus ?? 1, on: false, fly: null, cool: 0, contrib: 0, ldist: 0, vis: size, lump: new V3(), spawnT: 0,
+      due: 0, baked: false, understudy: false, gone: false, casts: false, cell: null, by: null, script: null, noPick: false, onPick: null, onBump: null,
+      ai: undefined, timer: 0, home: null, tx: 0, tz: 0, phase: 0, leader: null, aiT: 0, yaw: undefined, lt: 0, struck: false, lunB: null, nearT: 0, armySpec: null,
+      mx: NaN, my: 0, mz: 0, ms: 0, mv: 0, bN: null, bS: null, ntx: undefined, ntz: 0, nyaw: undefined, nsig: undefined, wpos: null,
+      restT: undefined, rx: 0, ry: 0, rz: 0, rs: 0, rr: 0, bi: 0, big: 0, bm: null, bgeo: null, bkx: 0, bky: 0, bkz: 0, bks: 0, brx: 0, bry: 0, brz: 0 };
     S.nextId = Math.max(S.nextId, o.id) + 1; S.byId.set(o.id, o);
     thingOf.set(group, o);
     if (e.kind === 'creature') group.rotation.order = 'YXZ';       // so a critter can tip forward whichever way it faces
@@ -3180,7 +3194,8 @@ function update(dt) {
   // ball could have got near enough to matter: `due`, worked out below from how far off that is and the fastest a
   // ball can go, with as much again to spare. Looking at all 6,800 things every frame was most of the cost of the
   // rules. A ball that jumps (an event, a correction from the host) wakes everything.
-  let fastest = 0;
+  let fastest = 0, nap = 0;
+  clock += dt; S.clock = clock;
   for (const B of allBalls()) {
     fastest = Math.max(fastest, topSpeed(B.d) * dashMult(B.d));
     if (Math.hypot(B.x - (B.wasX ?? B.x), B.z - (B.wasZ ?? B.z)) > 8) wakeAll = true;
@@ -3206,15 +3221,15 @@ function update(dt) {
       }
       continue;
     }
-    if (o.due > S.time) continue;                // asleep
+    if (o.due > clock) continue;                // asleep
     if (o.kind === 'item') {
       // A prop baked into the map that something has moved, resized or begun to grow comes out of it; a loose one
       // that has stood still for a second and a half goes (back) in. (See settle, above drawWorld.)
       const g = o.group, rot = g.rotation;
-      if (o.baked) { if (o.spawnT > 0 || p.x !== o.bx || p.y !== o.by || p.z !== o.bz || g.scale.x !== o.bs || rot.x !== o.brx || rot.y !== o.bry || rot.z !== o.brz || g.material !== itemMat) unsettle(o); }
+      if (o.baked) { if (o.spawnT > 0 || p.x !== o.bkx || p.y !== o.bky || p.z !== o.bkz || g.scale.x !== o.bks || rot.x !== o.brx || rot.y !== o.bry || rot.z !== o.brz || g.material !== itemMat) unsettle(o); }
       else if (!o.cell) {
-        if (p.x !== o.rx || p.y !== o.ry || p.z !== o.rz || g.scale.x !== o.rs || rot.y !== o.rr || o.restT === undefined) { o.rx = p.x; o.ry = p.y; o.rz = p.z; o.rs = g.scale.x; o.rr = rot.y; o.restT = S.time; }
-        else if (S.time - o.restT > 1.5 && !(o.cool > 0) && bakeable(o)) settle(o);
+        if (p.x !== o.rx || p.y !== o.ry || p.z !== o.rz || g.scale.x !== o.rs || rot.y !== o.rr || o.restT === undefined) { o.rx = p.x; o.ry = p.y; o.rz = p.z; o.rs = g.scale.x; o.rr = rot.y; o.restT = clock; }
+        else if (clock - o.restT > 1.5 && !(o.cool > 0) && bakeable(o)) settle(o);
       }
     }
     if (o.cool > 0) o.cool -= dt;
@@ -3237,12 +3252,18 @@ function update(dt) {
     else if (o.kind === 'creature') {                 // it minds the nearest ball, whoever is pushing it
       let B = S, gap = dist - S.d;
       for (const R of rivals) { const g2 = Math.hypot(p.x - R.x, p.z - R.z) - R.d; if (g2 < gap) { B = R; gap = g2; } }
-      // (its rules run every frame near a ball, and every third frame, for three frames' worth, further off)
-      if (gap < 22 + B.d * 4) updateCreature(o, dt, B);
-      else if (gap < 60 + B.d * 11 && (o.id + S.tickN) % 3 === 0) updateCreature(o, dt * 3, B);
+      // (its rules run every frame near a ball. Further off they run every third frame, for as long as has passed
+      // since, and it sleeps through the two frames between, unless it is close enough for its shadow to matter.)
+      if (gap < 22 + B.d * 4) { updateCreature(o, dt, B); o.aiT = clock; }
+      else if (gap < 60 + B.d * 11) {
+        const since = clock - o.aiT;
+        if (since > 0 && since < 0.25) { updateCreature(o, since, B); nap = 2.2; } else nap = 0.2 + o.id % 3;      // (the first time, only its turn is fixed: so they do not all come round on the same frame)
+        o.aiT = clock;
+        if (!o.fly && !o.on && !o.gone && !(o.cool > 0) && !(o.spawnT > 0) && !(QUAL.shadows && dist < shade + 6) && dist > reach + S.d + 2) o.due = clock + nap * dt;
+      }
       spare = Math.min(spare, gap - 60 - B.d * 11);
     }
-    if (spare > 3 && !(o.cool > 0) && !(o.spawnT > 0) && !o.script) o.due = S.time + Math.min(0.6, spare / nearing);
+    if (spare > 3 && !(o.cool > 0) && !(o.spawnT > 0) && !o.script) o.due = clock + Math.min(0.6, spare / nearing);
     if (o.kind === 'creature' && dist < reach + S.d * 0.35 && (o.noPick || o.size > S.d * pickRatio(S)) && !(S.ghostT > 0)) (boxers || (boxers = [])).push(o);   // a critter too big to roll up, right beside the ball
     if (dist >= reach) continue;
     if (feet > p.y + o.size || S.y + r < p.y) continue;      // on a different level: passes over or under
