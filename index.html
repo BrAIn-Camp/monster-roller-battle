@@ -9,48 +9,45 @@
   canvas#c { display: block; width: 100vw; height: 100vh; }
   .pill { background: rgba(255,255,255,.88); border: 3px solid #2b2540; border-radius: 16px; padding: 8px 14px; box-shadow: 0 4px 0 rgba(43,37,64,.35); }
   #hud { position: fixed; inset: 0; pointer-events: none; display: none; }
-  /* the player's own panel, bottom centre, just under the ball: critters | size + dash gauge | power */
-  #me { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); display: flex; align-items: flex-end; gap: 10px; }
-  #me .chip { background: rgba(255,250,240,.94); border: 3px solid #2b2540; border-radius: 16px; padding: 5px 12px 6px; min-width: 74px; text-align: center; box-shadow: 0 4px 0 rgba(43,37,64,.35); margin-bottom: 6px; }
-  #me .chip b { display: block; font-size: 24px; font-weight: 800; line-height: 1.05; } #me .chip small { font-size: 10px; font-weight: 800; letter-spacing: 1.5px; text-transform: uppercase; opacity: .65; }
-  #size { position: relative; background: #fffaf0; border: 4px solid #2b2540; border-top: 9px solid #e24a4a; border-radius: 22px; padding: 2px 20px 8px; min-width: 270px; text-align: center; font-size: 34px; font-weight: 800; line-height: 1.15; box-shadow: 0 6px 0 rgba(43,37,64,.4); }
-  #size small { display: block; font-size: 10px; font-weight: 800; letter-spacing: 2px; text-transform: uppercase; opacity: .55; margin-top: -3px; }
-  #bar { height: 8px; border: 2px solid #2b2540; border-radius: 6px; margin-top: 4px; overflow: hidden; background: #fff; }
-  #barfill { height: 100%; width: 0; background: #ffb52e; }
-  #size .dashrow { display: flex; align-items: center; gap: 8px; margin-top: 5px; }
-  #size .bolt { font-size: 18px; line-height: 1; filter: drop-shadow(0 1px 0 #2b2540); display: inline-block; }
-  #size .bolt.spent { animation: boltspent .4s; } @keyframes boltspent { 0% { transform: scale(1); } 30% { transform: scale(1.7) rotate(-12deg); filter: drop-shadow(0 1px 0 #2b2540) brightness(1.6); } 100% { transform: scale(1); } }      /* a jump has taken its bit of the meter */
-  #dashlabel { font-size: 10px; font-weight: 800; letter-spacing: 2px; margin-top: 3px; opacity: .7; }
-  #energy { position: relative; flex: 1; height: 18px; border: 3px solid #2b2540; border-radius: 10px; overflow: hidden; background: #e9e4f0; }
-  #energy .ticks { position: absolute; inset: 0; background: repeating-linear-gradient(90deg, transparent 0 calc(25% - 2px), rgba(43,37,64,.55) calc(25% - 2px) 25%); pointer-events: none; }
-  #energyfill { height: 100%; width: 100%; background: linear-gradient(#7fdcff, #36b4f5); } #chargefill { position: absolute; left: 0; top: 0; height: 100%; width: 0; background: #ffd23f; opacity: .9; }
-  #energy.full #energyfill { background: #36d6ff; box-shadow: 0 0 8px #36d6ff inset; } #energy.empty #energyfill { background: #b8c4d0; }
-  #energy.charging { animation: chg .12s infinite alternate; } @keyframes chg { from { transform: translateX(-1px); } to { transform: translateX(1px); } }
+  /* Top left: the player's place in their team's colour, the four balls in order at their sizes (the player's ringed
+     in white), and the one number that stays on screen, the ball's size. No names, no table. */
+  #place { position: absolute; left: 16px; top: 8px; display: grid; grid-template-columns: auto auto; align-items: end; column-gap: 12px; }
+  #plnum { display: block; font-size: 64px; font-weight: 900; font-style: italic; line-height: 1; color: var(--tm, #e24a4a); -webkit-text-stroke: 9px #2b2540; paint-order: stroke fill; letter-spacing: -2px; padding: 4px 8px 0 6px; transform-origin: 30% 70%; }
+  #plnum sup { font-size: .44em; letter-spacing: 0; margin-left: 2px; vertical-align: baseline; position: relative; top: -.95em; -webkit-text-stroke-width: 7px; }
+  #plnum.up { animation: plup .7s cubic-bezier(.2,1.5,.4,1); } #plnum.down { animation: pldown .5s ease-out; }
+  @keyframes plup { 0% { transform: scale(1); } 28% { transform: scale(1.55) rotate(-7deg); filter: brightness(1.35) drop-shadow(0 0 10px #fff); } 100% { transform: none; } }
+  @keyframes pldown { 0% { transform: none; } 25% { transform: translateY(7px) scale(.82); filter: saturate(.3); } 100% { transform: none; } }
+  #pldiscs { position: relative; height: 46px; width: 150px; margin-bottom: 9px; }
+  #pldiscs i { position: absolute; left: 0; bottom: 0; width: 20px; height: 20px; border-radius: 50%; box-sizing: border-box; border: 3px solid #2b2540; background: radial-gradient(circle at 34% 30%, rgba(255,255,255,.7) 0 13%, transparent 15%), var(--c, #888); transition: transform .45s cubic-bezier(.3,1.3,.5,1), width .3s, height .3s; }
+  #pldiscs i.me { box-shadow: 0 0 0 3px #fff, 0 0 0 5.500px #2b2540; z-index: 1; }
+  #plsize { grid-column: 1 / 3; font-size: 22px; font-weight: 800; line-height: 1.1; color: #fff; -webkit-text-stroke: 5px #2b2540; paint-order: stroke fill; padding-left: 8px; margin-top: 1px; }
+  #place.solo #plnum, #place.solo #pldiscs { display: none; }
+  @media (max-width: 1000px) { #place { transform: scale(.82); transform-origin: 0 0; } }      /* (clear of the phase bar in a narrow window) */
+  /* The dash meter: an arc beside the ball, drawn only while it is not full (winding up, spent, refilling). Placed and
+     shaped from the script (drawDashArc); what is here is its look. */
+  #dasharc { position: absolute; left: 0; top: 0; overflow: visible; opacity: 0; will-change: transform, opacity; }
+  #dasharc path { fill: none; stroke-linecap: round; }
+  #dasharc .ol { stroke: #2b2540; } #dasharc .tr { stroke: #fffaf0; } #dasharc .en { stroke: #36b4f5; } #dasharc .ch { stroke: #ffd23f; stroke-linecap: butt; } #dasharc .tk { stroke: #2b2540; stroke-linecap: butt; opacity: .55; }
+  #dasharc.empty .en { stroke: #9fb0c0; } #dasharc.empty .tr { stroke: #ffd9d2; }
+  #dasharc.full .en { stroke: #6fe3ff; filter: drop-shadow(0 0 5px #6fe3ff); }
+  #dasharc.charging g { animation: chg .1s infinite alternate; } @keyframes chg { from { transform: translateX(-1px); } to { transform: translateX(1px); } }
+  #dasharc.spent g { animation: arcspent .35s; } @keyframes arcspent { 0% { filter: none; } 30% { filter: brightness(1.7) drop-shadow(0 0 6px #fff); } 100% { filter: none; } }      /* a jump has taken its bit of the meter */
   .diffrow { margin: 6px 0 2px; font-size: 14px; font-weight: 700; } .diffrow button { font-size: 14px; padding: 5px 14px; margin: 3px; background: #fff; box-shadow: 0 3px 0 #2b2540; }
   .diffrow button.on { background: #ffe169; }
   #seek { position: absolute; left: 50%; top: 102px; transform: translateX(-50%); font-size: 13px; font-weight: 700; white-space: nowrap; display: none; padding: 4px 12px; }
   #seek .arr { display: inline-block; font-size: 18px; font-weight: 900; }
   #seek .type { display: inline-block; padding: 0 8px; border-radius: 8px; color: #fff; font-size: 11px; }
   #timer { position: absolute; left: 50%; top: 16px; transform: translateX(-50%); font-size: 26px; font-weight: 800; min-width: 80px; text-align: center; }
-  #goals { position: absolute; left: 16px; top: 16px; font-size: 13px; font-weight: 700; padding: 6px 10px 8px; min-width: 250px; }
-  .sbhead { display: grid; grid-template-columns: 1fr 62px 50px; gap: 0 4px; padding: 0 4px; font-size: 9px; font-weight: 800; letter-spacing: 1.5px; text-transform: uppercase; opacity: .55; text-align: right; margin-bottom: 2px; } .sbhead span:first-child { text-align: left; }
-  .sb { display: grid; grid-template-columns: 20px 54px 26px 1fr 62px 50px; align-items: center; gap: 0 4px; padding: 2px 4px; border-radius: 9px; white-space: nowrap; }
-  .sb.me { background: #ffe9a8; outline: 2px solid #2b2540; }
-  .sb .rk { font-style: normal; font-weight: 800; width: 18px; height: 18px; line-height: 18px; text-align: center; border-radius: 50%; background: #2b2540; color: #fff; font-size: 11px; }
-  .sb .szbar { height: 9px; border: 2px solid #2b2540; border-radius: 6px; background: #fff; overflow: hidden; } .sb .szbar u { display: block; height: 100%; transition: width .3s; }
-  .sb em { font-style: normal; text-align: right; font-weight: 800; } .sb .cr { text-align: right; opacity: .8; }
-  .sb .bestm { position: relative; width: 24px; height: 24px; border-radius: 50%; border: 2px solid #2b2540; background: #fff; overflow: hidden; box-sizing: border-box; } .sb .bestm:empty { visibility: hidden; }
-  .sb .bestm img { position: absolute; left: -10%; top: -10%; width: 120%; height: 120%; object-fit: contain; }
-  .sb .bestm i { position: absolute; left: 0; right: 0; bottom: -3px; font-style: normal; font-size: 8px; line-height: 1; text-align: center; color: #ffd23f; -webkit-text-stroke: 2px #2b2540; paint-order: stroke fill; letter-spacing: -1px; }
-  #goals .done { color: #2f8a3f; }
-  #pick { position: absolute; left: 50%; bottom: 142px; transform: translateX(-50%); font-size: 18px; font-weight: 800; opacity: 0; white-space: nowrap; }
+  #pick { position: absolute; left: 50%; bottom: calc(clamp(32px, min(7.6vh, calc((100vw - 420px) / 9.4)), 70px) * 1.6 + 30px); transform: translateX(-50%); font-size: 18px; font-weight: 800; opacity: 0; white-space: nowrap; }
   #pick.show { animation: pop 1.6s ease-out; }
   #pick .type { display: inline-block; padding: 1px 8px; border-radius: 8px; color: #fff; font-size: 13px; margin-left: 6px; }
   @keyframes pop { 0% { opacity: 0; transform: translateX(-50%) scale(.7); } 12% { opacity: 1; transform: translateX(-50%) scale(1.08); } 20% { transform: translateX(-50%) scale(1); } 80% { opacity: 1; } 100% { opacity: 0; } }
-  #hudMute { position: absolute; right: 16px; bottom: 16px; font-size: 12px; font-weight: 700; padding: 4px 10px; margin: 0; pointer-events: auto; box-shadow: 0 2px 0 #2b2540; }
+  /* sound: an icon, there only while the sound is off, and for a moment whenever it is switched (M) */
+  #hudMute { position: absolute; right: 14px; bottom: 14px; width: 36px; height: 36px; padding: 0; margin: 0; border-radius: 50%; display: flex; align-items: center; justify-content: center; pointer-events: auto; box-shadow: 0 2px 0 #2b2540; opacity: 0; visibility: hidden; transition: opacity .4s, visibility .4s; }
+  #hudMute.muted, #hudMute.flash { opacity: .92; visibility: visible; }
+  #hudMute svg { width: 21px; height: 21px; display: block; } #hudMute .x { display: none; } #hudMute.muted .x { display: inline; } #hudMute.muted .w { display: none; }
   #dexpop { position: absolute; right: 16px; top: 16px; width: 176px; text-align: center; opacity: 0; transform: translateX(40px); transition: opacity .25s, transform .25s; font-size: 13px; font-weight: 700; padding: 8px 10px 10px; }
   #dexpop.show { opacity: 1; transform: none; }
-  #dexpop.beside { right: calc(clamp(40px, 8.4vh, 68px) * 1.7 + 28px); }      /* the six (squad-hud.js) have the right edge */
   #dexpop canvas { width: 150px; height: 150px; display: block; margin: 0 auto; }
   #dexpop .nm { font-size: 16px; font-weight: 800; }
   #dexpop .meta { font-weight: 600; opacity: .75; font-size: 12px; }
@@ -64,7 +61,6 @@
   .lineup span.isnew { border-color: #f0b400; background: #fff6cc; }
   .lineup img { width: 40px; height: 40px; }
   .dot { display: inline-block; width: 11px; height: 11px; border-radius: 50%; border: 2px solid #2b2540; margin-right: 5px; vertical-align: -1px; }
-  .sb { white-space: nowrap; font-size: 13px; } .sb b { display: inline-block; min-width: 46px; }
   .sbnote { font-size: 11px; font-weight: 600; opacity: .7; margin-top: 2px; }
   #battleui { position: fixed; inset: 0; pointer-events: none; display: none; }
   #battlebars { position: absolute; left: 50%; top: 14px; transform: translateX(-50%); display: flex; gap: 10px; }
@@ -222,20 +218,16 @@
 <canvas id="c"></canvas>
 
 <div id="hud">
-  <div id="me">
-    <div class="chip"><b id="statCrit">0</b><small>critters</small></div>
-    <div id="size">60.0 cm<small>ball size</small><div id="bar"><div id="barfill"></div></div><div class="dashrow"><span class="bolt">&#9889;</span><div id="energy"><div id="energyfill"></div><div id="chargefill"></div><i class="ticks"></i></div></div><div id="dashlabel">DASH</div></div>
-    <div class="chip"><b id="statPow">0</b><small>power</small></div>
-  </div>
+  <div id="place"><b id="plnum"></b><div id="pldiscs"><i></i><i></i><i></i><i></i></div><span id="plsize"></span></div>
+  <svg id="dasharc" width="2" height="2"><g><path class="ol"/><path class="tr"/><path class="en"/><path class="ch"/><path class="tk"/></g></svg>
   <div id="seek" class="pill"></div>
-  <button id="hudMute" class="alt">Sound: on (M)</button>
+  <button id="hudMute" class="alt" aria-label="Sound (M)"><svg viewBox="0 0 24 24"><path d="M3 9.500h4l5-4.500v14l-5-4.500H3z" fill="#2b2540"/><path class="w" d="M15.500 8.500c1.800 1.800 1.800 5.200 0 7M18 6c3.200 3.200 3.200 8.800 0 12" fill="none" stroke="#2b2540" stroke-width="2.200" stroke-linecap="round"/><path class="x" d="M15.500 9.500l5 5m0-5l-5 5" fill="none" stroke="#c0392b" stroke-width="2.600" stroke-linecap="round"/></svg></button>
   <div id="timer" class="pill">5:00</div>
   <div id="phasebar"></div>
   <div id="evchip"><div id="evring"><div id="evico"></div></div><div class="evtxt"><span id="evname"></span><span id="evtag"></span></div><span id="evdist"></span></div>
   <div id="evcard"></div>
   <div id="banner"></div>
   <canvas id="mini" width="170" height="170"></canvas>
-  <div id="goals" class="pill"></div>
   <div id="dexpop" class="pill"><canvas id="dexcv" width="300" height="300"></canvas><div id="dexinfo"></div></div>
   <div id="tag0" class="tag"></div><div id="tag1" class="tag"></div><div id="tag2" class="tag"></div><div id="tag3" class="tag"></div>
   <div id="area"></div>
@@ -304,8 +296,8 @@
       <li>Roll over anything up to half your ball's size to pick it up and grow. A <b style="color:#1f9d45">green ring</b> on the ground means you can roll it up now; a broken <b style="color:#d23a2c">red ring</b> means not yet.</li>
       <li>A critter with a pulsing <b style="color:#b98a00">yellow ring</b> is only a little too big: dash into it to stun it, then roll it up before the stars round its head run out.</li>
       <li>Ram a smaller ball to knock its critters loose. Follow the beam of light to events.</li>
-      <li>After five minutes your <b>best six</b> fight in an arena. They are on the right of the screen. Three of a kind merge into the next stage, so collect in threes: the ring round a portrait fills as you get close.</li>
-      <li>Everything else you roll up makes those six stronger. The hexagon under them grows a corner for each stat, and the number in its middle is how much stronger they are. Collect fast critters for Speed, tough ones for HP and Defence.</li>
+      <li>After five minutes your <b>best six</b> fight in an arena. They are along the bottom of the screen. Three of a kind merge into the next stage, so collect in threes: the ring round a portrait fills as you get close.</li>
+      <li>Everything else you roll up makes those six stronger. The hexagon beside them grows a corner for each stat, and the number in its middle is how much stronger they are. Collect fast critters for Speed, tough ones for HP and Defence.</li>
       <li>The arena has no walls. Your ball knocks a monster further the more hurt it is, so finish the weak ones off the edge (dash into them for a smash). Roll through your own monsters to set off their signature moves. Keep your ball on the floor: if it falls, it is gone.</li>
     </ol>
     <div class="keys">

@@ -1,6 +1,7 @@
-// THE SIX, ON THE ROUND'S HUD. A column down the right edge: the player's six best monsters as they stand right now
-// (after merging: arena-merge.js works it out, this only draws it), and under them a hexagon of what the rest of the
-// collection adds to those six.
+// THE SIX, ON THE ROUND'S HUD. A row along the bottom of the screen, in the middle: the player's six best monsters as
+// they stand right now (after merging: arena-merge.js works it out, this only draws it), and at the row's right-hand
+// end a hexagon of what the rest of the collection adds to those six. (It was a column down the right edge; the
+// team is what a round is for, so it has the place the size panel and its counters used to take.)
 //
 // Nothing here is written out in words. A card is a portrait in a ring; the ring fills as the player closes in on
 // that monster's next form or star, and bursts when it gets there. A small badge shows what it is becoming (the
@@ -65,9 +66,9 @@ export const HEX_STYLE = `
 @keyframes hxping { 0% { transform: scale(1); } 30% { transform: scale(1.75); filter: brightness(1.5) drop-shadow(0 0 5px #fff); } 100% { transform: scale(1); } }`;
 
 const STYLE = `
-#squad { position: absolute; right: 14px; top: 14px; --c: clamp(40px, 8.4vh, 68px); width: calc(var(--c) * 1.7); pointer-events: none; }
-#squad .sq-cards { position: relative; height: calc(var(--c) * 6.72); margin: 0 auto; width: var(--c); }
-#squad .sq-slot { position: absolute; left: 0; width: var(--c); height: var(--c); border-radius: 50%; border: 3px dashed rgba(43,37,64,.4); background: rgba(255,255,255,.2); box-sizing: border-box; }
+#squad { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); --c: clamp(32px, min(7.6vh, calc((100vw - 420px) / 9.4)), 70px); display: flex; align-items: flex-end; gap: calc(var(--c) * .3); pointer-events: none; }
+#squad .sq-cards { position: relative; width: calc(var(--c) * 7); height: var(--c); flex: none; }
+#squad .sq-slot { position: absolute; top: 0; width: var(--c); height: var(--c); border-radius: 50%; border: 3px dashed rgba(43,37,64,.4); background: rgba(255,255,255,.2); box-sizing: border-box; }
 .sq-card { position: absolute; left: 0; top: 0; width: var(--c); height: var(--c); transition: transform .4s cubic-bezier(.3,1.3,.5,1), opacity .3s; will-change: transform; }
 .sq-card .sq-in { position: absolute; inset: 0; border-radius: 50%; }
 .sq-card .sq-disc { position: absolute; inset: 9%; border-radius: 50%; border: 2px solid ${DARK}; overflow: hidden; box-shadow: 0 3px 0 rgba(43,37,64,.35); }
@@ -91,7 +92,7 @@ const STYLE = `
 @keyframes sqburst { 0% { opacity: 1; transform: scale(.8); } 100% { opacity: 0; transform: scale(2.7); border-width: 1px; } }
 .sq-card.back .sq-in { animation: sqback .5s ease-out; } @keyframes sqback { 0% { transform: translateX(0); filter: grayscale(1) brightness(.7); } 20% { transform: translateX(-7px) rotate(-6deg); } 45% { transform: translateX(6px) rotate(5deg); } 70% { transform: translateX(-3px); } 100% { transform: none; filter: none; } }
 .sq-card.fed .sq-in { animation: sqfed .3s ease-out; } @keyframes sqfed { 0% { transform: scale(1); } 35% { transform: scale(1.16); filter: brightness(1.25); } 100% { transform: scale(1); } }
-#squad .sq-hex { width: 100%; margin-top: calc(var(--c) * .1); } #squad .sq-hex svg { display: block; width: 100%; overflow: visible; filter: drop-shadow(0 3px 0 rgba(43,37,64,.3)); }
+#squad .sq-hex { width: calc(var(--c) * 1.6); flex: none; margin-bottom: calc(var(--c) * -.06); } #squad .sq-hex svg { display: block; width: 100%; overflow: visible; filter: drop-shadow(0 3px 0 rgba(43,37,64,.3)); }
 .sq-spark { position: fixed; left: 0; top: 0; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; border: 2px solid ${DARK}; box-sizing: border-box; pointer-events: none; z-index: 4; box-shadow: 0 0 10px 2px rgba(255,255,255,.9); }
 ${HEX_STYLE}`;
 
@@ -103,7 +104,7 @@ export function createSquadHud({ root, faceOf, typeColor = () => '#ccc', origin 
   if (!document.getElementById('squad-style')) { const st = el('style', '', document.head); st.id = 'squad-style'; st.textContent = STYLE; }
   const box = el('div', '', root); box.id = 'squad';
   const cardsEl = el('div', 'sq-cards', box);
-  for (let i = 0; i < SQUAD; i++) el('div', 'sq-slot', cardsEl).style.top = `calc(var(--c) * ${(i * 1.12).toFixed(2)})`;
+  for (let i = 0; i < SQUAD; i++) el('div', 'sq-slot', cardsEl).style.left = `calc(var(--c) * ${(i * 1.2).toFixed(2)})`;
   const hexEl = el('div', 'sq-hex', box, hexSvg()), hexSvgEl = hexEl.firstChild, icons = [...hexEl.querySelectorAll('.hx-ico')];
   const cards = new Map();            // id -> card
   let shown = null, hexNow = [0, 0, 0, 0, 0, 0], hexTo = [0, 0, 0, 0, 0, 0], sparks = 0, visible = true, laterN = 0, powNow = '', powNext = '';
@@ -116,7 +117,7 @@ export function createSquadHud({ root, faceOf, typeColor = () => '#ccc', origin 
     cards.set(id, c);
     return c;
   }
-  const place = (c, slot) => { if (c.slot !== slot) { c.slot = slot; c.root.style.transform = `translateY(calc(var(--c) * ${(slot * 1.12).toFixed(2)}))`; } };
+  const place = (c, slot) => { if (c.slot !== slot) { c.slot = slot; c.root.style.transform = `translateX(calc(var(--c) * ${(slot * 1.2).toFixed(2)}))`; } };
   function setRing(c, v) {
     if (c.ring === v) return;
     c.ring = v;

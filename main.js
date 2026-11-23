@@ -1186,8 +1186,11 @@ if (new URLSearchParams(location.search).has('mute')) save.muted = true;     // 
 function setMuted(m) {
   save.muted = m; persist();
   if (master) master.gain.value = m ? 0 : 1;
-  for (const id of ['btnMute', 'btnMute2', 'hudMute']) { const el = $(id); if (el) el.textContent = m ? 'Sound: off (M)' : 'Sound: on (M)'; }
+  for (const id of ['btnMute', 'btnMute2']) { const el = $(id); if (el) el.textContent = m ? 'Sound: off (M)' : 'Sound: on (M)'; }
+  const h = $('hudMute');                      // in a round: an icon, there while the sound is off and for a moment whenever it is switched (M)
+  if (h) { h.classList.toggle('muted', m); h.classList.add('flash'); clearTimeout(muteFlashT); muteFlashT = setTimeout(() => h.classList.remove('flash'), 1400); }
 }
+let muteFlashT = 0;
 function audio() {
   if (!ac) {
     const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return null;
@@ -1515,37 +1518,89 @@ let toastTimer = 0;
 function toast(msg) { const el = $('toast'); el.textContent = loc(msg); el.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove('show'), 2200); }
 function showPick(html) { const el = $('pick'); el.innerHTML = html; el.classList.remove('show'); void el.offsetWidth; el.classList.add('show'); }
 function challengeProgress(c) { return (c.kind === 'type' ? S.counts.type[c.value] : S.counts.species[c.value]) || 0; }
-function armyPower(army) { let s = 0; for (const sp of army) s += sp._pw || (sp._pw = power(sp)); return s; }
+// What is on screen in a round, and nothing twice: the timer; top left the player's place, the four balls in order at
+// their sizes and the ball's size (the one number); the six and the hexagon along the bottom (squad-hud.js); and the
+// dash meter as an arc beside the ball, only while it is not full (drawDashArc). The critter count and the power
+// number went: the six portraits and the hexagon are what they were a sum of.
+const ORDINAL = ['st', 'nd', 'rd', 'th'];
+let placeWas = 0, placeSig = '';
 function updateHud() {
-  const en = $('energyfill'), ch = $('chargefill');
-  en.style.width = (S.energy * 100).toFixed(1) + '%'; ch.style.width = (S.charge * 100).toFixed(1) + '%';
-  $('energy').className = S.charge > 0 ? 'charging' : S.energy >= 0.999 ? 'full' : S.energy < DASH_MIN ? 'empty' : '';
-  $('dashlabel').textContent = S.charge > 0 ? 'CHARGING' : S.boostT > 0 ? 'BURST!' : S.energy >= 0.999 ? 'DASH READY' : 'DASH';
-  const nCrit = String(S.attachedCritters), nPow = String(Math.round(armyPower(S.army)));
-  if ($('statCrit').textContent !== nCrit) $('statCrit').textContent = nCrit;
-  if ($('statPow').textContent !== nPow) $('statPow').textContent = nPow;
-  $('size').firstChild.nodeValue = fmtSize(S.d);
-  const target = S.mode === 'timed' && LEVEL.targetDiameter > 0;
-  $('bar').style.display = target ? 'block' : 'none';
-  if (target) $('barfill').style.width = Math.min(100, S.d / LEVEL.targetDiameter * 100).toFixed(1) + '%';
+  const sz = fmtSize(S.d), ps = $('plsize');
+  if (ps.textContent !== sz) ps.textContent = sz;
   $('timer').textContent = S.mode === 'timed' ? fmtTime(Math.max(0, S.timeLeft)) : 'Free roam';
-  let html = '';
-  if (S.mode === 'timed') {                     // standings, biggest ball first
-    const rows = allBalls().map((b) => ({ tm: TEAMS[b.team], name: seatLabel(b.team), d: b.d, army: b.army, me: b === S, best: bestOf[b.team] })).sort((a, b) => b.d - a.d);
-    const big = Math.max(rows[0].d, 1);
-    rows.forEach((r, i) => { html += `<div class="sb${r.me ? ' me' : ''}"><i class="rk">${i + 1}</i><b style="color:${r.tm.css}">${r.name}</b>${bestChip(r.best)}<span class="szbar"><u style="width:${(r.d / big * 100).toFixed(0)}%;background:${r.tm.css}"></u></span><em>${fmtSize(r.d)}</em><span class="cr">${r.army.length}</span></div>`; });
-    html = '<div class="sbhead"><span>Standings</span><span>size</span><span>critters</span></div>' + html;
+  const timed = S.mode === 'timed', box = $('place');
+  if (box.classList.contains('solo') === timed) box.classList.toggle('solo', !timed);
+  if (!timed) { placeWas = 0; placeSig = ''; return; }
+  // biggest ball first. Each disc is a team's (it keeps its element, and slides to its new place when the order changes).
+  const rows = allBalls().slice().sort((p, q) => q.d - p.d), big = Math.max(rows[0].d, 0.01), discs = $('pldiscs').children;
+  let sig = '', mine = 1;
+  for (let i = 0; i < rows.length; i++) { if (rows[i] === S) mine = i + 1; sig += rows[i].team + ':' + Math.max(10, Math.round(42 * rows[i].d / big)) + ' '; }
+  if (sig !== placeSig) {
+    placeSig = sig;
+    let x = 0;
+    for (let k = 0; k < discs.length; k++) discs[k].style.display = 'none';
+    for (const b of rows) {
+      const el = discs[b.team]; if (!el) continue;
+      const px = Math.max(10, Math.round(42 * b.d / big));
+      el.style.display = ''; el.style.width = el.style.height = px + 'px'; el.style.transform = `translateX(${x}px)`;
+      el.style.setProperty('--c', TEAMS[b.team].css); el.classList.toggle('me', b === S);
+      x += px + (b === S ? 9 : 6);
+    }
+    $('pldiscs').style.width = x + 'px';
   }
-  $('goals').style.display = html ? '' : 'none';
-  if ($('goals').innerHTML !== html) $('goals').innerHTML = html;
+  if (mine !== placeWas) {
+    const n = $('plnum');
+    n.innerHTML = mine + '<sup>' + ORDINAL[Math.min(mine, 4) - 1] + '</sup>';
+    n.classList.remove('up', 'down');
+    if (placeWas) { void n.offsetWidth; n.classList.add(mine < placeWas ? 'up' : 'down'); if (mine < placeWas && S.state === 'play') { tone(784, 1047, 0.08, 'triangle', 0.09); tone(1047, 1568, 0.12, 'triangle', 0.08, 0.08); } }
+    placeWas = mine;
+  }
+}
+// ---------- the dash meter: an arc beside the ball ----------
+// Where the player is already looking, and only while there is something to read. It is not drawn while the meter is
+// full; it comes up while a dash is being wound up, in the burst, when a jump has taken its bit, and until the meter
+// has refilled (then it glints and goes). Blue is what is in the meter, yellow what has been wound up out of it, the
+// notch is the least a dash needs. It is drawn in the page, over the picture, at the ball's place on the screen.
+const ARC_SPAN = 0.72;                        // radians either side of level, on the ball's right
+let arcA = 0, arcHold = 0, arcKey = '', arcGlint = 0, arcWasFull = true, arcLen = 1;
+function drawDashArc(dt) {
+  const el = $('dasharc');
+  const busy = S.charge > 0 || S.boostT > 0 || S.energy < 0.999;
+  if (busy) { arcHold = 0.55; arcWasFull = false; } else { if (!arcWasFull) { arcWasFull = true; arcGlint = 0.55; } arcHold -= dt; }
+  arcGlint -= dt;
+  const want = S.state === 'play' && (busy || arcHold > 0) ? 1 : 0;
+  arcA += clamp(want - arcA, -dt * 3.5, dt * 12);
+  if (arcA <= 0.01) { arcA = 0; if (el.style.opacity !== '0') el.style.opacity = '0'; return; }
+  // the ball on the screen: its middle, and how many pixels its radius is
+  tmpV.set(S.x, S.y, S.z);
+  const dist = tmpV.distanceTo(camera.position);
+  tmpV.project(camera);
+  const cx = (tmpV.x + 1) / 2 * innerWidth, cy = (1 - tmpV.y) / 2 * innerHeight;
+  const Rb = S.d / 2 / (dist * Math.tan(camera.fov * Math.PI / 360)) * innerHeight / 2;
+  const w = clamp(Rb * 0.075, 6, 11), R = Math.round(Rb * 1.1 + w * 1.6 + 4), ps = el.firstElementChild.children;
+  const key = R + ':' + w.toFixed(1);
+  if (key !== arcKey) {                         // (its shape only changes when the ball's size on the screen does)
+    arcKey = key; arcLen = 2 * ARC_SPAN * R;
+    const x = (R * Math.cos(ARC_SPAN)).toFixed(1), y = (R * Math.sin(ARC_SPAN)).toFixed(1), d = `M${x} ${y}A${R} ${R} 0 0 0 ${x} ${-y}`;
+    for (let i = 0; i < 4; i++) { ps[i].setAttribute('d', d); ps[i].style.strokeWidth = (i ? w : w + 6).toFixed(1) + 'px'; }
+    const at = ARC_SPAN - 2 * ARC_SPAN * DASH_MIN, c = Math.cos(at), sn = Math.sin(at);
+    ps[4].setAttribute('d', `M${((R - w / 2) * c).toFixed(1)} ${((R - w / 2) * sn).toFixed(1)}L${((R + w / 2) * c).toFixed(1)} ${((R + w / 2) * sn).toFixed(1)}`); ps[4].style.strokeWidth = '2.5px';
+  }
+  el.style.transform = `translate(${cx.toFixed(1)}px,${cy.toFixed(1)}px)`;
+  el.style.opacity = arcA.toFixed(2);
+  const e = S.energy * arcLen, c = S.charge * arcLen;
+  ps[2].style.display = e > 1 ? '' : 'none'; ps[2].style.strokeDasharray = `${e.toFixed(1)} ${(arcLen * 2).toFixed(1)}`;
+  ps[3].style.display = c > 0.5 ? '' : 'none'; ps[3].style.strokeDasharray = `${c.toFixed(1)} ${(arcLen * 2).toFixed(1)}`; ps[3].style.strokeDashoffset = (-e).toFixed(1);
+  el.classList.toggle('charging', S.charge > 0);
+  el.classList.toggle('empty', S.energy < DASH_MIN && S.charge <= 0 && S.boostT <= 0);
+  el.classList.toggle('full', !busy && arcGlint > 0);
 }
 
 // ---------- the six (squad-hud.js): the player's best six monsters as they stand after merging, and what the rest of
 // the collection adds to them. Worked out again whenever the army changes; the arena uses the very same sum. ----------
 const faces = new Map();                      // slot -> portrait
 const BLANK = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';      // a clear pixel: a portrait that is still on its way
-let faceR = null, squad = null, squadOn = null, squadRun = null, squadSig = -1, squadT = 0, squadStale = false, bestT = 0;
-const bestOf = [];                            // each team's strongest monster, for the standings
+let faceR = null, squad = null, squadOn = null, squadRun = null, squadSig = -1, squadT = 0, squadStale = false;
 function renderFace(inst) {                   // a portrait of a Stadium model (the generated critters already have theirs: thumbs)
   if (!faceR) {
     faceR = { r: new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true }), sc: new THREE.Scene(), cam: new THREE.PerspectiveCamera(30, 1, 0.05, 80) };
@@ -1575,7 +1630,6 @@ function faceOf(spec) {
   return faces.get(b.dex);
 }
 const armySig = (army) => { let s = army.length * 7919; for (const sp of army) s = (s + sp.dex * 131 + Math.round(sp.height * 100)) | 0; return s; };
-const bestChip = (r) => (r ? `<span class="bestm" title="${r.spec.name}"><img alt="" src="${faceOf(r.spec)}">${r.stars ? `<i>${'★'.repeat(r.stars)}</i>` : ''}</span>` : '<span class="bestm"></span>');
 function tickSquad(dt) {
   if (!squad) squad = createSquadHud({ root: $('hud'), faceOf, typeColor: (t) => TYPE_COLORS[t] || '#bbb',
     origin: () => { tmpV.set(S.x, S.y, S.z).project(camera); return { x: (tmpV.x + 1) / 2 * innerWidth, y: (1 - tmpV.y) / 2 * innerHeight }; },
@@ -1585,18 +1639,14 @@ function tickSquad(dt) {
       ping: (i) => tone(1175 + i * 110, 1568 + i * 110, 0.07, 'sine', 0.045),
     } });
   const on = S.mode === 'timed';
-  if (squadOn !== on) { squadOn = on; squad.show(on); $('dexpop').classList.toggle('beside', on); }
+  if (squadOn !== on) { squadOn = on; squad.show(on); }
   if (!on) return;
-  if (squadRun !== S.runSeen) { squadRun = S.runSeen; squadSig = -1; squad.reset(); bestOf.length = 0; bestT = 0; }
+  if (squadRun !== S.runSeen) { squadRun = S.runSeen; squadSig = -1; squad.reset(); }
   if (squadStale) { squadStale = false; squad.refresh(); }
   if ((squadT -= dt) <= 0) {
     squadT = 0.1;
     const sig = armySig(S.army);
     if (sig !== squadSig) { const quiet = squadSig === -1; squadSig = sig; squad.set(planArmy(S.army, { specOf, teamIndex: S.team }), { quiet }); }
-  }
-  if ((bestT -= dt) <= 0) {                   // rivals' strongest, twice a second
-    bestT = 0.5;
-    for (const b of allBalls()) bestOf[b.team] = (b === S && squad.plan ? squad.plan : planArmy(b.army, { specOf, teamIndex: b.team, limit: 1 })).roster[0] || null;
   }
   squad.step(dt);
 }
@@ -1981,7 +2031,12 @@ function stick(ballGroup, o, cx, cy, cz, r) {
   ballGroup.attach(o.group);
   o.on = true; o.stunEnd = 0; o.mx = NaN;        // (its matrix is its place on the ball now: once free again it must be worked out afresh, wherever it lands)
 }
+// The line that names what was rolled up is only for something worth a line: at least PICK_NOTE of the biggest the
+// ball can take (so a quarter of the ball's width). Measured over a round, a line for everything was one every
+// second or so by the end, each on screen for 1.6 s: unreadable. This way it is one every three to eight seconds.
+const PICK_NOTE = 0.5;
 function attach(o) {
+  const notable = o.size >= S.d * pickRatio(S) * PICK_NOTE;
   if (o.stunEnd > clock) S.stunGot = (S.stunGot | 0) + 1;
   stick(ball, o, S.x, S.y, S.z, S.d / 2);
   o.contrib = growthOf(S, o);
@@ -2007,8 +2062,8 @@ function attach(o) {
     if (isNew) S.runNew.add(key);
     // the full card is for news: the first of a species this run. Repeats get a small tally at the bottom.
     if (runN === 1 || sp.titan) showDexPop(sp, isNew, e.count);          // a titan always earns the full card
-    else showPick(`${sp.name} <span style="opacity:.6">×${runN}</span>`);
-  } else {
+    else if (notable) showPick(`${sp.name} <span style="opacity:.6">×${runN}</span>`);
+  } else if (notable) {
     showPick(`${o.spec.name} <span style="opacity:.6">${fmtSize(o.size)}</span>`);
   }
   while (S.attached.length > MAX_ON_BALL) ball.remove(S.attached.shift().group);   // the oldest are absorbed for good: still counted, no longer drawn
@@ -2593,7 +2648,8 @@ function updateTags() {
       const a = Math.atan2(dy, dx), m = 56, hw = innerWidth / 2 - m, hh = innerHeight / 2 - m;
       const kx = Math.min(hw / Math.abs(Math.cos(a) || 1e-6), hh / Math.abs(Math.sin(a) || 1e-6));
       sx = innerWidth / 2 + Math.cos(a) * kx; sy = innerHeight / 2 + Math.sin(a) * kx;
-      if (squadOn) sx = Math.min(sx, innerWidth - 70 - Math.max(40, Math.min(68, innerHeight * 0.084)) * 1.7);       // (the six have the right edge)
+      if (squadOn) { const c = clamp(Math.min(innerHeight * 0.076, (innerWidth - 420) / 9.4), 32, 70); if (Math.abs(sx - innerWidth / 2) < c * 4.45 + 60) sy = Math.min(sy, innerHeight - c * 1.6 - 36); }       // (the six have the middle of the bottom edge: squad-hud.js)
+      if (sx < 280 && sy < 130) sy = 130;        // (and the place has the top left corner)
       el.className = 'tag edge'; el.innerHTML = `<b style="display:inline-block;transform:rotate(${(a + Math.PI / 2).toFixed(2)}rad)">▲</b> ${tm.name} ${Math.round(dist)} m`;
     }
     el.style.display = 'block'; el.style.left = sx.toFixed(0) + 'px'; el.style.top = sy.toFixed(0) + 'px'; el.style.background = tm.css;
@@ -3595,8 +3651,7 @@ function update(dt) {
       const jx = Math.sin(S.heading), jz = Math.cos(S.heading), want = vmax * JUMP_KICK * f, has = S.vx * jx + S.vz * jz;
       if (has < want) { S.vx += jx * (want - has); S.vz += jz * (want - has); }
     }
-    const bolt = document.querySelector('#size .bolt');
-    if (bolt) { bolt.classList.remove('spent'); void bolt.offsetWidth; bolt.classList.add('spent'); }
+    const arc = $('dasharc'); arc.classList.remove('spent'); void arc.getBoundingClientRect(); arc.classList.add('spent');      // (the meter's arc blinks: the jump has taken its bit)
   }
   const boosting = S.boostT > 0;
   if (boosting) { S.boostT -= dt; f = 1; }
@@ -3873,6 +3928,7 @@ function update(dt) {
   if (S.mode === 'timed' && !frozen) { S.timeLeft -= dt; tickMatch(dt); if (S.timeLeft <= 0 && S.state === 'play' && !NET.client) timeUp(); }
   if (NET.on) netTick(dt);
   updateHud();
+  drawDashArc(dt);
   tickSquad(dt);
 }
 
@@ -3930,7 +3986,7 @@ function dressPlayer() {
   const tm = TEAMS[S.team];
   styleBall(core, S.team, true);
   scene.remove(trainer); trainer = buildTrainer(tm.hex); trainer.scale.setScalar(trainerHeight(START_D)); scene.add(trainer);
-  $('size').style.borderTopColor = tm.css;
+  $('place').style.setProperty('--tm', tm.css);
 }
 // cfg: a multiplayer match, as the host set it up ({ seed, evTimes, kinds, diff }); null for single player.
 function start(mode, cfg = null) {

@@ -113,6 +113,29 @@ The first human playtest reached 24 m against CPUs at 8-13 m, pulling ahead in t
   HUD re-laid: the player's panel (critters, ball size with the dash gauge, army power) sits bottom centre just under the ball;
   standings are a ranked list with size bars top left; the dex card is top right; the clock, phase bar and event chip stay top centre;
   the minimap is bottom left and the sound button bottom right.
+- **HUD pared down (23 November 2026).** The rule: as little text as will do, nothing shown twice, and nothing in the
+  middle of the bottom edge but what the round is for. What is on screen in a round now:
+  - *Top left, the place:* a big "2nd" in the player's team colour (the kart-racer convention), beside it the four
+    balls as discs in order, each at its size relative to the biggest and the player's ringed in white, and under it
+    the ball's size, the one number left. No names, no table. The ordinal pops (and chimes) on a place gained and
+    dips on one lost; the discs slide to their new places. In free roam only the size shows.
+  - *Beside the ball, the dash meter:* an arc on the ball's right, where the player is already looking (the
+    stamina-wheel convention of open-world adventure games). It is not drawn while the meter is full: it comes up
+    while a dash is wound up, in the burst, when a jump takes its bit, and until the meter has refilled, then glints
+    and goes. Blue is what is in the meter, yellow what has been wound up out of it, a notch marks the least a dash
+    needs, and the track turns pink below that. No label and no bolt (`drawDashArc`, `main.js`).
+  - *Bottom middle, the team:* the six portraits in a row with the hexagon at the right-hand end (see "On the round's
+    HUD" below); it was a column on the right edge.
+  - *Gone:* the critter count and the power number (the six and the hexagon are what they summed), the "ball size"
+    caption and the bar to the target size, the words DASH / DASH READY / CHARGING / BURST!, the standings' names,
+    size bars, sizes, critter counts and each rival's best portrait, and the sound button (M still switches it; an
+    icon shows bottom right only while the sound is off, and for a moment when it is switched).
+  - *The line naming what was rolled up* is only for something at least a quarter of the ball's width
+    (`PICK_NOTE`, half the biggest the ball can take). Measured over a round, a line for everything was one every
+    second or so by the end, each on screen for 1.6 s; now it is one every three to eight seconds. The first of a
+    species still gets its card, whatever its size.
+  - The timer, phase bar, event chip, rivals' name tags, minimap and dex card are as they were (the tags keep clear of
+    the team's row and of the place).
 - **Critter attacks and getting boxed in (fifth pass):** a bold critter that reaches the ball now attacks instead of just blocking: it
   rears back for 0.4 s, lunges for 0.2 s, then backs off. A hit throws the ball clear and lets it pass through critters for 1.1 s.
   If the ball is held between solid things, or has stayed within its own width of one spot for two seconds while pushing with
@@ -259,16 +282,15 @@ totals decide two things:
 A large, even haul (+9% on each) wins as often as a team made 30% stronger outright
 (`node tools/arena-test/headless.mjs bonus` measures it).
 
-**On the round's HUD** (`squad-hud.js`, timed mode only), down the right edge:
-- *Six cards*, strongest at the top: a portrait in a ring. The ring fills as the player closes in on that monster's next form
+**On the round's HUD** (`squad-hud.js`, timed mode only), in a row along the bottom of the screen, in the middle:
+- *Six cards*, strongest on the left: a portrait in a ring. The ring fills as the player closes in on that monster's next form
   or star (two loose first-stage critters are two thirds of a second-stage one), and is a full gold ring when there is
   nothing further to become. A small badge shows what it is becoming: the next form in silhouette, or a star.
 - Rolling up the third of a kind *evolves the card on the spot* (a flash, a burst, a jingle). The ball still carries the
   three originals: if a rival knocks one off, the card steps back.
-- *A hexagon*, one corner per stat, which grows as spares are collected (drawn on a curve so the first few already show).
+- *A hexagon* at the right-hand end of the row, one corner per stat, which grows as spares are collected (drawn on a curve so the first few already show).
 - Every critter rolled up visibly goes somewhere: a spark flies from the ball to the card it feeds, or to the corners of
   the hexagon it raises.
-- Each rival's strongest monster is a small portrait on its row of the standings.
 There are no markers in the world: players learn the lines and hunt for themselves. CPU teams do hunt (more keenly on
 Normal and Hard): a critter they already carry one or two of seems nearer to them (`hunt` in `DIFFS`, `main.js`).
 
