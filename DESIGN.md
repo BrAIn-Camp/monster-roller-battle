@@ -120,6 +120,65 @@ The first human playtest reached 24 m against CPUs at 8-13 m, pulling ahead in t
   4-8 critters (and 5 titans round a 6 m ball): out in 1.5-2.1 s, 7 s for the titans.
 - **Late bloomer:** any ball still under 1 m when Expedition begins is boosted to 1 m, so nobody is stuck in the Green.
 
+## 4c. The jump, the ram and the rings
+
+Three additions to the round, made together so that each explains the others.
+
+- **The jump** (Space, pad A; the dash is now Shift or RT only). A starting ball clears 1.5 times its own height; a bigger
+  one clears less of itself but more in metres (0.6 m ball: 0.9 m up; 3 m: 1.9 m; 10 m: 3.3 m, a third of its height),
+  and every size is in the air for about half a second. A tap is a hop (about half height), a hold is the full jump; a
+  press just before landing or just after rolling off an edge still counts. It keeps the speed it left the ground with and
+  steers only a little in the air, so a jump out of a dash burst is a long jump, and jumping while winding up keeps the
+  charge. With forward held it leaves the ground at no less than 60% of top speed, so a ball pressed against a ledge
+  leaps onto it from a standstill; on the way up nothing knocks it back (a ledge or a prop only holds it until it is
+  high enough), and coming down on top of something too big to roll up it skips off the top and carries on rather than
+  being squeezed out sideways. It takes a tenth of the dash meter but is never refused when the meter is empty (the meter refills a tenth
+  faster to pay for it): getting unstuck must not be something a ball can run out of. What it is for: up a ledge that
+  is too tall to roll over, and over a prop or a critter that is too big to roll up and is in the way. The ball's shell
+  stretches as it leaves the ground and flattens as it lands, the trainer jumps with it, dust at both ends, and where
+  shadows are switched off a dark spot under the ball shows where it will come down. CPUs jump only to free themselves:
+  at a ledge that has already turned them back once, and when stuck in one place for three seconds.
+  `JUMP_LEDGE_CAP` (top of `main.js`) decides how much ground a jump may gain. It is set to "whatever the ball's underside
+  clears", which means a starting ball can hop the 35 cm lip of the Green instead of growing to 90 cm first, a 2.7 m
+  ball can mount the 3.2 m mesas (7 m to roll up them) and a 5.8 m ball the 5.2 m ones (12 m). The sea is not affected
+  (that gate is by size, not height), and the CPUs do not use it (they only jump to free themselves). Set it to a number
+  and a jump may only mount ground that many times higher than the ball could have rolled up: the Green is then left at
+  88 cm divided by the number (1.25: at 70 cm), at the price of a ball being stopped in mid-air by a ledge it has
+  visibly cleared. Which of the two the map should be is an open question.
+- **The ram.** A critter up to 1.3 times the biggest the ball can roll up (so up to 0.65 of the ball's width) is stunned
+  for four seconds by a dash burst into it, and while it is stunned any ball that could have stunned it can roll it up.
+  Three stars circle its head and go out one at a time, so what is left of the four seconds can be read at a glance. The
+  burst is spent on the hit and the ball rocks back a little, ready to roll in. Only a proper burst does it: wound up
+  at least half way (`RAM_CHARGE`: a tap of the dash button costs 6% of the meter and would otherwise have stunned as
+  well as a full one, some seventy times a minute), and closing at 90% of the ball's ordinary top speed or more, in the
+  burst or in the third of a second after it. A yellow ring lights up once the wind-up is enough; a critter bigger than that shakes its head and stands its ground; a
+  critter that is charging or lunging can be stunned like any other. In multiplayer the host decides (`st` asks, `sn`
+  tells everyone, and tells the asker if the answer is no); the player who rammed sees it at once. CPUs on Normal and Hard go for a critter they would have to stun
+  when one is close and their meter is three-quarters full: a handful of times a round, and they collect about half.
+- **The rings.** The "Now rollable: ..." line of text is gone. Anything near the ball that a player could be in doubt
+  about (from 0.6 to 1.6 times the biggest it can take, within four ball-widths) has a ring on the ground: green and
+  whole if the ball can roll it up, red and broken into dashes if it cannot, and a turning yellow ring of twelve points
+  if it is a critter that a dash would stun (it pulses while there is energy for one). The three differ in shape as
+  well as colour. When the ball grows past something red, its ring turns green with a pop and a chime. One draw for all of them
+  (`drawRings`), the ring worked out per pixel so its edge is sharp at any size.
+- **Teaching.** No words: a small moving picture with the key under it (`#keyhint`). The jump's shows the first times the
+  ball is held against something a jump would clear; the ram's, the first times a yellow-ringed critter is close and
+  there is energy for a dash, or at once when one is bumped without a dash; its picture goes on to the second touch
+  (the ball rolls in and the critter is on it). Each goes for the rest of the sitting once the player has done it
+  twice with the picture on show (a jump counts only if it got the ball past what held it). They are not remembered
+  between sittings: on a shared computer the next player has not seen them.
+- **In the arena** Space is the jump there too (it used to be a second dash key). It shares the dash's cooldown: one or
+  the other every 2.2 s. For 0.6 s the ball is off the floor (0.9 of its width at the top), and while it is more than a
+  fifth of its width up, whatever comes along the floor passes under it: a vent or a bolt going off, the tide, a rolling
+  signature move or its shove, a charging monster, a bumper, a rival ball. The wind still pushes it, it still meets
+  monsters as it would on the floor, and it is as lost past the edge in the air as on the ground. It is a press, not a
+  hold (a press a little before the cooldown ends still counts). A jump that something passed under, and that nothing
+  caught at either end, is marked a moment after landing with a ring of sparks and two bright notes, and the ball cannot be stunned for 1.2 s
+  after something has passed under it (without that, a dodged rival was simply still there when it came down, and
+  the jump changed nothing). CPUs jump what they see coming, a heavier ball about to ram them included, 60% of the
+  time. Over 400 headless fights the balance report is where it was (median 49 s against 50, the strongest army wins
+  54% against 53%, seats even) except that fewer balls are lost: 0.77 of 4 a fight against 0.99.
+
 ## 5. Events
 
 Every event has an icon and a tag of a few words (`EVENT_ICONS` and `EVENT_TAGS` in `main.js`). When one starts a card pops up
@@ -268,7 +327,7 @@ type's colour: a wedge, a strip, a ring or a reticle, filling until the move goe
 | Dragon | Dragon Beam | everything on a line |
 | Normal | Stampede | charges down a line, bowling foes aside |
 
-**The balls.** The human steers with the stick or WASD and dashes with Shift or Space. A ball:
+**The balls.** The human steers with the stick or WASD, dashes with Shift and jumps with Space (see 4c). A ball:
 - *rams* any monster it cannot scoop: breaks its wind-up and knocks it back. Metres slid = 0.26 x closing speed x
   (1 + 1.5 x health lost) / weight, so a ball barely moves a fresh monster and sends a weakened one flying: the ball is the
   finisher, and picking the hurt one near an edge is the skill. A ram at dash speed is a *smash*: 1.3x the distance, 7% of

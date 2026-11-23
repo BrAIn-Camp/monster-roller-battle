@@ -125,6 +125,31 @@
   #lights.show { display: flex; }
   #lights i { width: 38px; height: 38px; border-radius: 50%; background: #55506a; border: 3px solid #17131f; }
   #lights i.red { background: #ff4a4a; box-shadow: 0 0 18px #ff4a4a; } #lights i.green { background: #5fe35a; box-shadow: 0 0 22px #5fe35a; }
+  /* how the jump and the ram are taught: a little moving picture and the key to press, no words */
+  #keyhint { position: absolute; left: calc(50% + 120px); bottom: 172px; display: none; align-items: center; gap: 14px; padding: 8px 16px 10px; background: rgba(255,255,255,.95); }      /* beside the ball, not over it */
+  #keyhint.jump, #keyhint.ram { display: flex; animation: khin .25s; } @keyframes khin { from { opacity: 0; transform: scale(.8); } to { opacity: 1; transform: scale(1); } }
+  @media (max-width: 720px) { #keyhint { left: 50%; margin-left: -100px; bottom: 300px; } }
+  #keyhint .scene { position: relative; width: 92px; height: 46px; border-bottom: 3px solid #2b2540; }
+  #keyhint .scene i { position: absolute; bottom: 0; }
+  #keyhint .ball b { display: block; width: 18px; height: 18px; border-radius: 50%; background: #e24a4a; border: 2px solid #2b2540; box-shadow: inset 0 -5px 0 rgba(43,37,64,.18); }
+  #keyhint .block { left: 38px; width: 14px; height: 15px; background: #c3ad86; border: 2px solid #2b2540; border-bottom: 0; display: none; }
+  #keyhint .crit { left: 60px; width: 20px; height: 23px; border-radius: 11px 11px 5px 5px; background: #fff; border: 2px solid #2b2540; border-bottom-width: 2px; display: none; box-shadow: 0 5px 0 -2px #ffd23f; }
+  #keyhint .crit::before { content: ''; position: absolute; left: 3px; top: 6px; width: 3px; height: 3px; border-radius: 50%; background: #2b2540; box-shadow: 7px 0 0 #2b2540; }
+  #keyhint .stars { left: 54px; bottom: 22px !important; width: 32px; text-align: center; font-style: normal; font-size: 13px; line-height: 1; color: #f2b600; -webkit-text-stroke: .6px #2b2540; letter-spacing: 1px; display: none; }
+  #keyhint kbd { font-size: 17px; padding: 5px 12px; border-width: 3px; border-radius: 9px; box-shadow: 0 4px 0 #2b2540; min-width: 30px; text-align: center; }
+  #keyhint.jump .block { display: block; }
+  #keyhint.jump .ball { left: 4px; animation: khx 1.5s linear infinite; } #keyhint.jump .ball b { animation: khy 1.5s infinite; } #keyhint.jump kbd { animation: khtap 1.5s infinite; }
+  @keyframes khx { 0%, 25% { transform: translateX(0); } 75%, 100% { transform: translateX(64px); } }
+  @keyframes khy { 0%, 25% { transform: translateY(0); animation-timing-function: cubic-bezier(.2,.6,.5,1); } 50% { transform: translateY(-25px); animation-timing-function: cubic-bezier(.5,0,.8,.4); } 75%, 100% { transform: translateY(0); } }
+  @keyframes khtap { 0%, 19% { transform: none; box-shadow: 0 4px 0 #2b2540; background: #fff; } 25%, 48% { transform: translateY(4px); box-shadow: 0 0 0 #2b2540; background: #ffe169; } 58%, 100% { transform: none; box-shadow: 0 4px 0 #2b2540; background: #fff; } }
+  #keyhint.ram .crit, #keyhint.ram .stars { display: block; }
+  /* wind up (key held), burst into it (key let go), stars; then roll in and it is on the ball */
+  #keyhint.ram .ball { left: 4px; animation: khram 2.8s infinite; } #keyhint.ram .ball b { animation: khgrow 2.8s infinite; transform-origin: 50% 100%; } #keyhint.ram kbd { animation: khhold 2.8s infinite; } #keyhint.ram .stars { animation: khstars 2.8s infinite; } #keyhint.ram .crit { animation: khdaze 2.8s infinite; transform-origin: 50% 100%; }
+  @keyframes khram { 0%, 5% { transform: translateX(0); } 8% { transform: translateX(-2px); } 11% { transform: translateX(1px); } 14% { transform: translateX(-3px); } 17% { transform: translateX(1px); } 20% { transform: translateX(-4px); } 23% { transform: translateX(0); } 26% { transform: translateX(-4px); } 29% { transform: translateX(-5px); animation-timing-function: cubic-bezier(.7,0,1,.6); } 35% { transform: translateX(37px); animation-timing-function: ease-out; } 42%, 58% { transform: translateX(24px); animation-timing-function: ease-in-out; } 70%, 94% { transform: translateX(48px); } 100% { transform: translateX(0); } }
+  @keyframes khgrow { 0%, 68% { transform: scale(1); } 74% { transform: scale(1.35); } 80%, 94% { transform: scale(1.2); } 100% { transform: scale(1); } }
+  @keyframes khhold { 0%, 4% { transform: none; box-shadow: 0 4px 0 #2b2540; background: #fff; } 7%, 29% { transform: translateY(4px); box-shadow: 0 0 0 #2b2540; background: #ffe169; } 33%, 100% { transform: none; box-shadow: 0 4px 0 #2b2540; background: #fff; } }
+  @keyframes khstars { 0%, 35% { opacity: 0; transform: scale(.3) rotate(-40deg); } 39% { opacity: 1; transform: scale(1.3) rotate(0deg); } 45% { transform: scale(1) rotate(8deg); } 55% { transform: scale(1) rotate(-8deg); } 66% { opacity: 1; transform: scale(1) rotate(8deg); } 70%, 100% { opacity: 0; transform: scale(.3); } }
+  @keyframes khdaze { 0%, 35% { transform: none; opacity: 1; } 38% { transform: translateX(3px) rotate(9deg); } 44% { transform: rotate(-8deg); } 52% { transform: rotate(7deg); } 60% { transform: rotate(-6deg); } 66% { transform: rotate(5deg) scale(1); opacity: 1; } 71%, 95% { transform: translate(-6px, -8px) scale(.2); opacity: 0; } 100% { transform: none; opacity: 1; } }
   #boosthint { position: fixed; left: 50%; top: 62%; transform: translateX(-50%); font-size: 18px; font-weight: 800; display: none; }
   #boosthint.show { display: block; } #boosthint.q0 { background: #ffb0a0; } #boosthint.q2 { background: #ffe169; } #boosthint.q3 { background: #8fe0ff; }
   #speedlines { position: fixed; inset: -20%; pointer-events: none; opacity: 0; transition: opacity .15s;
@@ -217,6 +242,7 @@
   <div id="toast" class="pill"></div>
   <div id="netwarn" class="pill">Connection is slow: other players may be out of date</div>
   <div id="pick" class="pill"></div>
+  <div id="keyhint" class="pill"><div class="scene"><i class="block"></i><i class="crit"></i><i class="stars">&#9733;&#9733;&#9733;</i><i class="ball"><b></b></i></div><kbd id="khkey">Space</kbd></div>
 </div>
 
 <div id="netstats"></div>
@@ -275,7 +301,8 @@
   <div class="card">
     <h2>How to play</h2>
     <ol class="how">
-      <li>Roll over anything up to half your ball's size to pick it up and grow.</li>
+      <li>Roll over anything up to half your ball's size to pick it up and grow. A <b style="color:#1f9d45">green ring</b> on the ground means you can roll it up now; a broken <b style="color:#d23a2c">red ring</b> means not yet.</li>
+      <li>A critter with a pulsing <b style="color:#b98a00">yellow ring</b> is only a little too big: dash into it to stun it, then roll it up before the stars round its head run out.</li>
       <li>Ram a smaller ball to knock its critters loose. Follow the beam of light to events.</li>
       <li>After five minutes your <b>best six</b> fight in an arena. They are on the right of the screen. Three of a kind merge into the next stage, so collect in threes: the ring round a portrait fills as you get close.</li>
       <li>Everything else you roll up makes those six stronger. The hexagon under them grows a corner for each stat, and the number in its middle is how much stronger they are. Collect fast critters for Speed, tough ones for HP and Defence.</li>

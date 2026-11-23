@@ -1424,7 +1424,6 @@ function populateSeeded(seed) {
   S.titansOut = false; S.live = false;
   for (const o of S.objects) if (bakeable(o)) settle(o);       // the props are baked into the map, cell by cell (see settle)
   { let cs = S.objects.length; for (const o of S.objects) cs = (cs * 31 + Math.round(o.group.position.x * 8) + Math.round(o.group.position.z * 8) * 7) | 0; S.layoutSum = cs; }
-  buildUnlocks();
 }
 
 // ---------- input ----------
@@ -1654,19 +1653,126 @@ function tickDexPop(dt) {
   }
 }
 
-// ---------- "now rollable" announcements, and the arrow to what a challenge still needs ----------
-let unlocks = [], unlockAt = 0;
-function buildUnlocks() {                     // every kind of thing on the map, smallest first
-  const best = new Map();
-  for (const o of S.objects) if (!best.has(o.spec.name) || o.size < best.get(o.spec.name)) best.set(o.spec.name, o.size);
-  unlocks = [...best].map(([name, size]) => ({ name, size })).sort((a, b) => a.size - b.size);
-  unlockAt = unlocks.findIndex((u) => u.size > S.d * PICK_RATIO);
-  if (unlockAt < 0) unlockAt = unlocks.length;
+// ---------- rings: can the ball roll this up? ----------
+// A ring lies on the ground round anything near the ball that a player could be in doubt about: green and whole if
+// the ball can roll it up as it is, red and broken if it cannot, and a pulsing yellow for a critter that a dash would
+// stun (after which it is green, with stars). Only things near the limit get one: from RING_LO to RING_HI times the
+// biggest the ball can take; the crumbs and the scenery are left bare. They fade in within RING_REACH ball-widths.
+// When the ball grows past something that was red, its ring turns green with a pop and a chime: that is what tells a
+// player what they can now roll up (a line of text naming three things out of a hundred did not).
+// All the rings are one draw: a square each, with the ring worked out per pixel, so its edge stays sharp at any size.
+const RING_MAX = 96, RING_REACH = 4, RING_LO = 0.6, RING_HI = 1.6;
+const RING_COL = [null, [0.42, 1, 0.52], [1, 0.86, 0.22], [1, 0.38, 0.32]];      // green, yellow, red
+const rings = new Map();                      // thing -> { a: how far faded in, st: 1 green, 2 yellow, 3 red, pop: seconds of pop left }
+const ringGeo = new THREE.InstancedBufferGeometry();
+ringGeo.setAttribute('position', new THREE.Float32BufferAttribute([-1, 0, -1, 1, 0, 1, 1, 0, -1, -1, 0, -1, -1, 0, 1, 1, 0, 1], 3));
+ringGeo.setAttribute('aPos', new THREE.InstancedBufferAttribute(new Float32Array(RING_MAX * 3), 3));
+ringGeo.setAttribute('aRing', new THREE.InstancedBufferAttribute(new Float32Array(RING_MAX * 4), 4));      // outer radius, width of the band, broken (1) or whole (0), opacity
+ringGeo.setAttribute('aCol', new THREE.InstancedBufferAttribute(new Float32Array(RING_MAX * 3), 3));
+ringGeo.instanceCount = 0;
+const ringMat = new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4,
+  vertexShader: `
+    #include <common>
+    #include <logdepthbuf_pars_vertex>
+    attribute vec3 aPos; attribute vec4 aRing; attribute vec3 aCol;
+    varying vec2 vP; varying vec4 vRing; varying vec3 vCol;
+    void main() {
+      float hs = aRing.x * 1.1 + aRing.y;             // the square reaches a little past the ring, for its dark edge (and a yellow one's points)
+      vP = position.xz * hs; vRing = aRing; vCol = aCol;
+      gl_Position = projectionMatrix * viewMatrix * vec4(aPos + vec3(position.x * hs, 0.0, position.z * hs), 1.0);
+      #include <logdepthbuf_vertex>
+    }`,
+  fragmentShader: `
+    #include <common>
+    #include <logdepthbuf_pars_fragment>
+    varying vec2 vP; varying vec4 vRing; varying vec3 vCol;
+    void main() {
+      #include <logdepthbuf_fragment>
+      float r = length(vP), R = vRing.x, w = vRing.y, e = w * 0.34, aa = fwidth(r) * 1.2 + 1e-5;
+      if (vRing.z > 1.5) R *= 1.0 + 0.075 * cos(atan(vP.y, vP.x) * 12.0 + (vRing.z - 2.0) * 6.2831853);      // yellow: a ring of twelve points, turning (so it is not told from green by colour alone)
+      float body = (1.0 - smoothstep(R + e - aa, R + e + aa, r)) * smoothstep(R - w - e - aa, R - w - e + aa, r);      // the band with its dark edge
+      float core = (1.0 - smoothstep(R - aa, R + aa, r)) * smoothstep(R - w - aa, R - w + aa, r);                      // the coloured band itself
+      if (vRing.z > 0.5 && vRing.z < 1.5) {           // red: broken into nine dashes
+        float s = fract(atan(vP.y, vP.x) * (9.0 / 6.2831853)), sa = fwidth(s) * 1.2 + 1e-5, gap = e / (R * 0.698);
+        body *= smoothstep(0.0, sa, s) * (1.0 - smoothstep(0.62 - sa, 0.62, s));
+        core *= smoothstep(gap, gap + sa, s) * (1.0 - smoothstep(0.62 - gap - sa, 0.62 - gap, s));
+      }
+      if (body * vRing.w < 0.01) discard;
+      gl_FragColor = vec4(mix(vec3(0.17, 0.145, 0.25), vCol, core), body * vRing.w);
+    }`,
+});
+const ringMesh = new THREE.Mesh(ringGeo, ringMat);
+ringMesh.frustumCulled = false; ringMesh.renderOrder = 2; scene.add(ringMesh);
+function ringState(o) {                       // 0: no ring
+  if (o.on || o.gone || o.fly || o.spawnT > 0.3) return 0;
+  const lim = S.d * pickRatio(S);
+  if (canRoll(S, o)) return o.size >= lim * RING_LO || o.stunEnd > clock ? 1 : 0;
+  if (o.size > lim * RING_HI || o.size < lim * 0.25) return 0;
+  return stunnable(S, o) ? 2 : 3;
 }
-function announceUnlocks() {
-  const names = [];
-  while (unlockAt < unlocks.length && unlocks[unlockAt].size <= S.d * PICK_RATIO) names.push(unlocks[unlockAt++].name);
-  if (names.length) toast('Now rollable: ' + names.slice(0, 3).join(', ') + (names.length > 3 ? ` +${names.length - 3} more` : ''));
+let ringChimeT = 0;
+function drawRings(dt) {
+  const r = S.d / 2, reach = RING_REACH * S.d, aPos = ringGeo.attributes.aPos, aRing = ringGeo.attributes.aRing, aCol = ringGeo.attributes.aCol;
+  const live = S.state === 'play' || S.state === 'sim';
+  let n = 0;
+  ringChimeT -= dt; ramNear = false;
+  for (const [o, e] of rings) {
+    if (o.on || o.gone) { rings.delete(o); continue; }
+    const p = o.group.position, gap = Math.hypot(p.x - S.x, p.z - S.z) - r - o.rad, st = live ? ringState(o) : 0;
+    const want = st && gap < reach ? clamp((reach - gap) / S.d, 0, 1) : 0;      // fades in over the outermost ball-width
+    if (st && st !== e.st) {
+      if (e.st && st === 1 && e.a > 0.25) { e.pop = 0.45; if (ringChimeT <= 0) { ringChimeT = 0.3; tone(880, 1320, 0.09, 'triangle', 0.07); tone(1320, 1760, 0.1, 'triangle', 0.05, 0.07); } }      // it can be rolled up now
+      e.st = st;
+    }
+    e.a += clamp(want - e.a, -4 * dt, 5 * dt);
+    if (e.pop > 0) e.pop -= dt;
+    if (e.a <= 0) { if (!want) rings.delete(o); continue; }
+    if (n >= RING_MAX) continue;
+    const c = RING_COL[e.st], pop = Math.max(0, e.pop) / 0.45, shrug = o.shrugEnd > clock ? (o.shrugEnd - clock) / 0.45 : 0;
+    if (e.st === 2 && gap < S.d * 2.5 && S.energy >= RAM_CHARGE && S.charge <= 0 && S.boostT <= 0 && (p.x - S.x) * Math.sin(S.heading) + (p.z - S.z) * Math.cos(S.heading) > 0) ramNear = true;      // one ahead, and a dash to spend on it (for the hint: tickTips)
+    const ready = S.energy >= RAM_CHARGE || S.charge > 0 || S.ramT > 0, armed = e.st === 2 && (S.charge >= RAM_CHARGE || S.ramT > 0);      // armed: wound up far enough to stun it (the ring lights up)
+    const beat = e.st === 2 && ready ? 0.5 + 0.5 * Math.sin(clock * 7 + o.id) : 0;       // yellow pulses, "ram me", while there is a dash to do it with
+    const w = S.d * 0.052 * (1 + 0.5 * pop + 0.35 * beat + 0.5 * shrug), R = (o.rad * 1.12 + S.d * 0.07) * (1 + 0.45 * pop * pop + 0.05 * beat + 0.12 * shrug) + w;
+    const gy = T.waterAt(p.x, p.z) === 2 && !iceOn ? Math.max(SEA_LEVEL, groundAt(p.x, p.z)) : groundAt(p.x, p.z);
+    aPos.setXYZ(n, p.x, gy + 0.03 + S.d * 0.012, p.z);
+    aRing.setXYZW(n, R, w, e.st === 3 ? 1 : e.st === 2 ? 2 + (clock * 0.07 + o.id * 0.37) % 1 : 0, Math.min(1, e.a * (0.92 + 0.6 * pop) * (e.st === 2 && !ready ? 0.7 : 1)));      // (the third: 0 whole, 1 broken, 2 and a bit = pointed, turned by the bit)
+    const lift = Math.min(1, 0.35 * pop + 0.25 * beat + 0.4 * shrug + (armed ? 0.55 : 0));
+    aCol.setXYZ(n, c[0] + (1 - c[0]) * lift, c[1] + (1 - c[1]) * lift, c[2] + (1 - c[2]) * lift);
+    n++;
+  }
+  ringGeo.instanceCount = n;
+  if (n) { aPos.needsUpdate = true; aRing.needsUpdate = true; aCol.needsUpdate = true; }
+  ringMesh.visible = n > 0;
+}
+// ---------- how the jump and the ram are taught ----------
+// Not in words: a small moving picture with the key under it (index.html, #keyhint). The jump's comes up the first
+// times the ball is held against something a jump would clear; the ram's, the first times a critter with a yellow
+// ring is close by and there is energy for a dash. Each goes for good once the player has done the thing twice while
+// it was on show, or has been shown it a handful of times.
+// They are counted for this sitting only, not kept: on a shared computer the next player has not seen them, and somebody
+// who knows the moves has done each twice before the round is a minute old. A jump counts only if it got the ball
+// past what was holding it.
+const TIPS = { jump: 0, jumpSeen: 0, ram: 0, ramSeen: 0 };
+let tipOn = '', tipT = 0, tipJumps = 0, tipRams = 0, tipTry = 0, ramNear = false, ramBump = -9;
+function tickTips(dt, held) {
+  const play = S.state === 'play', near = ramNear || clock - ramBump < 1.5;
+  if ((S.jumps | 0) > tipJumps && (tipOn === 'jump' || held)) tipTry = -1;           // a jump while held: did it get anywhere?
+  if (tipTry < 0 && !S.jumped) tipTry = 0.45;
+  else if (tipTry > 0 && (tipTry -= dt) <= 0) { tipTry = 0; if (!(S.heldT > 0.12)) { TIPS.jump++; tipT = 0; } }
+  if (tipOn === 'ram' && (S.rams | 0) > tipRams) { TIPS.ram++; tipT = 0; }
+  tipJumps = S.jumps | 0; tipRams = S.rams | 0; tipT -= dt;
+  let want = '';
+  if (play && TIPS.jump < 2 && (held ? TIPS.jumpSeen < 6 || tipOn === 'jump' : tipOn === 'jump' && (tipT > 0 || tipTry !== 0))) want = 'jump';
+  else if (play && TIPS.ram < 2 && (near ? TIPS.ramSeen < 8 || tipOn === 'ram' : tipOn === 'ram' && tipT > 0)) want = 'ram';
+  if (want === tipOn) { if (want && (want === 'jump' ? held : near)) tipT = Math.max(tipT, 1.2); return; }
+  tipOn = want;
+  const el = $('keyhint'), pad = !!S.padLast;
+  el.className = 'pill' + (want ? ' ' + want : '');
+  if (!want) return;
+  tipT = 2.8;                                     // long enough to be read, even if the ball has rolled on
+  TIPS[want + 'Seen']++;
+  $('khkey').textContent = want === 'jump' ? (pad ? 'A' : 'Space') : (pad ? 'RT' : 'Shift');
 }
 let seekT = 0;
 function updateSeek(dt, hx, hz) {          // the habitat banner, and the pointer to whatever is marked (an event), or the way out of the Green
@@ -1839,7 +1945,7 @@ function aimArrow(Bq, c) {
   });
 }
 function clearFx() {
-  parts.length = 0; pMesh.count = 0; dazed.length = 0; starMesh.count = 0; arrows.clear(); S.arrow = null; S.spot = null; for (const id of [...markers.keys()]) unmark(id); fx.clear(); NET.fxRoots.clear(); NET.fxNodes.clear(); }
+  parts.length = 0; pMesh.count = 0; dazed.length = 0; starMesh.count = 0; rings.clear(); ringGeo.instanceCount = 0; arrows.clear(); S.arrow = null; S.spot = null; for (const id of [...markers.keys()]) unmark(id); fx.clear(); NET.fxRoots.clear(); NET.fxNodes.clear(); }
 
 // ---------- pickups and knocks ----------
 const tmpV = new V3(), tmpQ = new THREE.Quaternion(), tmpQ2 = new THREE.Quaternion(), UP = new V3(0, 1, 0), downLocal = new V3(), axis = new V3();
@@ -1906,7 +2012,6 @@ function attach(o) {
   }
   while (S.attached.length > MAX_ON_BALL) ball.remove(S.attached.shift().group);   // the oldest are absorbed for good: still counted, no longer drawn
   seatAll();
-  announceUnlocks();
   if (S.mode === 'timed' && LEVEL.targetDiameter > 0 && S.reachedAt === null && S.d >= LEVEL.targetDiameter) {
     S.reachedAt = S.time; sfxWin(); toast('Target size reached — keep rolling!');
     if (!save.best.timedTime || S.time < save.best.timedTime) { save.best.timedTime = S.time; persist(); }
@@ -2963,7 +3068,7 @@ function netSnap(m) {
   let v = own[0];                                // this ball's size: what the host has agreed, plus what it has not answered yet
   for (const c of NET.pending.values()) v += c;
   v = Math.max(START_D ** 3, v);
-  if (Math.abs(v - S.vol3) > 1e-9 * v) { S.vol3 = v; S.d = Math.cbrt(v); seatAll(); announceUnlocks(); }
+  if (Math.abs(v - S.vol3) > 1e-9 * v) { S.vol3 = v; S.d = Math.cbrt(v); seatAll(); }
 }
 function netWorldIn(mm, fxu) {                   // (client) markers and event effects that moved
   for (let i = 0; i < mm.length; i += 3) moveMark(mm[i], mm[i + 1], mm[i + 2]);
@@ -3568,6 +3673,7 @@ function update(dt) {
     o.casts = casts;
     r = S.d / 2;
     const reach = r + o.rad;
+    if (dist < reach + RING_REACH * S.d && rings.size < 200 && !rings.has(o) && ringState(o)) rings.set(o, { a: 0, st: 0, pop: 0 });      // near enough for a ring (drawRings)
     // how far the player's ball is from mattering to it: from touching it, from its shadow showing, from it coming into or going out of sight
     let spare = o.baked ? dist - reach - S.d : Math.min(dist - reach - S.d, QUAL.shadows ? dist - shade : 1e9, Math.abs(dist - seen));      // (a baked prop is drawn by its cell: only touching it matters)
     if (NET.client) { if (o.kind === 'creature' || o.ntx !== undefined) puppetThing(o, dt, dist); if (o.ntx !== undefined || (o.kind === 'creature' && dist < 150 + S.d * 12)) spare = 0; }      // the host moves the critters; here they glide to where it says
@@ -3606,6 +3712,7 @@ function update(dt) {
     S.x -= nx * out; S.z -= nz * out;
     const vn = S.vx * nx + S.vz * nz, canStun = stunnable(S, o) && !(o.stunEnd > clock);
     if (!S.air && nx * hx + nz * hz > 0.4 && !canStun && p.y + o.size - feet < jumpHeight(S.d) * 0.85) S.hopAt = clock;      // it is in the way, and low enough to jump (one that wants a dash is the other hint's business)
+    if (canStun && !(S.ramT > 0) && vn > 0) { ramBump = clock; if (S.weakT > 0 && vn > vmax * RAM_MIN) shrug(o); }      // bumped, not rammed (or a burst with too little behind it, which it shakes off): the dash's hint, at once
     // A dash burst into a critter too big to roll up. (The burst itself, or the moment after it while the ball is still going faster than it can roll.)
     if (o.kind === 'creature' && S.ramT > 0 && vn > vmax * (boosting ? RAM_MIN : 1.1) && !(o.stunEnd > clock)) {
       if (canStun) {                                // stunned: the burst is spent on it and the ball rocks back, ready to roll in and take it
@@ -3619,9 +3726,10 @@ function update(dt) {
     if (vn > 0 && !(vaulting && p.y + o.size < S.jumpGy + jumpHeight(S.d) * 0.95)) { S.vx -= 1.6 * vn * nx; S.vz -= 1.6 * vn * nz; if (o.size > S.d * 0.8 && !o.onBump) { const n = crashLoss(vn, vmax); if (n) hardHit(nx, nz, vmax, n); } }      // only a sprint into something big knocks things loose
     if (o.kind === 'creature' && o.ai === 'charge') startLunge(o, S);
   }
-  drawStars();
+  drawStars(); drawRings(dt);
   if (!S.air && clock - (S.hopAt ?? -9) < 0.5) hoppable = true;      // (the ball bounces off a thing it is pushed against, so it only touches it now and then: half a second's grace)
   S.heldT = hoppable && f > 0.3 ? Math.min(1, (S.heldT || 0) + dt) : Math.max(0, (S.heldT || 0) - dt * 0.6);
+  tickTips(dt, S.heldT > 0.4);
   // boxed in: hardly moving for most of a second with three or more too-big critters right beside the ball, or held between
   // two solid things at least one of which is such a critter. The critters attack, and their lunges throw the ball clear (see strike).
   S.boxT = boxers && !frozen && Math.hypot(S.vx, S.vz) < vmax * 0.3 && (boxers.length >= 3 || touching >= 2) ? (S.boxT || 0) + dt : 0;
