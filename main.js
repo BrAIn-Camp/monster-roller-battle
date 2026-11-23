@@ -371,6 +371,10 @@ function setTeamLook(o, team) { if (o.kind === 'creature') o.group.material = o.
 const SAVE_KEY = 'critter-roller-save-v2';
 let save = { dex: {}, best: {}, muted: false, difficulty: 'normal', gfx: 'auto', gfxAuto: 0 };      // gfx: 'auto' or a quality level's name; gfxAuto: the level auto last settled on
 try { save = Object.assign(save, JSON.parse(localStorage.getItem(SAVE_KEY) || '{}')); } catch (e) { /* storage unavailable */ }
+// What auto settled on is forgotten once, now that it is worked out differently (gfxRules 2: see watchFps). The old
+// rule took a screen that refreshes 30 times a second, or a spell of loading, for a slow machine, and auto never
+// steps back up: a good machine could be sitting at the bottom, where there is now a good deal less to look at.
+if (save.gfxRules !== 2) { save.gfxAuto = 0; save.gfxRules = 2; }
 function persist() { try { localStorage.setItem(SAVE_KEY, JSON.stringify(save)); } catch (e) { /* storage unavailable */ } }
 
 // ---------- renderer, lights, sky ----------
@@ -3282,9 +3286,12 @@ let last = performance.now(), menuSpin = 0;
 // when the usual rate stays under 27 for two spells running (27, not 30: a screen that only refreshes 30 times a second
 // is not a slow machine), at once when it is under 20, and two levels at once when it is under 12, so a machine far
 // out of its depth is not left to struggle while it goes down a level at a time. Behind the menu only the two urgent
-// rules apply: the whole island is on show there, which is a harder picture than a round.
-const FPS = { n: 0, t0: performance.now(), now: 0, ms: 0, low: 0, last: 0, gaps: [], usual: 0 };
+// rules apply: the whole island is on show there, which is a harder picture than a round. And the urgent rules wait
+// until the round (or the menu) has been on screen for five seconds: the first few are full of models arriving, and
+// a machine busy unpacking them draws few frames however good its graphics card is.
+const FPS = { n: 0, t0: performance.now(), now: 0, ms: 0, low: 0, last: 0, gaps: [], usual: 0, state: '', since: 0 };
 function watchFps(now) {
+  if (S.state !== FPS.state) { FPS.state = S.state; FPS.since = now; }
   FPS.n++;
   if (FPS.last) FPS.gaps.push(now - FPS.last);
   FPS.last = now;
@@ -3296,7 +3303,8 @@ function watchFps(now) {
   const playing = S.state === 'play' || S.state === 'battle', menu = S.state === 'menu';
   if ((!playing && !menu) || document.hidden || span > 3000 || !mid) { FPS.low = 0; return; }       // (a gap that long was a pause or a hidden tab, not a slow machine)
   FPS.low = playing && FPS.usual < 27 ? FPS.low + 1 : 0;
-  const down = FPS.usual < 12 ? 2 : FPS.usual < 20 || FPS.low >= 2 ? 1 : 0;
+  const settled = now - FPS.since > 5000;
+  const down = settled && FPS.usual < 12 ? 2 : (settled && FPS.usual < 20) || FPS.low >= 2 ? 1 : 0;
   if (save.gfx === 'auto' && down && qualLevel < QUALITY.length - 1) { FPS.low = 0; setQuality(qualLevel + down); save.gfxAuto = qualLevel; persist(); showGfx(); toast('Graphics lowered to keep the game smooth'); }
 }
 function showGfx() { for (const id of ['btnGfx', 'btnGfx2']) $(id).textContent = 'Graphics: ' + (save.gfx === 'auto' ? `auto (${QUAL.name})` : QUAL.name); }

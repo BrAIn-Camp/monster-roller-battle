@@ -368,8 +368,10 @@ Up to four players, one of them hosting; CPU teams take the empty seats. See REA
   something loads does not count): under 27 a second for two spells running, down a level; under 20, down a level at
   once; under 12, down two at once. (It was: an average under 30 for four seconds, one level, so a machine far out of
   its depth took twelve seconds of a five-minute round to reach the bottom, and a screen that refreshes 30 times a
-  second counted as slow.) Behind the menu only the two urgent rules apply. A browser drawing in software, with no
-  graphics card, starts at the bottom.
+  second counted as slow.) Behind the menu only the two urgent rules apply, and they wait until the round or the menu
+  has been on screen for five seconds, because a machine busy unpacking models draws few frames whatever its graphics
+  card. A browser drawing in software, with no graphics card, starts at the bottom. What auto had settled on under
+  the old rule is forgotten once (`gfxRules` in the save): it could have left a good machine at the bottom.
 - **Anti-aliasing is fixed when the page loads** (it belongs to the canvas), so a change of level changes it the next
   time the game loads; the Graphics button says so.
 - The renderer asks for the strong graphics card on a laptop that has two.
