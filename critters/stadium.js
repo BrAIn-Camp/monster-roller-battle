@@ -322,6 +322,50 @@ export function makeStadiumInstance(loaded, animName = 'idle') {
 export const POSES = 16;
 const REST = Object.freeze(new Array(POSES).fill(0));
 
+// One sheet of skins for every still. A material apiece meant that each species drawn was a change of material, and
+// at every change three.js sends the whole set-up again (the lights, the fog, the shadow): a draw call of a critter
+// cost four times one of a prop. So each model's skin, as it arrives, is copied into a free patch of one big texture
+// and its still's UVs are moved to that patch; every still is then drawn with the same material (two of them really:
+// `plain` for a shape that stands still and `moving` for one with poses, which are different programs, and each of
+// those again for models that are drawn from both sides).
+// shareSkins(renderer) sets it up. Without it (or on a card that cannot hold the texture) a still keeps a material
+// of its own, as before.
+const SHEET_W = 4096, SHEET_H = 2048, CELL = 64, COLS = SHEET_W / CELL, ROWS = SHEET_H / CELL;
+let sheet = null;
+export function shareSkins(renderer) {
+  if (sheet !== null) return;
+  sheet = false;
+  try {
+    if (!renderer.capabilities.isWebGL2 || renderer.capabilities.maxTextureSize < SHEET_W) return;
+    const tex = new THREE.DataTexture(new Uint8Array(SHEET_W * SHEET_H * 4), SHEET_W, SHEET_H, THREE.RGBAFormat, THREE.UnsignedByteType);
+    tex.flipY = false; tex.generateMipmaps = false; tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.LinearFilter;
+    tex.colorSpace = THREE.SRGBColorSpace; tex.needsUpdate = true;
+    renderer.initTexture(tex);
+    tex.image.data = null;                              // (it is on the card now, and filled from there on: no need to keep 32 MB of blank here)
+    const mk = (side) => new THREE.MeshLambertMaterial({ map: tex, alphaTest: 0.5, vertexColors: true, side });
+    const pair = () => ({ [THREE.FrontSide]: mk(THREE.FrontSide), [THREE.DoubleSide]: mk(THREE.DoubleSide) });
+    sheet = { tex, renderer, used: new Uint8Array(COLS * ROWS), plain: pair(), moving: pair(), n: 0 };
+  } catch (e) { console.warn('stadium: no shared skin sheet', e); sheet = false; }
+}
+export const skinSheet = () => sheet;
+// Copies a skin into the first free patch of the sheet big enough for it. Returns where it went (in pixels), or null.
+const spot = new THREE.Vector2();
+function placeSkin(map) {
+  const img = map && map.image, w = img && img.width, h = img && img.height;
+  if (!sheet || !w || !h) return null;
+  const cw = Math.ceil(w / CELL), ch = Math.ceil(h / CELL), used = sheet.used;
+  for (let y = 0; y + ch <= ROWS; y++) for (let x = 0; x + cw <= COLS; x++) {
+    let free = true;
+    for (let j = 0; j < ch && free; j++) for (let i = 0; i < cw; i++) if (used[(y + j) * COLS + x + i]) { free = false; break; }
+    if (!free) continue;
+    try { sheet.renderer.copyTextureToTexture(spot.set(x * CELL, y * CELL), map, sheet.tex); } catch (e) { console.warn('stadium: skin not copied', e); return null; }
+    for (let j = 0; j < ch; j++) for (let i = 0; i < cw; i++) used[(y + j) * COLS + x + i] = 1;
+    sheet.n++;
+    return { x: x * CELL, y: y * CELL, w, h };
+  }
+  return null;
+}
+
 // A copy of the model, playing its idle clip, to read vertex positions out of.
 function poseRig(loaded) {
   const root = cloneSkinned(loaded.root), { entry, clips } = loaded;
@@ -371,9 +415,23 @@ export function stillOf(loaded) {
     if (!nor) geo.computeVertexNormals();
     geo.computeBoundingSphere(); geo.computeBoundingBox();
     const infl = new Array(POSES).fill(0);
-    // (a material of its own, sharing the texture: the skinned model and the still are different shader programs,
-    // and one material drawn both ways has its program looked up again at every change)
-    loaded.still = { geo, mat: rig.body.material.clone(), infl, rest: REST, loaded, dur: rig.dur, fx: !!(loaded.entry.fx && loaded.entry.fx.length), poses: 0, bank: null, rig: null, moving: false, a: 0, b: 0 };
+    // Its material: the shared one, with its skin copied into the sheet (see shareSkins); or failing that one of its
+    // own, sharing the model's texture. (Never the model's own material: the skinned model and the still are
+    // different shader programs, and one material drawn both ways has its program looked up again at every change.)
+    const own = rig.body.material, side = own.side === THREE.DoubleSide ? THREE.DoubleSide : THREE.FrontSide;
+    const at = own.side === THREE.BackSide ? null : placeSkin(own.map);
+    let mat, movingMat = null;
+    if (at) {
+      const uv = geo.attributes.uv;
+      if (uv) { for (let i = 0; i < uv.count; i++) uv.setXY(i, (at.x + uv.getX(i) * at.w) / SHEET_W, (at.y + uv.getY(i) * at.h) / SHEET_H); uv.needsUpdate = true; }
+      if (!geo.attributes.color) {                        // (the shared material takes its colours from the corners)
+        const c = own.color, col = new Float32Array(n * 3);
+        for (let i = 0; i < n; i++) { col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b; }
+        geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+      }
+      mat = sheet.plain[side]; movingMat = sheet.moving[side];
+    } else mat = own.clone();
+    loaded.still = { geo, mat, movingMat, shared: !!at, infl, rest: REST, loaded, dur: rig.dur, fx: !!(loaded.entry.fx && loaded.entry.fx.length), poses: 0, bank: null, rig: null, moving: false, a: 0, b: 0 };
     geo.userData.infl = infl; geo.userData.still = loaded.still;
   } catch (e) { console.warn('stadium: no still for', loaded.entry && loaded.entry.slug, e); }
   if (rig) freeRig(rig);

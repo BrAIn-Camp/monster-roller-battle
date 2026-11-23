@@ -20,7 +20,7 @@
 // None of it is part of the game's rules: it is presentation only, so a round plays
 // identically with the switch either way.
 import * as THREE from 'three';
-import { loadStadium, makeStadiumInstance, makeArenaActor, stadiumMeta, stillOf, stadiumBase, bakePose, poseTo } from './stadium.js';
+import { loadStadium, makeStadiumInstance, makeArenaActor, stadiumMeta, stillOf, stadiumBase, bakePose, poseTo, shareSkins, skinSheet } from './stadium.js';
 
 export const LOCAL_MODELS = true;
 
@@ -38,7 +38,7 @@ export async function init(host) {
   G = host;
   if (LOCAL_MODELS) {
     const meta = await stadiumMeta();
-    if (meta) { on = true; applyNames(meta); }
+    if (meta) { on = true; applyNames(meta); if (host.renderer) shareSkins(host.renderer); }
     else console.info('local models: switch is on, but models/stadium/ is missing -- staying off');
   }
   readyDone(on);
@@ -252,4 +252,5 @@ export function hooks(S) {
     return `models: up to ${budgetMax} at once, down to ${budgetPx}px on screen${everyone ? ', every species' : ''}`;
   };
   S.poses = () => ({ moving: movers.length, baking: baking.length, clock });
+  S.skins = () => { const s = skinSheet(); return s ? { shared: s.n, cells: s.used.reduce((a, b) => a + b, 0), of: s.used.length } : null; };
 }

@@ -384,7 +384,8 @@ function askModel(m) {
     if (m.material !== goldMat) m.material = s.mat;
     // Its far shape: thinned, standing still, and in a copy of the material (one material drawing both with the
     // breathing and without it in a frame would have its program looked up afresh every time it changed over).
-    if (!('far' in s.geo.userData)) s.geo.userData.far = () => { const f = thinGeometry(s.geo, 0.5, 150); if (f) f.userData.mat = s.mat.clone(); return f; };
+    // (When the skins share a sheet the plain material is the one every still is drawn with until it has poses.)
+    if (!('far' in s.geo.userData)) s.geo.userData.far = () => { const f = thinGeometry(s.geo, 0.5, 150); if (f) f.userData.mat = s.shared ? s.mat : s.mat.clone(); return f; };
     if (S.state !== 'menu' && S.state !== 'dex' && !QUAL.still) LOCAL.wake(s);
   });
 }
@@ -717,6 +718,8 @@ function drawWorld() {
     if (!m) continue;
     m.count = b.n; m.visible = b.n > 0;
     if (b.n) used++;
+    // (a still that has its poses is drawn with the shared material for moving shapes: see shareSkins in stadium.js)
+    if (b.n && b.geo.userData.still) { const st = b.geo.userData.still, want = st.movingMat && b.material === st.mat && b.geo.morphAttributes.position ? st.movingMat : b.material; if (m.material !== want) m.material = want; }
     if (DRAW.sendAll && b.n) b.from = 0;             // (debug: as it was, every batch sent every frame)
     if (b.from >= 0) {
       sent++;
