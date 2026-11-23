@@ -1730,8 +1730,8 @@ function drawRings(dt) {
     if (e.a <= 0) { if (!want) rings.delete(o); continue; }
     if (n >= RING_MAX) continue;
     const c = RING_COL[e.st], pop = Math.max(0, e.pop) / 0.45, shrug = o.shrugEnd > clock ? (o.shrugEnd - clock) / 0.45 : 0;
-    if (e.st === 2 && gap < S.d * 2.5 && S.energy >= RAM_CHARGE && S.charge <= 0 && S.boostT <= 0 && (p.x - S.x) * Math.sin(S.heading) + (p.z - S.z) * Math.cos(S.heading) > 0) ramNear = true;      // one ahead, and a dash to spend on it (for the hint: tickTips)
-    const ready = S.energy >= RAM_CHARGE || S.charge > 0 || S.ramT > 0, armed = e.st === 2 && (S.charge >= RAM_CHARGE || S.ramT > 0);      // armed: wound up far enough to stun it (the ring lights up)
+    if (e.st === 2 && gap < S.d * 2.5 && S.energy >= DASH_MIN && S.charge <= 0 && S.boostT <= 0 && (p.x - S.x) * Math.sin(S.heading) + (p.z - S.z) * Math.cos(S.heading) > 0) ramNear = true;      // one ahead, and a dash to spend on it (for the hint: tickTips)
+    const ready = S.energy >= DASH_MIN || S.charge > 0 || S.ramT > 0, armed = e.st === 2 && (S.charge > 0.05 || S.ramT > 0);      // armed: a dash wound up or under way, which would stun it (the ring lights up)
     const beat = e.st === 2 && ready ? 0.5 + 0.5 * Math.sin(clock * 7 + o.id) : 0;       // yellow pulses, "ram me", while there is a dash to do it with
     const w = S.d * 0.052 * (1 + 0.5 * pop + 0.35 * beat + 0.5 * shrug), R = (o.rad * 1.12 + S.d * 0.07) * (1 + 0.45 * pop * pop + 0.05 * beat + 0.12 * shrug) + w;
     const gy = T.waterAt(p.x, p.z) === 2 && !iceOn ? Math.max(SEA_LEVEL, groundAt(p.x, p.z)) : groundAt(p.x, p.z);
@@ -1844,6 +1844,7 @@ const starGeo = (() => {
 })();
 const starMesh = new THREE.InstancedMesh(starGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, fog: false }), STAR_MAX);
 starMesh.frustumCulled = false; starMesh.count = 0; scene.add(starMesh);
+const kbQ = new THREE.Quaternion(), kbAxis = new THREE.Vector3(), kbUp = new THREE.Vector3(0, 1, 0);
 function drawStars() {
   let n = 0;
   camera.getWorldDirection(starFwd);
@@ -2083,6 +2084,18 @@ function startLunge(o, Bq) {
 }
 function strike(Bq, o, nx, nz) {                  // (nx, nz) points from the critter to the ball
   const vm = topSpeed(Bq.d);
+  // The dash wins: a ball in its burst, coming at a critter it could stun, stuns it as it springs. (It struck from
+  // a little way off, before the ball had touched it, and a dash that was thrown back by what it was aimed at read as
+  // the stun not working.)
+  if (stunnable(Bq, o)) {
+    const me = Bq === S, cpu = !me && !Bq.remote, burst = me ? S.boostT > 0 && S.ramT > 0 : cpu ? Bq.boostT > 0 : !!Bq.nb;
+    const bvx = me ? S.vx : cpu ? Bq.v * Math.sin(Bq.heading) : Bq.rvx || 0, bvz = me ? S.vz : cpu ? Bq.v * Math.cos(Bq.heading) : Bq.rvz || 0;
+    if (burst && -(bvx * nx + bvz * nz) > vm * RAM_MIN * (cpu ? CPU_SPEED : 1)) {
+      if (me) playerRam(o, -nx, -nz, 0.5);
+      else { ramStun(o, Bq, -nx, -nz, 0.5); if (cpu) { Bq.boostT = 0; Bq.v = 0.15 * vm; Bq.target = Bq.chasing = o; Bq.wander = 0; } }
+      return;
+    }
+  }
   Bq.ghostT = 1.1;
   const k = Math.pow(Bq.d, 0.7);
   for (let i = 0; i < 10; i++) puff(Bq.x - nx * Bq.d / 2, groundAt(Bq.x, Bq.z) + Bq.d * (0.2 + 0.5 * rand()), Bq.z - nz * Bq.d / 2, (nx + rand() - 0.5) * 4 * k, (1 + 2 * rand()) * k, (nz + rand() - 0.5) * 4 * k, 0.35, 0.1 * k, i % 2 ? 0xffffff : 0xffe169, 6 * k);
@@ -2102,8 +2115,9 @@ const pickRatio = (Bq) => PICK_RATIO + (Bq.ratioBonus || 0);
 // The ram. A dash burst into a critter that is a little too big to roll up (up to STUN_REACH times the limit) stuns it
 // for STUN_TIME seconds, and while it is stunned any ball that could have stunned it can roll it up. One bigger than
 // that shrugs the ram off. (`clock`, not the round's own: a stun must not be cut short or drawn out when that restarts.)
-const STUN_TIME = 4, STUN_REACH = 1.3, RAM_MIN = 0.9;      // RAM_MIN: how fast the ball must be closing, as a share of its ordinary top speed (so only a burst does it)
-const RAM_CHARGE = 0.5;   // and the burst must have been wound up at least this far (half the meter): a tap of the dash button, which costs next to nothing, stuns nothing
+// Any dash burst does it, a tap of the button as much as a full wind-up (a rule that only half a meter or more would
+// do was tried: a player dashes with a tap, and a tap that hit and did nothing read as the stun not working at all).
+const STUN_TIME = 4, STUN_REACH = 1.3, RAM_MIN = 0.6;      // RAM_MIN: how fast the ball must be closing in its burst, as a share of its ordinary top speed (a graze does not count)
 const canRoll = (Bq, o) => !o.noPick && o.size <= Bq.d * pickRatio(Bq) * (o.stunEnd > clock ? STUN_REACH : 1);
 const stunnable = (Bq, o) => o.kind === 'creature' && !o.noPick && !o.script && !o.onBump && o.size <= Bq.d * pickRatio(Bq) * STUN_REACH;
 const earshot = (p) => Math.hypot(p.x - S.x, p.z - S.z) < 25 + S.d * 6;
@@ -2118,11 +2132,62 @@ function stunCritter(o, dur = STUN_TIME) {         // (on every machine: the hos
   for (let i = 0; i < 16; i++) { const a = i / 16 * 6.28; puff(p.x, p.y + h * 0.75, p.z, Math.cos(a) * 3.4 * k, (1.4 + rand() * 2.2) * k, Math.sin(a) * 3.4 * k, 0.35 + rand() * 0.2, (0.1 + 0.08 * rand()) * k, i % 2 ? 0xffffff : 0xffe169, 7 * k); }
   if (earshot(p)) { tone(250, 85, 0.16, 'square', 0.13); for (let i = 0; i < 3; i++) tone(i % 2 ? 1760 : 1320, i % 2 ? 1320 : 1760, 0.09, 'sine', 0.085 - i * 0.012, 0.1 + i * 0.12); }
 }
-// A ball has rammed a critter it can stun. A player who is not the host sees it at once and asks the host, who tells everyone.
-function ramStun(o, Bq) {
+// The knock: a rammed critter is thrown back the way the ball was going, a hop of 0.7 to 1.1 of the ball's width
+// (further for a harder hit, hard = 0..1) and nearly half its own height up, which is what shows over the top of the
+// ball from where the player looks; leaning back on its heels, and it lands dazed. (Thrown further it came down
+// behind the rest of its herd, which were then in the way.) It is thrown less far, or only straight
+// up, rather than up a ledge, into water it cannot stand in, or into a building or another thing that ball cannot
+// roll up (where the ball could not have followed). Every size is in the air for about half a second.
+function knockArc(o, nx, nz, d, hard) {
+  const p = o.group.position, h = o.size, T0 = Math.min(0.85, 0.42 + 0.05 * h), H = 0.45 * h + 0.08, gy = groundAt(p.x, p.z);
+  const air = o.spec.move === 'fly' || o.spec.move === 'float', sw = o.spec.move === 'swim';
+  let L = d * (0.7 + 0.4 * hard), ok = false;
+  const solid = [];                                 // what stands near enough to be landed in
+  for (const q of S.objects) {
+    if (q === o || q.on || q.gone || q.fly || q.spec.flat || q.size <= d * 0.5) continue;
+    const qp = q.group.position, far = d * 1.2 + q.rad + o.rad;
+    if (Math.abs(qp.x - p.x) < far && Math.abs(qp.z - p.z) < far) solid.push(q);
+  }
+  for (let i = 0; i < 3 && !ok; i++) {
+    const x = p.x + nx * L, z = p.z + nz * L, w = T.waterAt(x, z);
+    ok = !solid.some((q) => Math.hypot(q.group.position.x - x, q.group.position.z - z) < q.rad + o.rad) && x > BOUNDS.x1 + 6 && x < BOUNDS.x2 - 6 && z > BOUNDS.z1 + 6 && z < BOUNDS.z2 - 6 && (air || (sw ? w !== 0 : w !== 2)) && groundAt(x, z) - gy < h * 0.5 && groundAt(p.x + nx * L / 2, p.z + nz * L / 2) - gy < h * 0.5;
+    if (!ok) L *= 0.5;
+  }
+  if (!ok) L = 0;
+  return { vx: nx * L / T0, vy: 4 * H / T0, vz: nz * L / T0, g: 8 * H / (T0 * T0), T: T0 };
+}
+// The rest of a pack is startled by it: a critter close by that was coming at that ball backs off, and a bold one that
+// had not yet made up its mind stays where it is for a moment. (Without this the others of a flock threw the ball
+// clear, turn about, while it tried to roll the stunned one up, and the stun ran out.) The host's business.
+function startle(Bq, but) {
+  const reach = Bq.d * 3.5;
+  for (const o of S.objects) {
+    if (o === but || o.kind !== 'creature' || o.on || o.gone || o.fly || o.script || o.stunEnd > clock) continue;
+    const coming = o.ai === 'charge' || o.ai === 'lunge', idle = o.ai === 'idle' || o.ai === 'walk' || o.ai === 'rest';
+    if (!coming && !(idle && o.spec.temper === 'bold')) continue;
+    const p = o.group.position, far = reach + o.size * 3;
+    if (Math.abs(p.x - Bq.x) > far || Math.abs(p.z - Bq.z) > far) continue;
+    if (coming) { o.ai = 'retreat'; o.timer = 1.6; } else { o.ai = 'rest'; o.timer = Math.max(o.timer, 3); }
+    o.due = 0;
+  }
+}
+function knockBack(o, vx, vy, vz, g) { o.fly = { vx, vy, vz, g, kb: 2 * vy / g, t: 0 }; o.cool = 0.12; o.due = 0; }      // (kb: how long the hop lasts, which is what marks it as one; see where things in the air are moved)
+// A ball has rammed a critter it can stun: (nx, nz) is the way it was going. A player who is not the host sees it at
+// once and asks the host, who tells everyone (but does not tell the one who asked to throw it a second time).
+function ramStun(o, Bq, nx, nz, hard, asker) {
   Bq.stuns = (Bq.stuns | 0) + 1;
-  if (NET.client) { if (Bq === S) { stunCritter(o); netHost(['st', o.id]); } return; }
-  stunCritter(o); netAll(['sn', o.id, STUN_TIME]);
+  const k = knockArc(o, nx, nz, Bq.d, hard), dur = STUN_TIME + k.T;      // (its four seconds start when it lands)
+  if (NET.client) { if (Bq === S) { stunCritter(o, dur); knockBack(o, k.vx, k.vy, k.vz, k.g); netHost(['st', o.id, Math.round(nx * 100), Math.round(nz * 100), Math.round(hard * 10)]); } return; }
+  stunCritter(o, dur); knockBack(o, k.vx, k.vy, k.vz, k.g); startle(Bq, o); netAll(['sn', o.id, dur]);
+  const p = o.group.position;
+  if (NET.on && NET.host && NET.room) for (const id of NET.peers) if (id && id !== asker) netTo(id, ['fl', o.id, p.x, p.y, p.z, k.vx, k.vy, k.vz, k.g]);
+}
+// The player's own ball has rammed one: the burst goes into the critter, which is thrown back, and the ball all but
+// stops where it hit. ((nx, nz) points from the ball to the critter.)
+function playerRam(o, nx, nz, hard) {
+  const vm = topSpeed(S.d) * MODS.speed, r = S.d / 2, k = Math.pow(S.d, 0.7), cx = S.x + nx * r, cz = S.z + nz * r, col = TEAMS[S.team].hex;
+  ramStun(o, S, nx, nz, hard); S.boostT = 0; S.ramT = 0; S.vx = nx * vm * 0.05; S.vz = nz * vm * 0.05; S.shake = 0.22; S.sq = -0.2; S.rams = (S.rams | 0) + 1;
+  for (let i = 0; i < 12; i++) puff(cx, S.y + (rand() - 0.5) * r, cz, (-nx + (rand() - 0.5) * 1.6) * 4 * k, (1 + rand() * 2.5) * k, (-nz + (rand() - 0.5) * 1.6) * 4 * k, 0.3 + rand() * 0.2, (0.08 + 0.07 * rand()) * k, i % 3 ? 0xffffff : col, 8 * k);
 }
 // Too big even for that: it shakes its head and stands its ground.
 function shrug(o) {
@@ -2366,7 +2431,7 @@ function rivalContacts(R) {
     if (o.kind === 'creature' && R.ghostT > 0) continue;       // just thrown clear by a lunge: passes through critters for a moment
     if (!R.remote) { R.x -= ox / (dist || 1) * (reach - dist); R.z -= oz / (dist || 1) * (reach - dist); }
     if (!R.remote && o.kind === 'creature' && R.boostT > 0 && R.v * (ox * Math.sin(R.heading) + oz * Math.cos(R.heading)) / (dist || 1) > topSpeed(R.d) * RAM_MIN * CPU_SPEED && !(o.stunEnd > clock)) {      // a CPU's burst into a critter (a player's own machine reports theirs: see 'st')
-      if (stunnable(R, o)) { ramStun(o, R); R.boostT = 0; R.v = -0.3 * topSpeed(R.d); R.target = R.chasing = o; R.wander = 0; continue; }      // (whichever of a herd it hit is the one it goes back for)
+      if (stunnable(R, o)) { ramStun(o, R, ox / (dist || 1), oz / (dist || 1), 0.5); R.boostT = 0; R.v = 0.15 * topSpeed(R.d); R.target = R.chasing = o; R.wander = 0; continue; }      // (whichever of a herd it hit is the one it goes back for)
       shrug(o);
     }
     if (o.kind === 'creature' && o.ai === 'charge') startLunge(o, R);
@@ -3248,7 +3313,7 @@ function clientMsg(m) {
       o.size = size; o.rad = rad; o.vis = size; o.armySpec = null; o.noPick = !!(bits & 2);
       if (!o.on) { o.group.scale.setScalar(size); if (o.kind === 'creature') o.group.material = bits & 1 ? goldMat : o.group.userData.om || critterMaterial; }
     } break;
-    case 'fl': { const o = S.byId.get(m[1]); if (o && !o.on) { o.group.position.set(m[2], m[3], m[4]); o.fly = { vx: m[5], vy: m[6], vz: m[7] }; o.cool = 1; } break; }
+    case 'fl': { const o = S.byId.get(m[1]); if (o && !o.on) { o.group.position.set(m[2], m[3], m[4]); if (m[8] > 0) knockBack(o, m[5], m[6], m[7], m[8]); else { o.fly = { vx: m[5], vy: m[6], vz: m[7] }; o.cool = 1; } } break; }      // (a ninth number: a rammed critter's hop back, and its pull)
     case 'im': {
       const p = m[1];
       if (p.vx !== undefined) { S.vx = p.vx; S.vz = p.vz; }
@@ -3295,8 +3360,8 @@ function hostMsg(id, m) {
       R.seqIn = m[1];
       R.nx = clamp((+m[2] || 0) / 10, BOUNDS.x1, BOUNDS.x2); R.ny = (+m[3] || 0) / 10; R.nz = clamp((+m[4] || 0) / 10, BOUNDS.z1, BOUNDS.z2); R.nh = (+m[5] || 0) / 100;
       R.rvx = (+m[6] || 0) / 10; R.rvz = (+m[7] || 0) / 10; R.nb = m[8] & 1; R.nj = m[8] & 2; R.chg = (+m[9] || 0) / 10;
-      if (R.chg >= RAM_CHARGE - 0.1) R.ramOK = true; else if (!R.nb && R.chg <= 0) R.ramOK = false;      // wound up far enough to stun (as near as tenths can say), until that burst is over
-      if (R.ramOK) R.nbAt = clock; R.ren = (+m[10] || 0) / 100; R.nAge = 0;
+      if (R.nb || R.chg > 0) R.nbAt = clock;      // (winding up or in a burst: what a ram needs, see 'st')
+      R.ren = (+m[10] || 0) / 100; R.nAge = 0;
       break;
     case 'cl': {                                 // they rolled something up: first come, first served
       const o = S.byId.get(m[1]);
@@ -3310,7 +3375,11 @@ function hostMsg(id, m) {
     case 'st': {                                 // they rammed a critter with a burst: stun it, if that could be so
       const o = S.byId.get(m[1]);
       // (their reports of where they are and what they are doing come 12 times a second and one can go astray: a wind-up or a burst at any time in the last second and a half will do)
-      if (o && !o.on && !o.gone && S.state === 'play' && clock - (R.nbAt ?? -9) < 1.5 && stunnable({ d: R.d * 1.1, ratioBonus: R.ratioBonus }, o) && Math.hypot(o.group.position.x - R.x, o.group.position.z - R.z) < R.d * 1.5 + o.rad + 3) ramStun(o, R);
+      if (o && !o.on && !o.gone && S.state === 'play' && clock - (R.nbAt ?? -9) < 1.5 && !(o.stunEnd > clock) && stunnable({ d: R.d * 1.1, ratioBonus: R.ratioBonus }, o) && Math.hypot(o.group.position.x - R.x, o.group.position.z - R.z) < R.d * 1.5 + o.rad + 3) {
+        let kx = (+m[2] || 0) / 100, kz = (+m[3] || 0) / 100, kl = Math.hypot(kx, kz);      // the way they say they hit it; failing that, from where their ball is
+        if (!(kl > 0.5 && kl < 1.5)) { kx = o.group.position.x - R.x; kz = o.group.position.z - R.z; kl = Math.hypot(kx, kz) || 1; }
+        ramStun(o, R, kx / kl, kz / kl, clamp((+m[4] || 0) / 10, 0, 1), id);
+      }
       else if (!(o && o.stunEnd > clock)) netTo(id, ['sn', m[1], 0]);      // no: they have shown it stunned already, so they are told it is not
       break;
     }
@@ -3492,7 +3561,7 @@ function update(dt) {
   S.tickN = (S.tickN | 0) + 1;
   const frozen = S.state !== 'play' && S.state !== 'sim';      // the fly-over and the countdown: everything stands still
   S.time += dt;
-  S.hitCool = Math.max(0, S.hitCool - dt); S.ghostT = Math.max(0, (S.ghostT || 0) - dt); S.ramT = Math.max(0, (S.ramT || 0) - dt); S.weakT = Math.max(0, (S.weakT || 0) - dt);
+  S.hitCool = Math.max(0, S.hitCool - dt); S.ghostT = Math.max(0, (S.ghostT || 0) - dt); S.ramT = Math.max(0, (S.ramT || 0) - dt);
   const vmax = topSpeed(S.d) * MODS.speed;
   let boxers = null, touching = 0;
   const inp = frozen ? { f: 0, t: 0, run: false, jump: false } : readInput();
@@ -3509,7 +3578,7 @@ function update(dt) {
     S.charge += add; S.energy -= add; charging = true;
     if (add > 0 && Math.floor(S.time * 14) !== Math.floor((S.time - dt) * 14)) tone(180 + 520 * S.charge, 200 + 560 * S.charge, 0.05, 'sawtooth', 0.035);
   } else if (S.charge > 0) { released = S.charge; S.charge = 0; }
-  if (released > 0.05) { S.boostT = burstTime(released) * dashLast(S.d); S.boostK = 1 + 0.2 * released; S.dashed = true; S.ramT = released >= RAM_CHARGE ? S.boostT + 0.3 : 0; S.weakT = released >= RAM_CHARGE ? 0 : S.boostT; burstFx(S, released); tone(240, 1100 + 500 * released, 0.3, 'sawtooth', 0.11); }
+  if (released > 0.05) { S.boostT = burstTime(released) * dashLast(S.d); S.boostK = 1 + 0.2 * released; S.dashed = true; S.ramT = S.boostT + 0.3; burstFx(S, released); tone(240, 1100 + 500 * released, 0.3, 'sawtooth', 0.11); }
   if (charging) chargeFx(S, S.charge, dt);
   else if (S.boostT > 0 && S.dashed && !frozen) trailFx(S, dt);
   aimArrow(S, charging ? S.charge : 0);
@@ -3634,12 +3703,25 @@ function update(dt) {
     const o = S.objects[i], p = o.group.position;
     if (o.fly) {                                 // knocked loose, in the air
       if (o.cell) unsettle(o);
-      o.fly.vy -= 9.8 * dt;
+      const kb = o.fly.kb;                        // (a critter knocked back by a ram: see knockBack)
+      if (kb && o.fly.vy > 0 && groundAt(p.x + o.fly.vx * dt, p.z + o.fly.vz * dt) > p.y + o.fly.vy * dt) { o.fly.vx = 0; o.fly.vz = 0; }      // thrown against a bank or a step: it goes up and comes down at the foot of it, not on top
+      o.fly.vy -= (o.fly.g || 9.8) * dt;
       p.x = clamp(p.x + o.fly.vx * dt, BOUNDS.x1 + 5, BOUNDS.x2 - 5); p.y += o.fly.vy * dt; p.z = clamp(p.z + o.fly.vz * dt, BOUNDS.z1 + 5, BOUNDS.z2 - 5);
-      o.group.rotation.x += dt * 7;
+      if (kb) {
+        o.fly.t += dt;
+        const sp = Math.hypot(o.fly.vx, o.fly.vz), lean = sp > 0.01 ? Math.sin(Math.PI * Math.min(1, o.fly.t / kb)) * 0.95 : 0;
+        o.group.quaternion.setFromAxisAngle(kbUp, o.stunYaw);
+        if (lean) o.group.quaternion.premultiply(kbQ.setFromAxisAngle(kbAxis.set(o.fly.vz / sp, 0, -o.fly.vx / sp), lean));      // its head goes the way it is thrown
+      } else o.group.rotation.x += dt * 7;
       const gy = groundAt(p.x, p.z);
       if (p.y <= gy) {
-        o.group.rotation.set(0, rand() * 6.28, 0); o.fly = null;
+        if (kb) {
+          o.group.rotation.set(0, o.stunYaw, 0);
+          const k = Math.pow(Math.max(o.size, 0.2), 0.7);
+          for (let j = 0; j < 6; j++) { const a = j / 6 * 6.28 + rand(); puff(p.x, gy + 0.05 * k, p.z, Math.cos(a) * 2 * k, (0.4 + rand() * 0.8) * k, Math.sin(a) * 2 * k, 0.3, 0.08 * k, DUST[j % 3], 5 * k); }
+          if (earshot(p)) tone(150, 70, 0.07, 'sine', 0.1);
+        } else o.group.rotation.set(0, rand() * 6.28, 0);
+        o.fly = null;
         if (o.kind === 'creature') {
           const w = T.waterAt(p.x, p.z), sw = o.spec.move === 'swim', air = o.spec.move === 'fly' || o.spec.move === 'float';
           if (air || (sw ? w !== 0 : w !== 2)) o.home = [p.x, p.z]; else { p.x = o.home[0]; p.z = o.home[1]; }
@@ -3712,15 +3794,10 @@ function update(dt) {
     S.x -= nx * out; S.z -= nz * out;
     const vn = S.vx * nx + S.vz * nz, canStun = stunnable(S, o) && !(o.stunEnd > clock);
     if (!S.air && nx * hx + nz * hz > 0.4 && !canStun && p.y + o.size - feet < jumpHeight(S.d) * 0.85) S.hopAt = clock;      // it is in the way, and low enough to jump (one that wants a dash is the other hint's business)
-    if (canStun && !(S.ramT > 0) && vn > 0) { ramBump = clock; if (S.weakT > 0 && vn > vmax * RAM_MIN) shrug(o); }      // bumped, not rammed (or a burst with too little behind it, which it shakes off): the dash's hint, at once
+    if (canStun && !(S.ramT > 0) && vn > 0) ramBump = clock;      // bumped, not rammed: the dash's hint, at once
     // A dash burst into a critter too big to roll up. (The burst itself, or the moment after it while the ball is still going faster than it can roll.)
-    if (o.kind === 'creature' && S.ramT > 0 && vn > vmax * (boosting ? RAM_MIN : 1.1) && !(o.stunEnd > clock)) {
-      if (canStun) {                                // stunned: the burst is spent on it and the ball rocks back, ready to roll in and take it
-        ramStun(o, S); S.boostT = 0; S.ramT = 0; S.vx = -nx * vmax * 0.3; S.vz = -nz * vmax * 0.3; S.shake = 0.18; S.sq = -0.2; S.rams = (S.rams | 0) + 1;
-        const k = Math.pow(S.d, 0.7), cx = S.x + nx * r, cz = S.z + nz * r, col = TEAMS[S.team].hex;
-        for (let i = 0; i < 12; i++) puff(cx, S.y + (rand() - 0.5) * r, cz, (-nx + (rand() - 0.5) * 1.6) * 4 * k, (1 + rand() * 2.5) * k, (-nz + (rand() - 0.5) * 1.6) * 4 * k, 0.3 + rand() * 0.2, (0.08 + 0.07 * rand()) * k, i % 3 ? 0xffffff : col, 8 * k);
-        continue;
-      }
+    if (o.kind === 'creature' && S.ramT > 0 && vn > vmax * (boosting ? RAM_MIN : 0.9) && !(o.stunEnd > clock)) {
+      if (canStun) { playerRam(o, nx, nz, clamp((vn / vmax - 1.2) / 1.4, 0, 1)); continue; }
       shrug(o);
     }
     if (vn > 0 && !(vaulting && p.y + o.size < S.jumpGy + jumpHeight(S.d) * 0.95)) { S.vx -= 1.6 * vn * nx; S.vz -= 1.6 * vn * nz; if (o.size > S.d * 0.8 && !o.onBump) { const n = crashLoss(vn, vmax); if (n) hardHit(nx, nz, vmax, n); } }      // only a sprint into something big knocks things loose

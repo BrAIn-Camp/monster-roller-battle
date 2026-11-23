@@ -148,14 +148,26 @@ Three additions to the round, made together so that each explains the others.
   not jumping; "grow to 90 cm" is still what it takes to roll out of the Green.
 - **The ram.** A critter up to 1.3 times the biggest the ball can roll up (so up to 0.65 of the ball's width) is stunned
   for four seconds by a dash burst into it, and while it is stunned any ball that could have stunned it can roll it up.
-  Three stars circle its head and go out one at a time, so what is left of the four seconds can be read at a glance. The
-  burst is spent on the hit and the ball rocks back a little, ready to roll in. Only a proper burst does it: wound up
-  at least half way (`RAM_CHARGE`: a tap of the dash button costs 6% of the meter and would otherwise have stunned as
-  well as a full one, some seventy times a minute), and closing at 90% of the ball's ordinary top speed or more, in the
-  burst or in the third of a second after it. A yellow ring lights up once the wind-up is enough; a critter bigger than that shakes its head and stands its ground; a
-  critter that is charging or lunging can be stunned like any other. In multiplayer the host decides (`st` asks, `sn`
-  tells everyone, and tells the asker if the answer is no); the player who rammed sees it at once. CPUs on Normal and Hard go for a critter they would have to stun
-  when one is close and their meter is three-quarters full: a handful of times a round, and they collect about half.
+  The hit throws it back (0.7 to 1.1 of the ball's width, further for a harder hit, and nearly half its own height up,
+  so that it shows over the top of the ball from where the player looks); it leans back on its heels in the air and
+  lands dazed, and its four seconds start when it lands. Three stars circle its head and go out one at a time, so what
+  is left can be read at a glance. The burst goes into the critter and the ball all but stops where it hit; rolling on
+  takes it. It is thrown less far, or only straight up, rather than up a ledge, into water it cannot stand in, or into
+  a building or another thing the ball could not roll up.
+  Any dash burst does it, a tap of the button as much as a full wind-up, so long as the ball is closing at 60% of its
+  ordinary top speed or more (in the burst, or at 90% in the third of a second after it). The first version asked for
+  half a meter of wind-up (a tap costs 6% of the meter, and stuns some seventy times a minute if the player wants); in
+  play that read as the stun not working, because a player dashes with a tap and has half a meter to spare only some of
+  the time. A yellow ring lights up while a dash is wound up or under way. A critter bigger than that shakes its head
+  and stands its ground. The dash wins against a critter's own attack: one that springs at a ball in its burst is
+  stunned as it springs (it used to strike from a little way off and throw the ball back), and when one of a pack is
+  rammed the others that were coming at that ball back off, and bold ones nearby hold still for three seconds (they
+  used to throw the ball clear, turn about, while it tried to roll the stunned one up). A wind-up beside a bold
+  critter can still be broken by its attack, as before (the charge is given back). In multiplayer the host decides
+  (`st` asks, with the way the ball was going; `sn` tells everyone, and tells the asker if the answer is no; `fl`
+  with a ninth number throws it on the other machines); the player who rammed sees it at once. CPUs on Normal and
+  Hard go for a critter they would have to stun when one is close and their meter is three-quarters full: a handful
+  of times a round, and they collect most of them.
 - **The rings.** The "Now rollable: ..." line of text is gone. Anything near the ball that a player could be in doubt
   about (from 0.6 to 1.6 times the biggest it can take, within four ball-widths) has a ring on the ground: green and
   whole if the ball can roll it up, red and broken into dashes if it cannot, and a turning yellow ring of twelve points
