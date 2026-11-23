@@ -427,8 +427,27 @@ const viewFrustum = new THREE.Frustum(), viewM = new THREE.Matrix4(), viewSphere
 function batchFor(geo, material, casts, held = false) {
   const key = geo.uuid + material.uuid + (casts ? 's' : '') + (held ? 'h' : '');
   let b = batches.get(key);
-  if (!b) { b = { geo, material, casts, held, cap: 0, n: 0, mesh: null, arr: null }; batches.set(key, b); }
+  if (!b) { b = { geo, material, casts, held, cap: 0, n: 0, mesh: null, arr: null, who: [], ver: [], from: -1, lo: -1, hi: 0 }; batches.set(key, b); }
   return b;
+}
+// Puts one thing's matrix in the next slot of a batch. Sending a batch's matrices to the graphics card is the dear
+// part (a third of a frame when every batch was sent every frame), and most batches hold things that never move, so
+// a batch is only sent when something in it is new: `who` and `ver` remember which thing filled each slot and which
+// of its matrices (o.mv counts them), and `from` is the first slot that changed this frame (-1: nothing did).
+// (`lo` to `hi` is what is waiting to be sent: it is only cleared once the batch has really been drawn.)
+function batchPut(b, o, e, ver) {
+  if (b.n >= b.cap) growBatch(b);
+  const i = b.n++, off = i * 16;
+  if (b.who[i] === o && b.ver[i] === ver) return;
+  b.who[i] = o; b.ver[i] = ver;
+  const a = b.arr;
+  if (b.from < 0) {                               // (the same numbers from another thing, or the same thing back again: still nothing to send)
+    let k = 0;
+    while (k < 16 && a[off + k] === Math.fround(e[k])) k++;
+    if (k === 16) return;
+    b.from = off;
+  }
+  a.set(e, off);
 }
 function growBatch(b) {
   const cap = Math.max(8, b.cap * 2), old = b.mesh;
@@ -436,9 +455,10 @@ function growBatch(b) {
   m.frustumCulled = false; m.castShadow = b.casts; m.matrixAutoUpdate = false; m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   if (b.geo.userData.still) m.morphTargetInfluences = b.held ? b.geo.userData.still.rest : b.geo.userData.infl;      // (a model's still: see askModel)
   if (old) { m.instanceMatrix.array.set(old.instanceMatrix.array.subarray(0, b.n * 16)); batchGroup.remove(old); old.dispose(); }
-  batchGroup.add(m); b.mesh = m; b.cap = cap; b.arr = m.instanceMatrix.array;
+  m.onAfterRender = () => { b.lo = -1; b.hi = 0; };
+  batchGroup.add(m); b.mesh = m; b.cap = cap; b.arr = m.instanceMatrix.array; b.from = 0; b.lo = -1; b.hi = 0;
 }
-const DRAW = { things: 0, batches: 0, held: 0, loose: false };            // last frame's count, for the readout
+const DRAW = { things: 0, batches: 0, sent: 0, held: 0, loose: false, sendAll: false };            // last frame's count, for the readout
 // The things stuck to one ball. Where each is in the world is the ball's place times its own on the ball.
 const heldM = new THREE.Matrix4(), heldW = new THREE.Matrix4();
 function drawHeld(bg, list, inGame, near, pxH) {
@@ -460,15 +480,15 @@ function drawHeld(bg, list, inGame, near, pxH) {
     const held = !!geo.userData.still;
     let b = casts ? o.bS : o.bN;
     if (!b || b.geo !== geo || b.material !== g.material || b.held !== held) { b = batchFor(geo, g.material, casts, held); if (casts) o.bS = b; else o.bN = b; }
-    if (b.n >= b.cap) growBatch(b);
-    b.arr.set(heldW.elements, b.n * 16); b.n++; n++;
+    batchPut(b, o, heldW.elements, -1 - (o.mv = (o.mv | 0) + 1));      // (a ball rolls: a new matrix every frame)
+    n++;
   }
   return n;
 }
 function drawWorld() {
   camera.updateMatrixWorld();
   viewFrustum.setFromProjectionMatrix(viewM.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
-  for (const b of batches.values()) b.n = 0;
+  for (const b of batches.values()) { b.n = 0; b.from = -1; }
   const inGame = S.state !== 'menu' && S.state !== 'dex';      // behind the menu everything is shown, from far above
   let things = 0;
   const pxH = renderer.domElement.height || 1080;
@@ -490,11 +510,11 @@ function drawWorld() {
     if (!viewFrustum.intersectsSphere(viewSphere)) continue;
     // (from high above the menu the whole map is in view: leave out what would be a speck, under about three pixels)
     if (!inGame && viewSphere.radius * pxH < 1.5 * camera.position.distanceTo(p)) continue;
-    if (o.kind === 'creature' || o.fly || o.mx !== p.x || o.my !== p.y || o.mz !== p.z || o.ms !== sc) { g.updateMatrix(); o.mx = p.x; o.my = p.y; o.mz = p.z; o.ms = sc; }    // (things that have not moved keep their matrix)
+    if (o.kind === 'creature' || o.fly || o.mx !== p.x || o.my !== p.y || o.mz !== p.z || o.ms !== sc) { g.updateMatrix(); o.mx = p.x; o.my = p.y; o.mz = p.z; o.ms = sc; o.mv = (o.mv | 0) + 1; }    // (things that have not moved keep their matrix)
     let b = casts ? o.bS : o.bN;
     if (!b || b.geo !== geo || b.material !== g.material || b.held) { b = batchFor(geo, g.material, casts); if (casts) o.bS = b; else o.bN = b; }
-    if (b.n >= b.cap) growBatch(b);
-    b.arr.set(g.matrix.elements, b.n * 16); b.n++; things++;
+    batchPut(b, o, g.matrix.elements, o.mv | 0);
+    things++;
   }
   // and the things stuck to the balls (shadows only fall near the player's ball: see aimSun)
   let held = 0;
@@ -504,15 +524,23 @@ function drawWorld() {
     for (const R of rivals) held += drawHeld(R.ball, R.attached, inGame, sh && Math.hypot(R.x - S.x, R.z - S.z) < reach + R.d, pxH);
   }
   things += held; DRAW.held = held;
-  let used = 0;
+  let used = 0, sent = 0;
   for (const b of batches.values()) {
     const m = b.mesh;
     if (!m) continue;
     m.count = b.n; m.visible = b.n > 0;
-    if (b.n) { used++; const a = m.instanceMatrix; if (a.clearUpdateRanges) { a.clearUpdateRanges(); a.addUpdateRange(0, b.n * 16); } a.needsUpdate = true; }
+    if (b.n) used++;
+    if (DRAW.sendAll && b.n) b.from = 0;             // (debug: as it was, every batch sent every frame)
+    if (b.from >= 0) {
+      sent++;
+      b.lo = b.lo < 0 ? b.from : Math.min(b.lo, b.from); b.hi = Math.max(b.hi, b.n * 16);
+      const a = m.instanceMatrix;
+      if (a.clearUpdateRanges) { a.clearUpdateRanges(); a.addUpdateRange(b.lo, b.hi - b.lo); }
+      a.needsUpdate = true;
+    }
     if (b.n && inGame && !b.held && b.geo.userData.still) LOCAL.wake(b.geo.userData.still);      // (a model on show in a round starts to breathe)
   }
-  DRAW.things = things; DRAW.batches = used;
+  DRAW.things = things; DRAW.batches = used; DRAW.sent = sent;
 }
 
 // ---------- the balls ----------
@@ -1191,7 +1219,7 @@ function stick(ballGroup, o, cx, cy, cz, r) {
   ballGroup.position.set(cx, cy, cz);
   ballGroup.updateMatrixWorld(true);
   ballGroup.attach(o.group);
-  o.on = true;
+  o.on = true; o.mx = NaN;                       // (its matrix is its place on the ball now: once free again it must be worked out afresh, wherever it lands)
 }
 function attach(o) {
   stick(ball, o, S.x, S.y, S.z, S.d / 2);

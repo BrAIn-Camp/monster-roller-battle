@@ -388,6 +388,18 @@ costs and where it went; it works in a hidden tab. Measured with it at 1920x1080
   hides behind the main thread's; frames drawn back to back with no wait go from 4.5 ms to 3.6. At "low" graphics
   `bench` reads slightly worse (7.7 to 8.2) while back to back is still better (3.7 to 3.1). `__game.gfx.loose(true)`
   draws them one by one again, for comparing.
+- **A batch is only sent to the card when it has changed** (22 November 2026). Every batch's matrices were sent every
+  frame, about 390 small uploads, and that was a third of the frame: 2.3 ms, nearly all of it on the card's side. Most
+  batches hold things that never move, so `batchPut` remembers which thing (and which of its matrices) filled each slot
+  and a batch is sent only from the first slot that differs: about 40 a frame, standing or rolling. Start of a round at
+  1920x1080: 7.1 ms to 4.7 (6.7 to 4.5 while turning and rolling). `__game.gfx.DRAW.sendAll = true` sends them all
+  again, for comparing; a full-screen pixel comparison of the two is identical apart from a few pixels of something
+  that flickers by itself (two frames sent in full differ by as much).
+- **Measured on a fast machine.** All of these figures are from the development machine (a GeForce RTX 5060 Ti, 28 cores).
+  A laptop with built-in graphics will be several times slower on the main thread and far slower on the card, and the
+  split will differ: there the triangles (1.4 million a frame at the start of a round: terrain 493,000 drawn whole,
+  items 630,000, critters 180,000, grass tufts 104,000), the 4x anti-aliasing and the logarithmic depth buffer are
+  likely to matter, none of which shows here.
 - **Tried and dropped:** leaving out the stuck things hidden behind their own ball (about a third of them, 300,000
   triangles). No measurable gain: the card is not short of triangles.
 
