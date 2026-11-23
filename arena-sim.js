@@ -9,6 +9,9 @@
 // that flies or floats can drift back unless it was hit a long way out. A ball that leaves the floor is gone for
 // the rest of the fight.
 import { STATS, TYPE_CHART } from './critters/battle-data.js';
+// (In the game the critters are drawn bigger than the heights the fight was balanced for: see the size curve in
+// main.js. A spec then carries the height it had as height0, and that is what everything here goes by.)
+const H0 = (s) => s.height0 ?? s.height;
 
 // ---------- tuning (one object, so the balance test can vary it) ----------
 export const TUNE = {
@@ -119,15 +122,15 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
   const recs = teams.map((tm) => (tm.roster || []).slice(0, T.ROSTER_CAP).map((r) => ({ spec: r.spec, stars: r.stars || 0, boost: r.boost || 1, bonus: tm.bonus || NONE, value: r.value, made: r.made || 1, fav: isFavoured(arena, r.spec) })));
   const onStart = recs.map((r) => Math.min(r.length, T.FIELD_CAP));
   const heights = []; let biggest = 0;
-  recs.forEach((r) => r.forEach((c) => { heights.push(c.spec.height); biggest = Math.max(biggest, c.spec.height); }));
+  recs.forEach((r) => r.forEach((c) => { heights.push(H0(c.spec)); biggest = Math.max(biggest, H0(c.spec)); }));
   heights.sort((a, b) => a - b);
   const total = heights.length, median = total ? heights[total >> 1] : 1;
   const L = clamp(29 + Math.sqrt(total) * 0.35 + Math.min(biggest, 30) * 0.25, T.ARENA_MIN, T.ARENA_MAX), half = L / 2, K = L / 32;
   const hRef = L * T.H_TARGET;
-  const hOf = (spec) => hRef * clamp(Math.sqrt(spec.height / median), T.H_MIN, T.H_MAX);
+  const hOf = (spec) => hRef * clamp(Math.sqrt(H0(spec) / median), T.H_MIN, T.H_MAX);
   const spdK = clamp(L / 40, 0.8, 1.5);
   function unitStats(c) {
-    const b0 = STATS[c.spec.dex] || DEF, b = b0.map((v, i) => v * (1 + (c.bonus[i] || 0))), m = Math.sqrt(c.spec.height), special = b0[3] > b0[1];
+    const b0 = STATS[c.spec.dex] || DEF, b = b0.map((v, i) => v * (1 + (c.bonus[i] || 0))), m = Math.sqrt(H0(c.spec)), special = b0[3] > b0[1];
     return {
       maxHp: b[0] * T.HP_SCALE * m * c.boost, atk: special ? b[3] : b[1], special, def: b[2], spd: b[4], m: m * c.boost,
       interval: clamp(1.7 - b[5] / 140, 0.65, 1.6),              // faster monsters attack more often

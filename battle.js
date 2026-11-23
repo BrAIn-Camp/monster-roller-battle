@@ -9,6 +9,9 @@
 // every `interval` seconds. Critters whose special attack is higher than their attack fight at range.
 import * as THREE from 'three';
 import { STATS, TYPE_CHART } from './critters/battle-data.js';
+// (In the game the critters are drawn bigger than the heights the fight was balanced for: see the size curve in
+// main.js. A spec then carries the height it had as height0, and that is what everything here goes by.)
+const H0 = (s) => s.height0 ?? s.height;
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const INTRO = 3.5;          // seconds the armies stand facing each other before the fight
@@ -17,21 +20,21 @@ const HP_SCALE = 10, DMG_BASE = 8, DMG_RATIO = 22;    // tuned so an even fight 
 
 export function typeMult(att, defs) { let m = 1; for (const d of defs) m *= (TYPE_CHART[att] && TYPE_CHART[att][d] !== undefined ? TYPE_CHART[att][d] : 1); return m; }
 export function unitStats(spec) {
-  const b = STATS[spec.dex] || [50, 50, 50, 50, 50, 50], m = Math.sqrt(spec.height);
+  const b = STATS[spec.dex] || [50, 50, 50, 50, 50, 50], m = Math.sqrt(H0(spec));
   const special = b[3] > b[1];
   return {
     maxHp: b[0] * HP_SCALE * m, atk: special ? b[3] : b[1], special, def: b[2], spd: b[4], spe: b[5], m,
     interval: clamp(1.7 - b[5] / 140, 0.65, 1.6),        // faster critters attack more often
-    speed: 1.4 + b[5] / 45 + spec.height * 0.25,          // and get there sooner
-    range: special ? 4 + spec.height : 0,
+    speed: 1.4 + b[5] / 45 + H0(spec) * 0.25,          // and get there sooner
+    range: special ? 4 + H0(spec) : 0,
   };
 }
 // One number for the scoreboard: base stat total scaled by size.
-export function power(spec) { const b = STATS[spec.dex] || [50, 50, 50, 50, 50, 50]; return (b[0] + b[1] + b[2] + b[3] + b[4] + b[5]) * Math.sqrt(spec.height) / 100; }
+export function power(spec) { const b = STATS[spec.dex] || [50, 50, 50, 50, 50, 50]; return (b[0] + b[1] + b[2] + b[3] + b[4] + b[5]) * Math.sqrt(H0(spec)) / 100; }
 
 export function createBattle({ teams, buildMesh }) {
   const total = teams.reduce((n, t) => n + t.army.length, 0);
-  const biggest = teams.reduce((h, t) => Math.max(h, ...t.army.map((s) => s.height), 0), 0);
+  const biggest = teams.reduce((h, t) => Math.max(h, ...t.army.map((s) => H0(s)), 0), 0);
   const L = clamp(16 + 1.1 * Math.sqrt(total) + biggest * 1.5, 24, 90);    // arena side, metres: tight enough that the armies fill it
 
   // ---- arena
@@ -64,10 +67,10 @@ export function createBattle({ teams, buildMesh }) {
       const along = (Math.random() - 0.5) * L * 0.8, depth = L * 0.5 - 2 - Math.random() * L * 0.17;
       const x = sx === 0 ? along : sx * depth, z = sz === 0 ? along : sz * depth;
       const st = unitStats(spec), mesh = buildMesh(spec, k);
-      mesh.scale.setScalar(spec.height);
+      mesh.scale.setScalar(H0(spec));
       scene.add(mesh);
       units.push({ team: k, spec, st, hp: st.maxHp, x, z, yaw: Math.atan2(-x, -z), cd: Math.random() * 0.8, target: null, rt: Math.random() * 1.2, mesh,
-        r: Math.max(0.15, spec.height * 0.3), alive: true, die: 0, lunge: 0, flash: 0, dmg: 0, kills: 0, moving: false,
+        r: Math.max(0.15, H0(spec) * 0.3), alive: true, die: 0, lunge: 0, flash: 0, dmg: 0, kills: 0, moving: false,
         air: spec.move === 'fly' || spec.move === 'float', phase: Math.random() * 6.28 });
     }
   });
@@ -86,10 +89,10 @@ export function createBattle({ teams, buildMesh }) {
   function bolt(u, t) {
     if (bolts.length > 80) return;
     const m = new THREE.Mesh(boltGeo, boltMats[u.team]);
-    const y1 = u.spec.height * 0.6, y2 = t.spec.height * 0.5, dx = t.x - u.x, dz = t.z - u.z, dy = y2 - y1;
+    const y1 = H0(u.spec) * 0.6, y2 = H0(t.spec) * 0.5, dx = t.x - u.x, dz = t.z - u.z, dy = y2 - y1;
     m.position.set((u.x + t.x) / 2, (y1 + y2) / 2, (u.z + t.z) / 2);
     m.lookAt(t.x, y2, t.z);
-    m.scale.set(1 + u.spec.height * 0.6, 1 + u.spec.height * 0.6, Math.hypot(dx, dy, dz));
+    m.scale.set(1 + H0(u.spec) * 0.6, 1 + H0(u.spec) * 0.6, Math.hypot(dx, dy, dz));
     scene.add(m); bolts.push({ m, life: 0.1 });
   }
 
@@ -160,7 +163,7 @@ export function createBattle({ teams, buildMesh }) {
   function visuals(dt) {
     let sx = 0, sz = 0, n = 0, spread = 0;
     for (const u of units) {
-      const h = u.spec.height;
+      const h = H0(u.spec);
       if (u.alive) {
         u.lunge = Math.max(0, u.lunge - dt); u.flash = Math.max(0, u.flash - dt);
         const lu = u.lunge > 0 ? Math.sin(u.lunge / 0.18 * Math.PI) * Math.min(0.6, u.r) : 0;
@@ -178,7 +181,7 @@ export function createBattle({ teams, buildMesh }) {
       }
     }
     for (let i = bolts.length - 1; i >= 0; i--) { bolts[i].life -= dt; if (bolts[i].life <= 0) { scene.remove(bolts[i].m); bolts.splice(i, 1); } }
-    if (n) { sx /= n; sz /= n; for (const u of units) if (u.alive) spread = Math.max(spread, Math.hypot(u.x - sx, u.z - sz) + u.spec.height); }
+    if (n) { sx /= n; sz /= n; for (const u of units) if (u.alive) spread = Math.max(spread, Math.hypot(u.x - sx, u.z - sz) + H0(u.spec)); }
     look.lerp(new THREE.Vector3(sx, 1, sz), 1 - Math.exp(-1.5 * dt));
     camDist += (clamp(spread * 1.15 + 7, 12, L * 0.85) - camDist) * (1 - Math.exp(-1.2 * dt));
     camAng += dt * 0.14;

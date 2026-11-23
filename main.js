@@ -17,10 +17,23 @@ import crittersC from './critters/critters_3.js';
 const { LEVEL, TYPE_COLORS, RARITY } = window.ROLLUP_DATA;
 const ITEMS = [...window.ROLLUP_DATA.ITEMS, ...MAP_ITEMS];
 const CREATURES = [...crittersA, ...crittersB, ...crittersC].sort((a, b) => a.dex - b.dex);
+// The size curve (23 November 2026). The critters' heights as written (0.2 m to 8.8 m) have most species between 1
+// and 2 m, so a ball of 4 m could roll up all but a handful and there was nothing left to be too big. In the world
+// each is now drawn bigger by where it ranks: the smallest as it was, the middle one half as big again, the biggest
+// twice the size (17.6 m). `height` is the size it is in the world; `height0` is the height as written, which is
+// still what a critter is worth when rolled up, how strong it is in the arena (see H0 in arena-merge.js) and where
+// on the map it lives: none of those were to change.
+{ const all = CREATURES.map((sp) => sp.height), n = all.length;
+  for (const sp of CREATURES) {
+    if (sp.height0 !== undefined) continue;
+    let below = 0, same = 0;
+    for (const h of all) { if (h < sp.height) below++; else if (h === sp.height) same++; }
+    sp.height0 = sp.height; sp.height = Math.round(sp.height * (1 + (below + (same - 1) / 2) / (n - 1)) * 10) / 10;
+  } }
 // Titans: every critter again at TITAN_SCALE times its size. They appear in the outer habitats for the last 45 seconds
 // and count as the same species in the dex. `base` points back at the ordinary critter.
 const TITAN_SCALE = 10;
-const TITANS = CREATURES.map((sp) => Object.assign({}, sp, { id: 'titan' + sp.id, base: sp, name: 'Titan ' + sp.name, height: Math.round(sp.height * TITAN_SCALE * 10) / 10, titan: true }));
+const TITANS = CREATURES.map((sp) => { const h = Math.round(sp.height0 * TITAN_SCALE * 10) / 10; return Object.assign({}, sp, { id: 'titan' + sp.id, base: sp, name: 'Titan ' + sp.name, height: h, height0: h, titan: true }); });      // (as big as they were: ten times the height as written)
 const baseOf = (sp) => sp.base || sp;
 
 // ---------- tuning ----------
@@ -28,7 +41,7 @@ const START_D = 0.6;      // starting ball diameter (m): big enough that the 30 
 const TRAINER_H = 1.5;    // the trainer's full height (m), reached once the ball is 1.9 m wide
 const trainerHeight = (d) => clamp(d * 0.6, 0.25, TRAINER_H);    // shorter than the ball, so it never hides it; human-sized from a 1.9 m ball
 const PICK_RATIO = 0.5;   // can roll up things up to this fraction of the ball's diameter, so critters stay big next to it
-const GROW = 3;           // d^3 += GROW * size^3 * mass per pickup: tuned so a ball doubles about once a minute
+const GROW = +new URLSearchParams(location.search).get('grow') || 4;           // d^3 += GROW * size^3 * mass per pickup: tuned so a ball doubles about once a minute (?grow=N to try another). It was 3 until the critters were drawn bigger (the size curve, below): with fewer of them small enough to roll up, the bot ended a round at 5.7 m, not 9.8
 const MAX_ON_BALL = 300;  // the newest this-many things are drawn on a ball; older ones still count and still fight
 // CPU difficulty (chosen on the menu). speed = share of the player's top speed; dash = how keenly they use the charge dash
 // (0 = never); band = how much a CPU that is ahead of the player eases off (and one behind hurries); think = how slowly they
@@ -76,7 +89,7 @@ const KNOCK_LOSS = 3;     // things a ball drops when a heavier ball rams it
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 // What a thing adds to a ball's volume. Big balls get less out of each thing (half at BIG_D wide), which keeps a leader in reach.
 const BIG_D = 6;
-const growthOf = (Bq, o) => GROW * o.size ** 3 * (o.spec.mass ?? 1) * (o.bonus ?? 1) / (1 + (Bq.d / BIG_D) ** 2);
+const growthOf = (Bq, o) => GROW * (o.size * (o.gk ?? 1)) ** 3 * (o.spec.mass ?? 1) * (o.bonus ?? 1) / (1 + (Bq.d / BIG_D) ** 2);      // (gk: a critter is worth what it was before it was drawn bigger, see the size curve)
 // Top speed still rises with size, a little less steeply for the giants, so a big ball never feels slow across the ground.
 // What changes with mass is heft: a bigger ball takes longer to get going, to stop and to turn (gradually: 0.6 m = 96%,
 // 3 m = 83%, 8 m = 66%, 15 m = 53% of a small ball's pull), so it carries its momentum.
@@ -726,22 +739,61 @@ const DRAW = { things: 0, batches: 0, sent: 0, held: 0, far: 0, props: 0, frame:
 // Whether a thing is drawn as its plainer shape, casts a shadow or is too small to draw from above the menu is
 // decided when the batches are filled, by the ball's distance; so they are also filled afresh every twentieth
 // frame, and more often while a stuck critter's model is still on its way.
-const heldSphere = new THREE.Sphere();
+// The props on a ball are nearly all different shapes (a batch each would be a draw call each: 200 for one full
+// ball), so they are not batched at all: they are written into ONE mesh for the ball (h.props), as the props
+// standing on the map are for their cell (packCell). Only the critters, which repeat, are in batches.
+const heldSphere = new THREE.Sphere(), heldProps = [];
+// The ball's one mesh of props, written afresh from `list` ([geometry, matrix, scale] three at a time). Its buffers
+// are kept and grown, not made new each time: a ball picks things up several times a second.
+function packHeld(h, list, casts) {
+  let nv = 0, ni = 0;
+  for (let q = 0; q < list.length; q += 3) { const g = list[q]; nv += g.attributes.position.count; ni += g.index ? g.index.count : g.attributes.position.count; }
+  let m = h.props;
+  if (!nv) { if (m) m.visible = false; return; }
+  if (!m || m.userData.nv < nv || m.userData.ni < ni) {
+    const cv = Math.ceil(nv * 1.5), ci = Math.ceil(ni * 1.5), geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(cv * 3), 3).setUsage(THREE.DynamicDrawUsage));
+    geo.setAttribute('normal', new THREE.BufferAttribute(new Int8Array(cv * 3), 3, true).setUsage(THREE.DynamicDrawUsage));
+    geo.setAttribute('color', new THREE.BufferAttribute(new Uint16Array(cv * 3), 3, true).setUsage(THREE.DynamicDrawUsage));
+    geo.setIndex(new THREE.BufferAttribute(new Uint32Array(ci), 1).setUsage(THREE.DynamicDrawUsage));
+    if (m) { m.geometry.dispose(); m.geometry = geo; } else { m = h.props = new THREE.Mesh(geo, solidMat); m.matrixAutoUpdate = false; m.frustumCulled = false; h.group.add(m); }
+    m.userData.nv = cv; m.userData.ni = ci;
+  }
+  const geo = m.geometry, pos = geo.attributes.position.array, nor = geo.attributes.normal.array, col = geo.attributes.color.array, idx = geo.index.array;
+  let v = 0, k = 0;
+  for (let q = 0; q < list.length; q += 3) {
+    const g = list[q], e = list[q + 1], s = 127 / (list[q + 2] || 1);
+    const P = g.attributes.position.array, N = g.attributes.normal.array, C = g.attributes.color.array, cnt = P.length / 3;
+    for (let j = 0, w = v * 3; j < cnt * 3; j += 3, w += 3) {
+      const x = P[j], y = P[j + 1], z = P[j + 2], a = N[j], b = N[j + 1], d = N[j + 2];
+      pos[w] = e[0] * x + e[4] * y + e[8] * z + e[12]; pos[w + 1] = e[1] * x + e[5] * y + e[9] * z + e[13]; pos[w + 2] = e[2] * x + e[6] * y + e[10] * z + e[14];
+      nor[w] = Math.round((e[0] * a + e[4] * b + e[8] * d) * s); nor[w + 1] = Math.round((e[1] * a + e[5] * b + e[9] * d) * s); nor[w + 2] = Math.round((e[2] * a + e[6] * b + e[10] * d) * s);
+      col[w] = C[j] * 65535; col[w + 1] = C[j + 1] * 65535; col[w + 2] = C[j + 2] * 65535;
+    }
+    const I = g.index ? g.index.array : null, ic = I ? I.length : cnt;
+    if (I) for (let j = 0; j < ic; j++) idx[k + j] = v + I[j]; else for (let j = 0; j < ic; j++) idx[k + j] = v + j;
+    v += cnt; k += ic;
+  }
+  for (const a of [geo.attributes.position, geo.attributes.normal, geo.attributes.color, geo.index]) { if (a.clearUpdateRanges) a.clearUpdateRanges(); a.needsUpdate = true; }
+  geo.setDrawRange(0, k);
+  m.visible = true; m.castShadow = casts;
+}
 let heldBalls = 0;
 function dropHeld(bg) {
   const h = bg.userData.held;
   if (!h) return;
   for (const b of h.map.values()) if (b.mesh) { b.mesh.removeFromParent(); b.mesh.dispose(); }
+  if (h.props) h.props.geometry.dispose();
   scene.remove(h.group); bg.userData.held = null;
 }
 function drawHeld(bg, list, inGame, near, pxH) {
   let h = bg.userData.held;
   if (!h) {
-    h = bg.userData.held = { group: new THREE.Group(), map: new Map(), list: null, ver: -1, near: false, inGame: false, pending: false, n: 0, rad: 0, stamp: 0, turn: heldBalls++ * 5 };
+    h = bg.userData.held = { group: new THREE.Group(), map: new Map(), props: null, list: null, ver: -1, near: false, inGame: false, pending: false, n: 0, rad: 0, stamp: 0, turn: heldBalls++ * 5 };
     h.group.matrixAutoUpdate = false; scene.add(h.group);
   }
   const hg = h.group;
-  if (!list.length || !bg.visible || !bg.parent) { hg.visible = false; return 0; }
+  if (!list.length || !bg.visible || !bg.parent) { hg.visible = false; h.list = null; return 0; }
   hg.matrix.compose(bg.position, bg.quaternion, bg.scale); hg.matrixWorldNeedsUpdate = true;
   if (h.list !== list || h.ver !== (list.ver | 0) || h.near !== near || h.inGame !== inGame || (DRAW.frame + h.turn) % (h.pending ? 6 : 20) === 0) fillHeld(bg, h, list, inGame, near, pxH);
   heldSphere.center.copy(bg.position); heldSphere.radius = h.rad * (near ? 2.6 : 1.05);      // (a shadow may be in view when the ball is not)
@@ -753,6 +805,7 @@ function fillHeld(bg, h, list, inGame, near, pxH) {
   for (const b of h.map.values()) { b.n = 0; b.from = -1; }
   const big = S.d * 0.07, dist = camera.position.distanceTo(bg.position), stamp = -1 - (++h.stamp);
   let n = 0, rad = 0;
+  heldProps.length = 0;
   for (const o of list) {
     const g = o.group, geo = g.geometry;
     if (g.parent !== bg || !g.visible) continue;
@@ -766,6 +819,7 @@ function fillHeld(bg, h, list, inGame, near, pxH) {
     g.updateMatrix();
     let dg = geo, dm = g.material;
     if (r * 1.05 < QUAL.lod * Math.max(0.01, dist - reach) * (geo.userData.still ? CRITTER_LOD : 1) && !casts) { const f = farShape(geo, dm); if (f) { dg = f; dm = f.userData.mat || dm; DRAW.far++; } }
+    if (dm === itemMat && plainAttr(dg.attributes.position) && plainAttr(dg.attributes.normal) && plainAttr(dg.attributes.color)) { heldProps.push(dg, g.matrix.elements, g.scale.x); n++; continue; }      // a prop: into the ball's one mesh
     const key = dg.uuid + dm.uuid + (casts ? 's' : '');
     let b = h.map.get(key);
     if (!b) { b = { geo: dg, material: dm, casts, held: true, cap: 0, n: 0, mesh: null, arr: null, who: [], ver: [], from: -1, lo: -1, hi: 0 }; h.map.set(key, b); }
@@ -786,6 +840,8 @@ function fillHeld(bg, h, list, inGame, near, pxH) {
       a.needsUpdate = true;
     }
   }
+  packHeld(h, heldProps, near);
+  heldProps.length = 0;
   h.n = n; h.rad = rad;
 }
 // ---------- props that stay put are baked into the map ----------
@@ -1233,7 +1289,7 @@ const areaOfSpec = (sp) => (HAB_BIOMES[habOf(sp)] || []).map((i) => BIOMES[i].na
 function critterSpot(sp, hab = habOf(sp), far = null) {
   const ids = HAB_BIOMES[hab];
   if (!ids) return null;
-  const [lo, hi] = HAB_RANGE[hab], t = far ?? clamp((baseOf(sp).height - 0.3) / 1.6, 0, 1), tol = (hi - lo) * 0.14 + 6;
+  const [lo, hi] = HAB_RANGE[hab], t = far ?? clamp((baseOf(sp).height0 - 0.3) / 1.6, 0, 1), tol = (hi - lo) * 0.14 + 6;
   const want = sp.move === 'swim' ? 'water' : sp.move === 'fly' || sp.move === 'float' ? 'dry' : 'land';
   const rT = hab === 'town' ? null : lo + (0.1 + 0.8 * t) * (hi - lo);
   for (let i = 0; i < 12; i++) {
@@ -1286,6 +1342,7 @@ function populateSeeded(seed) {
     // through all 7,000 of them every frame read two or three fields of each, and that read is several times slower
     // when the things have been built up differently from one another.)
     const o = { id: opt.id ?? S.nextId, kind: e.kind, spec: e.spec, size, rad, group, bonus: opt.bonus ?? 1, on: false, fly: null, cool: 0, contrib: 0, ldist: 0, vis: size, lump: new V3(), spawnT: 0,
+      gk: e.kind === 'creature' ? (e.spec.height0 ?? e.spec.height) / e.spec.height : 1,
       due: 0, baked: false, understudy: false, gone: false, casts: false, cell: null, by: null, script: null, noPick: false, onPick: null, onBump: null,
       ai: undefined, timer: 0, home: null, tx: 0, tz: 0, phase: 0, leader: null, aiT: 0, yaw: undefined, lt: 0, struck: false, lunB: null, nearT: 0, armySpec: null,
       mx: NaN, my: 0, mz: 0, ms: 0, mv: 0, bN: null, bS: null, ntx: undefined, ntz: 0, nyaw: undefined, nsig: undefined, wpos: null,
@@ -1335,7 +1392,7 @@ function populateSeeded(seed) {
   }
   for (const sp of CREATURES) {
     const [groups, per] = RARITY[sp.rarity] || [1, 1], hab = habOf(sp);
-    const n = Math.max(1, Math.round(groups * (hab === 'town' ? 2 : 1) * (sp.height <= 0.45 ? 1.6 : 1) * CRITTER_DENSITY));
+    const n = Math.max(1, Math.round(groups * (hab === 'town' ? 2 : 1) * (sp.height0 <= 0.45 ? 1.6 : 1) * CRITTER_DENSITY));
     for (let k = 0; k < n; k++) herd(sp, critterSpot(sp, hab), per);
   }
   for (const hab in GUESTS) for (const id of GUESTS[hab]) { const sp = SPECS[id] && SPECS[id].spec; if (sp) for (let k = 0; k < (hab === 'town' ? 3 : 1); k++) herd(sp, critterSpot(sp, hab, 0.15), 3); }
@@ -1822,7 +1879,7 @@ function terrainContact(x, z, feet, r, dx = 0, dz = 0) {
 const allBalls = () => [S, ...rivals];
 // What goes into a team's army for a critter: its species, or a copy at the size it was caught at if that was bigger than
 // normal (Growth Spurt), so it fights at that size in the arena.
-const armySpec = (o) => o.armySpec || (o.armySpec = o.size > o.spec.height * 1.05 ? Object.assign({}, o.spec, { height: Math.round(o.size * 100) / 100, base: baseOf(o.spec), giant: true, _pw: 0 }) : o.spec);
+const armySpec = (o) => o.armySpec || (o.armySpec = o.size > o.spec.height * 1.05 ? Object.assign({}, o.spec, { height: Math.round(o.size * 100) / 100, height0: Math.round(o.size * (o.gk ?? 1) * 100) / 100, base: baseOf(o.spec), giant: true, _pw: 0 }) : o.spec);
 const armyDrop = (army, o) => { const k = army.lastIndexOf(o.armySpec || o.spec); if (k >= 0) army.splice(k, 1); o.armySpec = null; };
 // A critter's attack: it rears back for a moment, then lunges at the ball. A hit throws the ball clear and, for a second,
 // lets it pass through critters, so a ball boxed in by several of them always gets out.
@@ -2366,7 +2423,7 @@ function spawnWave() {
   const from = S.objects.length;
   for (const sp of CREATURES) {
     const [groups, per] = RARITY[sp.rarity] || [1, 1];
-    const want = groups * WAVE_SHARE * (sp.height <= 0.45 ? 0.6 : 1.2), n = Math.floor(want) + (rand() < want % 1 ? 1 : 0);
+    const want = groups * WAVE_SHARE * (sp.height0 <= 0.45 ? 0.6 : 1.2), n = Math.floor(want) + (rand() < want % 1 ? 1 : 0);
     for (let k = 0; k < n; k++) S.spawn.herd(sp, critterSpot(sp), per);
   }
   const added = S.objects.length - from;

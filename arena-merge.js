@@ -19,6 +19,9 @@
 //     spare   : [6] the spare critters' stats added up (each weighted by the root of its height)
 //     bonus   : [6] what that is worth: the share added to each of the fighters' stats (0.12 = +12%)
 import { STATS } from './critters/battle-data.js';
+// (In the game the critters are drawn bigger than the heights the fight was balanced for: see the size curve in
+// main.js. A spec then carries the height it had as height0, and that is what everything here goes by.)
+const H0 = (s) => s.height0 ?? s.height;
 
 // next stage by slot (first 151). A list means a branch: teams take turns (see pickBranch).
 export const EVOLVES = {
@@ -58,9 +61,9 @@ export const STAT_NAMES = ['HP', 'Attack', 'Defence', 'Sp. Atk', 'Sp. Def', 'Spe
 const DEF = [50, 50, 50, 50, 50, 50];
 const statsOf = (spec) => STATS[spec.dex] || DEF;
 // One number for the scoreboard and for sorting: base stat total scaled by size (as battle.js always did).
-export function power(spec) { const b = statsOf(spec); return (b[0] + b[1] + b[2] + b[3] + b[4] + b[5]) * Math.sqrt(spec.height) / 100; }
+export function power(spec) { const b = statsOf(spec); return (b[0] + b[1] + b[2] + b[3] + b[4] + b[5]) * Math.sqrt(H0(spec)) / 100; }
 // Health x damage, in the arena's own terms (see unitStats in arena-sim.js): both scale with the root of height.
-export function strength(spec, boost = 1) { const b = statsOf(spec); return b[0] * Math.max(b[1], b[3]) * spec.height * boost * boost; }
+export function strength(spec, boost = 1) { const b = statsOf(spec); return b[0] * Math.max(b[1], b[3]) * H0(spec) * boost * boost; }
 // What one of every species together would add to each stat, as a share of the whole (times six, so 1 is an even
 // share). Critters as a whole lean towards Attack and Speed; measuring a collection against this, rather than
 // against an even split, is what lets a lean of the player's own making show.
@@ -91,7 +94,7 @@ export function teamPower(bonus) {
 // shared out by the cube of each stat, so that it goes mostly to what that critter is best at. A fast critter
 // feeds Speed, a tank feeds HP and Defence, and what a player collects shows in the shape of their bonus.
 export function spareOf(spec) {
-  const b = statsOf(spec), w = Math.sqrt(spec.height);
+  const b = statsOf(spec), w = Math.sqrt(H0(spec));
   let sum = 0, cubes = 0;
   for (let i = 0; i < 6; i++) { sum += b[i]; cubes += b[i] * b[i] * b[i]; }
   return b.map((v) => (cubes > 0 ? v * v * v / cubes * sum * w : 0));
@@ -108,7 +111,7 @@ function makeSpec(specOf, dex, scale, stars, titan) {
   if (!base) return null;
   const k = scale * starScale(stars);
   if (Math.abs(k - 1) < 0.005 && !titan) return base;
-  const out = Object.assign({}, base, { height: round2(base.height * k), base, _pw: 0 });
+  const out = Object.assign({}, base, { height: round2(base.height * k), height0: round2(H0(base) * k), base, _pw: 0 });
   if (titan) { out.titan = true; out.id = 'titan' + base.id; out.name = 'Titan ' + base.name; } else if (scale > 1.05) out.giant = true;
   if (stars) out.stars = stars;
   return out;
@@ -127,7 +130,7 @@ export function planArmy(army, { specOf, teamIndex = 0, limit = SQUAD } = {}) {
   for (const spec of army || []) {
     const b = baseOf(spec);
     if (!b || !b.dex) continue;
-    const k = kindOf(b.dex, round2(spec.height / b.height), !!spec.titan, 0);
+    const k = kindOf(b.dex, round2(H0(spec) / H0(b)), !!spec.titan, 0);
     k.plain++; k.brought++;
   }
   const before = (army || []).length, merges = [];
@@ -191,7 +194,7 @@ export function planArmy(army, { specOf, teamIndex = 0, limit = SQUAD } = {}) {
       roster.push({ spec: k.spec, stars: k.stars, boost, made: Math.round(f.made), value: value * boost, kind: k.key, ring, goal, raw: f.raw });
     }
   }
-  roster.sort((a, b) => b.value - a.value || a.spec.dex - b.spec.dex || b.spec.height - a.spec.height);
+  roster.sort((a, b) => b.value - a.value || a.spec.dex - b.spec.dex || H0(b.spec) - H0(a.spec));
   const after = roster.length;
   roster.length = Math.min(roster.length, limit);
   for (const r of roster) {                                     // what each fighter is made of, as it was brought: [{ spec, count }]
@@ -208,6 +211,6 @@ export function planArmy(army, { specOf, teamIndex = 0, limit = SQUAD } = {}) {
     spareList.push({ spec: k.spec, count, add: k.one, value: power(k.spec) }); spares += count;
     for (let i = 0; i < 6; i++) spare[i] += k.one[i] * count;
   }
-  spareList.sort((a, b) => a.value - b.value || a.spec.dex - b.spec.dex || a.spec.height - b.spec.height);
+  spareList.sort((a, b) => a.value - b.value || a.spec.dex - b.spec.dex || H0(a.spec) - H0(b.spec));
   return { roster, merges, before, after, bench: after - roster.length, spares, spareList, spare, bonus: teamBonus(spare) };
 }

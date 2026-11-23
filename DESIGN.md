@@ -489,6 +489,27 @@ Still to do if it is wanted: **things stuck to balls**. Each is still given a ne
 rolls) and sent to the card: with four full balls in view that is most of what is left. A batch per ball, in the
 ball's own frame, would only need sending when the ball picks something up.
 
+## Bigger critters, and things stuck to balls (23 November 2026)
+
+- **The size curve.** The heights as written run from 0.2 m to 8.8 m with most species between 1 and 2 m, so a ball of
+  4 m could roll up all but eight species and nothing was left to be too big. In the world each species is now drawn
+  bigger by where it ranks in height: the smallest as it was, the middle one half as big again (1.0 m to 1.45), the
+  top tenth nearly double, the biggest double (8.8 m to 17.6). 57 species need a ball over 4 m (it was 8), 24 one
+  over 6 m (4), 5 one over 9 m (2). `height` on a spec is the size in the world; `height0` is the height as written,
+  and that is still what a critter is worth when rolled up (`gk` on a thing), how strong it is and how big it stands
+  in the arena (`H0` in the arena modules: the fight is exactly as it was), and where on the map it lives. Titans are
+  the size they were (ten times the height as written).
+- **Growth is 4, not 3** (`GROW`). With fewer critters small enough to roll up in the middle of a round, the bot
+  that plays for testing (`tools/slow-machine/pace.js`) ended a round at 5.7 m on average where it had ended at 9.8;
+  at 4.5 it ended at 11.4. `?grow=N` tries another value. The bot's luck varies a good deal (3.4 m to 8.2 m in five
+  rounds), so this is set from a handful of rounds, not tuned finely.
+- **Things stuck to a ball** are drawn in batches of the ball's own, in the ball's frame (`drawHeld`, `fillHeld`):
+  filled when the ball picks something up or loses it (and every twentieth frame, for the plainer shapes and the
+  shadows), not every frame. Only the critters are in batches: the props on a ball are nearly all different shapes
+  (a batch each was 200 draw calls for one full ball: 605 in a frame late in a round), so they are written into one
+  mesh for the ball (`packHeld`), as the props on the map are for their cell. Late in a round, on two slow cores:
+  about 8.3 ms a frame and 250 draw calls before, 6.9 ms and 211 after.
+
 ## Drawing cost of the models (measured and trimmed 22 November 2026)
 
 `__game.bench(frames)` in the console runs frames back to back, waits for the graphics card after each and says what a frame
