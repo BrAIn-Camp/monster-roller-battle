@@ -350,7 +350,62 @@ Up to four players, one of them hosting; CPU teams take the empty seats. See REA
 
 ## Graphics quality (added 20 November 2026)
 
-`QUALITY` in `main.js` has four levels (resolution cap, shadows, draw distance). On "auto" the game starts at the top and steps down one level whenever it averages under 30 frames a second for four seconds of play; it never steps back up by itself, and remembers where it settled. The Graphics button (title screen and pause menu) cycles auto and the four levels.
+`QUALITY` in `main.js` has four levels. The Graphics button (title screen and pause menu) cycles auto and the four levels.
+
+| | high | medium | low | lowest |
+|---|---|---|---|---|
+| resolution (share of the screen's own, capped) | 2 | 1 | 1 | 0.7 |
+| shadows | yes | yes | no | no |
+| smooth edges (4x anti-aliasing) | yes | yes | no | no |
+| draw distance | 1 | 0.9 | 0.8 | 0.6 |
+| grass distance | 1 | 0.8 | 0.5 | tall grass only, close by |
+| plainer shapes for things smaller than (radius over distance) | 0.03 | 0.045 | 0.07 | 0.2 |
+| critters with the model proper (flames, gas) | 16 | 12 | 8 | 3 |
+| critters breathe | yes | yes | yes | no |
+
+- **Auto** starts at the top and steps down when the game cannot keep up; it never steps back up by itself, and remembers
+  where it settled. Every two seconds it looks at the usual frame (the middle one of the two seconds, so a hitch while
+  something loads does not count): under 27 a second for two spells running, down a level; under 20, down a level at
+  once; under 12, down two at once. (It was: an average under 30 for four seconds, one level, so a machine far out of
+  its depth took twelve seconds of a five-minute round to reach the bottom, and a screen that refreshes 30 times a
+  second counted as slow.) Behind the menu only the two urgent rules apply. A browser drawing in software, with no
+  graphics card, starts at the bottom.
+- **Anti-aliasing is fixed when the page loads** (it belongs to the canvas), so a change of level changes it the next
+  time the game loads; the Graphics button says so.
+- The renderer asks for the strong graphics card on a laptop that has two.
+
+## For slower machines (22 November 2026)
+
+None of this could be measured on a slow machine: the development machine has a GeForce RTX 5060 Ti, which is not short
+of triangles or pixels, and its frame time hardly moves with any of it. What is known is how much less there is to
+draw. Start of a round, 1280x720:
+
+| | before | high | lowest |
+|---|---|---|---|
+| triangles a frame | 1,440,000 | 540,000 | 365,000 |
+| draws | 532 | 585 | 416 |
+| the rules, per frame | 0.9 ms | 0.65 ms | 0.65 ms |
+
+- **The ground is in chunks** (`buildTerrainMesh`): eight each way, each its own mesh, so the ground out of view is
+  not drawn. It was one mesh of 493,000 triangles drawn whole. The grass is a mesh per chunk too and is only shown
+  near by (`showGrass`): it was 104,000 triangles of tufts drawn from any distance, the menu's included.
+- **Plainer shapes far away** (`farShape`). A thing smaller on screen than its level's limit is drawn as a plainer
+  shape. A generated thing is put together again from parts with fewer faces (`GL`: a ball of 80 triangles for one of
+  520); that is where the triangles were: 3,900 generated things at 640 triangles apiece, a 7 cm mushroom 1,864 of
+  them. A critter's model is thinned (`thinGeometry`: corners gathered into a grid of cells, half the triangles),
+  stands still, and has to be about a third the size again before it is used (`CRITTER_LOD`): close to, thinning a
+  model shows. The plainer shapes are made a few a frame, the first time they are wanted.
+- **The depth buffer is the ordinary kind.** It was logarithmic, which makes each pixel's depth the fragment shader's
+  business and stops the card skipping the pixels hidden behind others. An ordinary one is fine enough here because
+  the fog hides the distance: at the fog's far end it resolves about 15 to 25 cm, and a twentieth of that half way
+  there. The camera's near plane is a twentieth of the ball (as it was) and 5 m above the menu. Looked at from the
+  shore with a 60 cm ball, and over the island with 14 m and 60 m ones: no flicker seen in still frames. `?depth=log`
+  puts the old one back, for comparing.
+- **Rules.** A rival's ball looks through the things near it, a list remade every sixth frame, not through everything
+  on the map every frame (`thingsNear`). A critter between about 25 and 65 m from the nearest ball has its rules run
+  every third frame, for three frames' worth.
+- **Not tried on a slow machine**, so the levels' numbers are guesses. The readout (F3) on one would say which of the
+  rules, the batches and the drawing is the dear part there.
 
 ## Drawing cost of the models (measured and trimmed 22 November 2026)
 
@@ -399,7 +454,7 @@ costs and where it went; it works in a hidden tab. Measured with it at 1920x1080
   A laptop with built-in graphics will be several times slower on the main thread and far slower on the card, and the
   split will differ: there the triangles (1.4 million a frame at the start of a round: terrain 493,000 drawn whole,
   items 630,000, critters 180,000, grass tufts 104,000), the 4x anti-aliasing and the logarithmic depth buffer are
-  likely to matter, none of which shows here.
+  likely to matter, none of which shows here. (All since dealt with: see "For slower machines" above.)
 - **Tried and dropped:** leaving out the stuck things hidden behind their own ball (about a third of them, 300,000
   triangles). No measurable gain: the card is not short of triangles.
 
@@ -412,7 +467,7 @@ Measured in single player with a 3 m ball: 3,981 draw calls and 5.0 million tria
 - A thing is drawn out to 130 times its size (about half a degree on screen), not 300.
 - Only things near the ball and at least 7% of its width cast shadows; the shadow map is 1024 on the medium level.
 - Instancing (`drawWorld` in `main.js`): the things lying about the map keep their own meshes for the game to move, but those are not drawn. Each frame, every thing that is switched on and on screen has its matrix copied into a batch, one `InstancedMesh` per shape and material (and a second, shadow-casting batch for the few near the ball). A thing stuck on a ball was drawn the ordinary way then (it goes through the batches now: see above). Every item is now a single mesh (a model is baked to one normalised geometry). With a 3 m ball: 740 draw calls and 1.9 million triangles a frame.
-- Not done yet: dropping the logarithmic depth buffer, splitting the terrain (493,000 triangles, drawn whole) into chunks. The terrain has to stay double-sided: its cliff faces are not wound consistently.
+- Done since (22 November 2026): the logarithmic depth buffer is gone and the terrain is in chunks. The terrain has to stay double-sided: its cliff faces are not wound consistently.
 - Reliable messages are sent in packets of about a kilobyte and only as fast as the link takes them (`netFlush`). Sent as one lump per frame, a wave of critters, the refill or an event's effects made a single very large message, which on a slow link held up everything else, the ball positions included. The refill is now sent as numbers into the starting layout (`rf`), and each event-effect shape is described once per round.
 - PeerJS refuses any JSON message of 16,300 bytes or more. `room.send` in `net.js` now splits a long message into numbered pieces that are joined at the other end, and a connection error no longer counts as the player leaving (only the connection closing does). Before this, the armies sent at the end of a full round were too long: the host got an error, dropped the player, and their screen stayed on TIME UP. Armies are also sent as runs of the same critter, which keeps that message to a few kilobytes.
 

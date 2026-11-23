@@ -106,6 +106,20 @@ const G = {
   hemi: new THREE.SphereGeometry(1, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2),
   torus: new THREE.TorusGeometry(0.8, 0.2, 8, 20).rotateX(Math.PI / 2),
 };
+// The same parts with fewer faces: what a far shape is put together from (see farShape). A ball of 80 triangles,
+// not 520, is the same ball when it is a dozen pixels across.
+const GL = {
+  sph: new THREE.SphereGeometry(1, 8, 6),
+  box: G.box,
+  cyl: new THREE.CylinderGeometry(1, 1, 1, 7),
+  taper: new THREE.CylinderGeometry(1, 0.7, 1, 7),
+  cone: new THREE.ConeGeometry(1, 1, 6),
+  pyr: G.pyr,
+  rock: G.rock,
+  hemi: new THREE.SphereGeometry(1, 8, 3, 0, Math.PI * 2, 0, Math.PI / 2),
+  torus: new THREE.TorusGeometry(0.8, 0.2, 5, 9).rotateX(Math.PI / 2),
+};
+let KIT = G;                          // which of the two P() builds from
 const mats = new Map();
 function mat(c) {
   let m = mats.get(c);
@@ -113,7 +127,7 @@ function mat(c) {
   return m;
 }
 function P(g, geo, color, s, p, r) {
-  const m = new THREE.Mesh(G[geo], mat(color));
+  const m = new THREE.Mesh(KIT[geo], mat(color));
   m.scale.set(s[0], s[1], s[2]);
   m.position.set(p[0], p[1], p[2]);
   if (r) m.rotation.set(r[0], r[1], r[2]);
@@ -212,12 +226,14 @@ function loadModel(path) {
 }
 // A generated shape is drawn once per colour and merged into a single mesh, so each thing on the map is one draw call.
 const itemMat = new THREE.MeshLambertMaterial({ vertexColors: true }), itemGeo = new Map();
-function shapeGeometry(spec, color) {
-  const key = spec.id + '|' + color;
+function shapeGeometry(spec, color, far = false) {      // far: the same shape from the plainer parts
+  const key = spec.id + '|' + color + (far ? '|far' : '');
   let geo = itemGeo.get(key);
   if (!geo) {
     const g = new THREE.Group(), parts = [];
+    KIT = far ? GL : G;
     try { (SHAPES[spec.shape] || SHAPES.crate)(g, color, P); } catch (e) { console.warn('shape failed for', spec.id, e); SHAPES.crate(g, color, P); }
+    KIT = G;
     g.updateMatrixWorld(true);
     g.traverse((n) => {
       if (!n.isMesh) return;
@@ -230,9 +246,70 @@ function shapeGeometry(spec, color) {
       parts.push(pg);
     });
     geo = (parts.length && mergeGeometries(parts)) || G.box;
+    if (!far && geo !== G.box) geo.userData.far = () => { const f = shapeGeometry(spec, color, true); return triangles(f) < triangles(geo) * 0.8 ? f : null; };
     itemGeo.set(key, geo);
   }
   return geo;
+}
+const triangles = (geo) => (geo.index ? geo.index.count : geo.attributes.position.count) / 3;
+
+// ---------- simpler shapes for things that are small on screen ----------
+// Most of what is in view is far away and a few pixels tall, and was drawn with every triangle it has up close.
+// A shape can have a plainer one to stand in for it then: geo.userData.far, at first a function that makes it. A
+// generated thing is put together again from the plainer parts (GL); a critter's model is thinned (thinGeometry) and
+// stands still. farShape hands it over once it is made (a few are made each frame: makeFarShapes), or null.
+const farQueue = [];
+const CRITTER_LOD = 0.35;             // a critter has to be this much smaller again: thinning shows on a model sooner than plainer parts do on a prop
+function farShape(geo, material) {
+  const u = geo.userData, f = u.far;
+  if (!f) return null;
+  if (typeof f === 'function') { u.far = null; farQueue.push([geo, f]); return null; }
+  return f.userData.mat && material !== u.still.mat ? null : f;      // (a gold critter keeps its full shape: the plain one is in the model's own colours)
+}
+function makeFarShapes(ms) {
+  const t0 = performance.now();
+  while (farQueue.length && performance.now() - t0 < ms) { const [geo, make] = farQueue.shift(); geo.userData.far = make() || null; }
+}
+// The same shape with fewer triangles. Its corners are gathered into a grid of cells; every corner in a cell becomes
+// the one of them furthest from the middle (which keeps the outline), and the triangles that collapse to nothing are
+// dropped. The grid is the finest that leaves no more than `keep` of the triangles. The result draws from the very
+// same corners (it shares the attributes) through an index of its own, so it costs no memory to speak of.
+function thinGeometry(geo, keep, least) {
+  const pos = geo.attributes.position, n = pos.count, idx = geo.index ? geo.index.array : null, nt = (idx ? idx.length : n) / 3;
+  if (nt < least) return null;
+  if (!geo.boundingBox) geo.computeBoundingBox();
+  const lo = geo.boundingBox.min, hi = geo.boundingBox.max, big = Math.max(hi.x - lo.x, hi.y - lo.y, hi.z - lo.z) || 1;
+  const mx = (lo.x + hi.x) / 2, my = (lo.y + hi.y) / 2, mz = (lo.z + hi.z) / 2;
+  const cellOf = new Float64Array(n), rep = new Int32Array(n);
+  const thin = (cells) => {
+    const k = cells / big, K = cells + 2, best = new Map(), out = new Map();
+    for (let v = 0; v < n; v++) {
+      const x = pos.getX(v), y = pos.getY(v), z = pos.getZ(v);
+      const cell = Math.floor((x - lo.x) * k) + K * (Math.floor((y - lo.y) * k) + K * Math.floor((z - lo.z) * k));
+      const far = (x - mx) ** 2 + (y - my) ** 2 + (z - mz) ** 2;
+      cellOf[v] = cell;
+      if (!(out.get(cell) >= far)) { out.set(cell, far); best.set(cell, v); }
+    }
+    for (let v = 0; v < n; v++) rep[v] = best.get(cellOf[v]);
+    const tris = [], seen = new Set();
+    for (let t = 0; t < nt; t++) {
+      let a = rep[idx ? idx[t * 3] : t * 3], b = rep[idx ? idx[t * 3 + 1] : t * 3 + 1], c = rep[idx ? idx[t * 3 + 2] : t * 3 + 2];
+      if (a === b || b === c || a === c) continue;
+      if (b < a && b < c) { const q = a; a = b; b = c; c = q; } else if (c < a && c < b) { const q = a; a = c; c = b; b = q; }      // (turned to start at its lowest corner, facing the same way)
+      const key = (a * n + b) * n + c;
+      if (seen.has(key)) continue;
+      seen.add(key); tris.push(a, b, c);
+    }
+    return tris;
+  };
+  let a = 2, b = 40, got = null;
+  while (a <= b) { const mid = (a + b) >> 1, tris = thin(mid); if (tris.length / 3 <= nt * keep) { got = tris; a = mid + 1; } else b = mid - 1; }
+  if (!got || got.length < 36) return null;
+  const far = new THREE.BufferGeometry();
+  for (const name of Object.keys(geo.attributes)) far.setAttribute(name, geo.attributes[name]);
+  far.setIndex(new THREE.BufferAttribute(n > 65535 ? new Uint32Array(got) : new Uint16Array(got), 1));
+  far.boundingBox = geo.boundingBox; far.boundingSphere = geo.boundingSphere;
+  return far;
 }
 // A thing is always one mesh in the shared item material: its generated shape at first, its model's once that has loaded.
 function buildItem(spec) {
@@ -280,16 +357,48 @@ function askModel(m) {
     // breathes, or holds still for the ones stuck to a ball. See drawWorld.)
     m.morphTargetInfluences = s.rest;
     if (m.material !== goldMat) m.material = s.mat;
-    if (S.state !== 'menu' && S.state !== 'dex') LOCAL.wake(s);
+    // Its far shape: thinned, standing still, and in a copy of the material (one material drawing both with the
+    // breathing and without it in a frame would have its program looked up afresh every time it changed over).
+    if (!('far' in s.geo.userData)) s.geo.userData.far = () => { const f = thinGeometry(s.geo, 0.5, 150); if (f) f.userData.mat = s.mat.clone(); return f; };
+    if (S.state !== 'menu' && S.state !== 'dex' && !QUAL.still) LOCAL.wake(s);
   });
 }
 const teamMats = TEAMS.map((tm) => new THREE.MeshLambertMaterial({ vertexColors: true, color: new THREE.Color(tm.hex).lerp(new THREE.Color(0xffffff), 0.35), emissive: tm.hex, emissiveIntensity: 0.22 }));
 // (a model keeps its own colours whoever has it; a generated critter is tinted with its team's)
 function setTeamLook(o, team) { if (o.kind === 'creature') o.group.material = o.group.userData.om || (team === null ? critterMaterial : teamMats[team]); }
 
+// ---------- save data ----------
+const SAVE_KEY = 'critter-roller-save-v2';
+let save = { dex: {}, best: {}, muted: false, difficulty: 'normal', gfx: 'auto', gfxAuto: 0 };      // gfx: 'auto' or a quality level's name; gfxAuto: the level auto last settled on
+try { save = Object.assign(save, JSON.parse(localStorage.getItem(SAVE_KEY) || '{}')); } catch (e) { /* storage unavailable */ }
+function persist() { try { localStorage.setItem(SAVE_KEY, JSON.stringify(save)); } catch (e) { /* storage unavailable */ } }
+
 // ---------- renderer, lights, sky ----------
+// Graphics quality. On "auto" the game starts at the top and steps down whenever it cannot keep up (watchFps; it never
+// steps back up by itself, so it does not flip-flop).
+//   res      share of the screen's own resolution (capped)
+//   view     how far away things are still drawn, as a share of the usual distance
+//   aa       smooth edges (4x anti-aliasing). Fixed when the page loads: a change takes effect the next time it does
+//   grass    how far away the grass is drawn, as a share of the usual distance (0: none)
+//   lod      a thing smaller on screen than this (its radius over its distance) is drawn as its simpler shape
+//   actors   how many critters at once get the model proper, for their flames and gas (critters/local-mode.js)
+//   still    the critters do not breathe
+const QUALITY = [
+  { name: 'high',   res: 2,   shadows: true,  view: 1,   map: 2048, aa: true,  grass: 1,   lod: 0.03,  actors: 16 },
+  { name: 'medium', res: 1,   shadows: true,  view: 0.9, map: 1024, aa: true,  grass: 0.8, lod: 0.045, actors: 12 },
+  { name: 'low',    res: 1,   shadows: false, view: 0.8,            aa: false, grass: 0.5, lod: 0.07,  actors: 8 },
+  { name: 'lowest', res: 0.7, shadows: false, view: 0.6,            aa: false, grass: 0,   lod: 0.2,   actors: 3, still: true },
+];
+const savedQuality = () => { const k = QUALITY.findIndex((q) => q.name === save.gfx); return k >= 0 ? k : clamp(save.gfxAuto | 0, 0, QUALITY.length - 1); };
+const AA = QUALITY[savedQuality()].aa;
+// The depth buffer is the ordinary kind. (It was logarithmic, which made every pixel's depth the fragment shader's
+// business and so stopped the graphics card from skipping the pixels hidden behind others. ?depth=log puts it back.)
+const LOG_DEPTH = new URLSearchParams(location.search).get('depth') === 'log';
 const canvas = $('c');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, logarithmicDepthBuffer: true });
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: AA, logarithmicDepthBuffer: LOG_DEPTH, powerPreference: 'high-performance' });   // (a laptop with two graphics cards should use the strong one)
+// A machine with no graphics card at all (the browser is drawing in software) starts at the bottom.
+const GPU_NAME = (() => { try { const gl = renderer.getContext(), e = gl.getExtension('WEBGL_debug_renderer_info'); return e ? String(gl.getParameter(e.UNMASKED_RENDERER_WEBGL)) : ''; } catch (e) { return ''; } })();
+const SOFTWARE_GPU = /swiftshader|llvmpipe|softpipe|software|basic render/i.test(GPU_NAME);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 const SKY = 0x9ad8f5;
@@ -304,20 +413,12 @@ sun.shadow.mapSize.set(2048, 2048);
 sun.shadow.bias = -0.0004;
 scene.add(sun, sun.target);
 const SUN_DIR = new V3(0.45, 1, 0.35).normalize();
-// Graphics quality. On "auto" the game starts at the top and steps down whenever it cannot hold 30 frames a second
-// (it never steps back up by itself, so it does not flip-flop). res = share of the screen's own resolution (capped);
-// view = how far away things are still drawn, as a share of the usual distance.
-const QUALITY = [
-  { name: 'high',   res: 2,    shadows: true,  view: 1, map: 2048 },
-  { name: 'medium', res: 1,    shadows: true,  view: 0.9, map: 1024 },
-  { name: 'low',    res: 1,    shadows: false, view: 0.8 },
-  { name: 'lowest', res: 0.7,  shadows: false, view: 0.6 },
-];
 let QUAL = QUALITY[0], qualLevel = 0;
 function setQuality(level) {
   qualLevel = clamp(level, 0, QUALITY.length - 1); QUAL = QUALITY[qualLevel];
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, QUAL.res));
   sun.castShadow = QUAL.shadows;
+  if (S.models) S.models(QUAL.actors);
   if (QUAL.map && sun.shadow.mapSize.x !== QUAL.map) { sun.shadow.mapSize.set(QUAL.map, QUAL.map); if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; } }
   if (typeof resize === 'function') resize();
 }
@@ -350,9 +451,17 @@ const { NX, NZ, tH, tC, tR, tW } = T;
 let iceOn = false;                    // Cold Snap: the sea has a frozen surface that everything stands on
 const groundAt = (x, z) => (iceOn && tW[T.index(x, z)] === 2 ? SEA_LEVEL + 0.04 : T.groundAt(x, z));
 let seaMesh = null;
+const terrainChunks = [];             // { x, y, z, r, blades, tufts }: where each chunk of the ground is, and its grass
 (function buildTerrainMesh() {
-  // One mesh: a top face per tile, plus a cliff face wherever a tile's edge stands above its neighbour's.
-  const pos = [], col = [], c = new THREE.Color(), cliff = new THREE.Color();
+  // A top face per tile, plus a cliff face wherever a tile's edge stands above its neighbour's. The map is cut into
+  // eight chunks each way, every chunk its own mesh, so that the ground out of view is not drawn (it was one mesh of
+  // half a million triangles, drawn whole every frame).
+  const CH = Math.ceil(Math.max(NX, NZ) / 8), CX = Math.ceil(NX / CH), CZ = Math.ceil(NZ / CH);
+  const parts = [];
+  for (let k = 0; k < CX * CZ; k++) parts.push({ pos: [], col: [], blades: [], tufts: [] });
+  const partAt = (x, z) => parts[clamp(Math.floor((z - BOUNDS.z1) / CH), 0, CZ - 1) * CX + clamp(Math.floor((x - BOUNDS.x1) / CH), 0, CX - 1)];
+  let pos, col;
+  const c = new THREE.Color(), cliff = new THREE.Color();
   const hOf = (i, j, x, z) => { const k = j * NX + i; return tR[k] ? T.rampH(T.ramps[tR[k]], x, z) : tH[k]; };
   const quad = (ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz, cc) => {
     pos.push(ax, ay, az, bx, by, bz, cx, cy, cz, ax, ay, az, cx, cy, cz, dx, dy, dz);
@@ -367,19 +476,14 @@ let seaMesh = null;
     }
   };
   for (let j = 0; j < NZ; j++) for (let i = 0; i < NX; i++) {
+    const part = parts[Math.floor(j / CH) * CX + Math.floor(i / CH)];
+    pos = part.pos; col = part.col;
     const x0 = BOUNDS.x1 + i, z0 = BOUNDS.z1 + j, x1 = x0 + 1, z1 = z0 + 1;
     c.setHex(tC[j * NX + i]).multiplyScalar(0.9 + 0.2 * vnoise(x0 / 7, z0 / 7) + ((i + j) & 1 ? 0.012 : -0.012));
     quad(x0, hOf(i, j, x0, z0), z0, x0, hOf(i, j, x0, z1), z1, x1, hOf(i, j, x1, z1), z1, x1, hOf(i, j, x1, z0), z0, c);
     side(i, j, i + 1, j, x1, z0, x1, z1); side(i, j, i - 1, j, x0, z0, x0, z1);
     side(i, j, i, j + 1, x0, z1, x1, z1); side(i, j, i, j - 1, x0, z0, x1, z0);
   }
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
-  geo.computeVertexNormals();
-  const terrain = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }));
-  terrain.receiveShadow = true;
-  scene.add(terrain);
 
   // the sea: a see-through sheet at sea level, with the open ocean floor beyond the map well below it
   const sea = new THREE.Mesh(new THREE.PlaneGeometry(5000, 5000), new THREE.MeshLambertMaterial({ color: 0x3f9be0, transparent: true, opacity: 0.72, depthWrite: false }));
@@ -387,26 +491,54 @@ let seaMesh = null;
   const floor = new THREE.Mesh(new THREE.PlaneGeometry(5000, 5000), new THREE.MeshLambertMaterial({ color: 0x2f6fb0 }));
   floor.rotation.x = -Math.PI / 2; floor.position.y = -3; scene.add(floor);
 
-  // tall-grass blades and short tufts, as two instanced meshes
+  // tall-grass blades and short tufts: instanced, a mesh of each per chunk of ground (see showGrass)
   const d = new THREE.Object3D();
   const spots = [];
   for (const [x1, z1, x2, z2] of T.grassRects) {
     const n = Math.min(700, Math.round((x2 - x1) * (z2 - z1) * 0.9));
     for (let i = 0; i < n; i++) spots.push([x1 + rand() * (x2 - x1), z1 + rand() * (z2 - z1)]);
   }
-  const blades = new THREE.InstancedMesh(G.cone, mat(0x4c9e4a), spots.length);
-  spots.forEach(([x, z], i) => { const h = 0.4 + rand() * 0.3; d.position.set(x, groundAt(x, z) + h / 2, z); d.scale.set(0.13, h, 0.13); d.updateMatrix(); blades.setMatrixAt(i, d.matrix); });
-  scene.add(blades);
+  for (const [x, z] of spots) { const h = 0.4 + rand() * 0.3; d.position.set(x, groundAt(x, z) + h / 2, z); d.scale.set(0.13, h, 0.13); d.updateMatrix(); partAt(x, z).blades.push(...d.matrix.elements); }
   const tuftSpots = [];
   for (let n = 0; n < 14000; n++) {
     const x = BOUNDS.x1 + 5 + rand() * (NX - 10), z = BOUNDS.z1 + 5 + rand() * (NZ - 10);
     const k = T.index(x, z), cc = tC[k], cr = cc >> 16 & 255, cg = cc >> 8 & 255, cb = cc & 255;
     if (!tR[k] && !tW[k] && cg > cr && cg > cb) tuftSpots.push([x, z]);
   }
-  const tufts = new THREE.InstancedMesh(G.cone, mat(0x58a850), tuftSpots.length);
-  tuftSpots.forEach(([x, z], i) => { const h = 0.12 + rand() * 0.2; d.position.set(x, groundAt(x, z) + h / 2, z); d.scale.set(0.07, h, 0.07); d.updateMatrix(); tufts.setMatrixAt(i, d.matrix); });
-  scene.add(tufts);
+  for (const [x, z] of tuftSpots) { const h = 0.12 + rand() * 0.2; d.position.set(x, groundAt(x, z) + h / 2, z); d.scale.set(0.07, h, 0.07); d.updateMatrix(); partAt(x, z).tufts.push(...d.matrix.elements); }
+
+  const ground = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
+  const grass = (list, material) => {
+    if (!list.length) return null;
+    const m = new THREE.InstancedMesh(G.cone, material, list.length / 16);
+    m.instanceMatrix.array.set(list); m.matrixAutoUpdate = false; m.computeBoundingSphere();
+    scene.add(m);
+    return m;
+  };
+  for (const part of parts) {
+    if (!part.pos.length) continue;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(part.pos, 3));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(part.col, 3));
+    geo.computeVertexNormals(); geo.computeBoundingSphere();
+    const m = new THREE.Mesh(geo, ground);
+    m.receiveShadow = true; m.matrixAutoUpdate = false;
+    scene.add(m);
+    const bs = geo.boundingSphere;
+    terrainChunks.push({ x: bs.center.x, y: bs.center.y, z: bs.center.z, r: bs.radius, blades: grass(part.blades, mat(0x4c9e4a)), tufts: grass(part.tufts, mat(0x58a850)) });
+  }
 })();
+// Grass is only worth drawing near by: a tuft is a few pixels tall from 100 m. Each chunk's grass is shown while the
+// camera is within range of the chunk (QUAL.grass scales the range; the lowest setting has no tufts, and keeps the tall
+// grass, which marks where critters hide, close by only).
+function showGrass() {
+  const k = QUAL.grass, c = camera.position;
+  for (const ch of terrainChunks) {
+    const dist = Math.hypot(ch.x - c.x, ch.y - c.y, ch.z - c.z) - ch.r;
+    if (ch.tufts) ch.tufts.visible = dist < 140 * k;
+    if (ch.blades) ch.blades.visible = dist < 300 * Math.max(k, 0.35);
+  }
+}
 
 const worldGroup = new THREE.Group();
 scene.add(worldGroup);
@@ -458,7 +590,7 @@ function growBatch(b) {
   m.onAfterRender = () => { b.lo = -1; b.hi = 0; };
   batchGroup.add(m); b.mesh = m; b.cap = cap; b.arr = m.instanceMatrix.array; b.from = 0; b.lo = -1; b.hi = 0;
 }
-const DRAW = { things: 0, batches: 0, sent: 0, held: 0, loose: false, sendAll: false };            // last frame's count, for the readout
+const DRAW = { things: 0, batches: 0, sent: 0, held: 0, far: 0, loose: false, sendAll: false };            // last frame's count, for the readout
 // The things stuck to one ball. Where each is in the world is the ball's place times its own on the ball.
 const heldM = new THREE.Matrix4(), heldW = new THREE.Matrix4();
 function drawHeld(bg, list, inGame, near, pxH) {
@@ -476,10 +608,13 @@ function drawHeld(bg, list, inGame, near, pxH) {
     heldW.multiplyMatrices(heldM, g.matrix);
     viewSphere.center.copy(bs.center).applyMatrix4(heldW); viewSphere.radius = bs.radius * g.scale.x * (casts ? 2.6 : 1.05);
     if (!viewFrustum.intersectsSphere(viewSphere)) continue;
-    if (!inGame && viewSphere.radius * pxH < 1.5 * camera.position.distanceTo(viewSphere.center)) continue;
-    const held = !!geo.userData.still;
+    const dist = camera.position.distanceTo(viewSphere.center);
+    if (!inGame && viewSphere.radius * pxH < 1.5 * dist) continue;
+    let dg = geo, dm = g.material;
+    if (viewSphere.radius < QUAL.lod * dist * (geo.userData.still ? CRITTER_LOD : 1) && !casts) { const f = farShape(geo, dm); if (f) { dg = f; dm = f.userData.mat || dm; DRAW.far++; } }
+    const held = !!dg.userData.still;
     let b = casts ? o.bS : o.bN;
-    if (!b || b.geo !== geo || b.material !== g.material || b.held !== held) { b = batchFor(geo, g.material, casts, held); if (casts) o.bS = b; else o.bN = b; }
+    if (!b || b.geo !== dg || b.material !== dm || b.held !== held) { b = batchFor(dg, dm, casts, held); if (casts) o.bS = b; else o.bN = b; }
     batchPut(b, o, heldW.elements, -1 - (o.mv = (o.mv | 0) + 1));      // (a ball rolls: a new matrix every frame)
     n++;
   }
@@ -487,8 +622,10 @@ function drawHeld(bg, list, inGame, near, pxH) {
 }
 function drawWorld() {
   camera.updateMatrixWorld();
+  showGrass();
   viewFrustum.setFromProjectionMatrix(viewM.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
   for (const b of batches.values()) { b.n = 0; b.from = -1; }
+  DRAW.far = 0;
   const inGame = S.state !== 'menu' && S.state !== 'dex';      // behind the menu everything is shown, from far above
   let things = 0;
   const pxH = renderer.domElement.height || 1080;
@@ -506,13 +643,17 @@ function drawWorld() {
     // shadow-caster counts as bigger, since its shadow may be in view when it is not.
     let bs = geo.boundingSphere;
     if (!bs) { geo.computeBoundingSphere(); bs = geo.boundingSphere; }
-    viewSphere.center.set(p.x, p.y + bs.center.y * sc, p.z); viewSphere.radius = (bs.radius + Math.hypot(bs.center.x, bs.center.z)) * sc * (casts ? 2.6 : 1.05);
+    const rad = (bs.radius + Math.hypot(bs.center.x, bs.center.z)) * sc;
+    viewSphere.center.set(p.x, p.y + bs.center.y * sc, p.z); viewSphere.radius = rad * (casts ? 2.6 : 1.05);
     if (!viewFrustum.intersectsSphere(viewSphere)) continue;
+    const dist = camera.position.distanceTo(p);
     // (from high above the menu the whole map is in view: leave out what would be a speck, under about three pixels)
-    if (!inGame && viewSphere.radius * pxH < 1.5 * camera.position.distanceTo(p)) continue;
+    if (!inGame && viewSphere.radius * pxH < 1.5 * dist) continue;
+    let dg = geo, dm = g.material;                 // what to draw it as: its plainer shape when it is small on screen
+    if (rad < QUAL.lod * dist * (geo.userData.still ? CRITTER_LOD : 1)) { const f = farShape(geo, dm); if (f) { dg = f; dm = f.userData.mat || dm; DRAW.far++; } }
     if (o.kind === 'creature' || o.fly || o.mx !== p.x || o.my !== p.y || o.mz !== p.z || o.ms !== sc) { g.updateMatrix(); o.mx = p.x; o.my = p.y; o.mz = p.z; o.ms = sc; o.mv = (o.mv | 0) + 1; }    // (things that have not moved keep their matrix)
     let b = casts ? o.bS : o.bN;
-    if (!b || b.geo !== geo || b.material !== g.material || b.held) { b = batchFor(geo, g.material, casts); if (casts) o.bS = b; else o.bN = b; }
+    if (!b || b.geo !== dg || b.material !== dm || b.held) { b = batchFor(dg, dm, casts); if (casts) o.bS = b; else o.bN = b; }
     batchPut(b, o, g.matrix.elements, o.mv | 0);
     things++;
   }
@@ -538,9 +679,10 @@ function drawWorld() {
       if (a.clearUpdateRanges) { a.clearUpdateRanges(); a.addUpdateRange(b.lo, b.hi - b.lo); }
       a.needsUpdate = true;
     }
-    if (b.n && inGame && !b.held && b.geo.userData.still) LOCAL.wake(b.geo.userData.still);      // (a model on show in a round starts to breathe)
+    if (b.n && inGame && !b.held && b.geo.userData.still && !QUAL.still) LOCAL.wake(b.geo.userData.still);      // (a model on show, close to, in a round starts to breathe)
   }
   DRAW.things = things; DRAW.batches = used; DRAW.sent = sent;
+  makeFarShapes(1);
 }
 
 // ---------- the balls ----------
@@ -600,11 +742,7 @@ let trainer = buildTrainer(TEAMS[0].hex);
 trainer.scale.setScalar(trainerHeight(START_D));
 scene.add(trainer);
 
-// ---------- save data ----------
-const SAVE_KEY = 'critter-roller-save-v2';
-let save = { dex: {}, best: {}, muted: false, difficulty: 'normal', gfx: 'auto', gfxAuto: 0 };      // gfx: 'auto' or a quality level's name; gfxAuto: the level auto last settled on
-try { save = Object.assign(save, JSON.parse(localStorage.getItem(SAVE_KEY) || '{}')); } catch (e) { /* storage unavailable */ }
-function persist() { try { localStorage.setItem(SAVE_KEY, JSON.stringify(save)); } catch (e) { /* storage unavailable */ } }
+// (the save data is read further up, before the renderer is made: see SAVE_KEY)
 
 // ---------- audio (all synthesised) ----------
 let ac = null, master = null;
@@ -1540,11 +1678,23 @@ function rivalKnock(R, nx, nz, lose) {            // things fly off in direction
 }
 // Roll up, or be stopped by, whatever a rival's ball touches. (Another player's ball rolls things up on its own machine
 // and asks the host, see `claim`; here it only bumps things.)
+// What a rival's ball could touch in the next few frames: the things within a few metres of it, found afresh every
+// sixth frame (the three of them each going through everything on the map every frame was half the cost of the rules).
+function thingsNear(R) {
+  R.nearN = (R.nearN === undefined ? R.team * 2 : R.nearN) + 1;
+  if (R.near && R.nearN % 6) return R.near;
+  const list = R.near || (R.near = []), reach = R.d / 2 + 3 + (Math.abs(R.v || 0) + Math.hypot(R.rvx || 0, R.rvz || 0) + 8) * 0.35;
+  list.length = 0;
+  for (let i = S.objects.length - 1; i >= 0; i--) {
+    const o = S.objects[i], p = o.group.position, far = reach + o.rad;
+    if (Math.abs(p.x - R.x) < far && Math.abs(p.z - R.z) < far) list.push(o);
+  }
+  return list;
+}
 function rivalContacts(R) {
   const r = R.d / 2;
-  for (let i = S.objects.length - 1; i >= 0; i--) {
-    const o = S.objects[i];
-    if (o.fly) continue;
+  for (const o of thingsNear(R)) {
+    if (o.fly || o.on || o.gone) continue;       // (in the air, or rolled up or taken away since the list was made)
     const p = o.group.position, ox = p.x - R.x, oz = p.z - R.z, dist = Math.hypot(ox, oz), reach = R.d / 2 + o.rad;
     if (dist >= reach || R.y - r > p.y + o.size || R.y + r < p.y) continue;
     if (!o.noPick && o.size <= R.d * pickRatio(R)) { if (o.cool <= 0 && !R.remote) rivalAttach(R, o); continue; }
@@ -2628,11 +2778,12 @@ function dropToMenu(msg) { stopBattle(); $('count').className = ''; toMenu(); me
 function leaveRoom(msg) { const room = NET.room; NET.room = null; if (room) room.close(); dropToMenu(msg); }
 S.net = NET; S.lob = LOB; S.netClaim = claim;      // debug hooks
 // (gfx.loose(true) draws the things stuck to balls one by one, as they were before they went through the batches)
-S.gfx = { renderer, scene, camera, worldGroup, sun, setQuality, drawWorld, batches, DRAW, loose(on = true) { DRAW.loose = !!on; if (on) camera.layers.enable(THING_LAYER); else camera.layers.disable(THING_LAYER); return DRAW.loose; } };      // debug hooks for measuring drawing cost
+S.gfx = { renderer, scene, camera, worldGroup, sun, setQuality, drawWorld, batches, DRAW, QUALITY, terrainChunks, get watchFps() { return watchFps; }, get FPS() { return FPS; }, get level() { return qualLevel; }, loose(on = true) { DRAW.loose = !!on; if (on) camera.layers.enable(THING_LAYER); else camera.layers.disable(THING_LAYER); return DRAW.loose; } };      // debug hooks for measuring drawing cost
 
 // ---------- main update ----------
 const rollAxis = new V3();
 function update(dt) {
+  S.tickN = (S.tickN | 0) + 1;
   const frozen = S.state !== 'play' && S.state !== 'sim';      // the fly-over and the countdown: everything stands still
   S.time += dt;
   S.hitCool = Math.max(0, S.hitCool - dt); S.ghostT = Math.max(0, (S.ghostT || 0) - dt);
@@ -2746,7 +2897,9 @@ function update(dt) {
     else if (o.kind === 'creature') {                 // it minds the nearest ball, whoever is pushing it
       let B = S, gap = dist - S.d;
       for (const R of rivals) { const g2 = Math.hypot(p.x - R.x, p.z - R.z) - R.d; if (g2 < gap) { B = R; gap = g2; } }
-      if (gap < 60 + B.d * 11) updateCreature(o, dt, B);
+      // (its rules run every frame near a ball, and every third frame, for three frames' worth, further off)
+      if (gap < 22 + B.d * 4) updateCreature(o, dt, B);
+      else if (gap < 60 + B.d * 11 && (o.id + S.tickN) % 3 === 0) updateCreature(o, dt * 3, B);
     }
     r = S.d / 2;
     const reach = r + o.rad;
@@ -2812,7 +2965,7 @@ function update(dt) {
   if (S.shake > 0) { S.shake -= dt; camera.position.x += (rand() - 0.5) * S.d * 0.25; camera.position.y += (rand() - 0.5) * S.d * 0.25; }
   S.camLook.set(S.x + hx * S.d, S.camY + Math.max(S.d * 0.7, th * 0.6), S.z + hz * S.d);
   camera.lookAt(S.camLook);
-  camera.near = Math.max(0.05, S.d * 0.05);
+  camera.near = playNear();
   camera.updateProjectionMatrix();
   S.fogK = (S.fogK ?? 1) + (MODS.fog - (S.fogK ?? 1)) * (1 - Math.exp(-1.5 * dt));
   scene.fog.near = (60 + S.d * 30) * S.fogK; scene.fog.far = (260 + S.d * 120) * S.fogK;
@@ -3085,6 +3238,10 @@ $('btnCopy').onclick = () => {
   try { navigator.clipboard.writeText(u.href).then(done, () => prompt('Copy this link:', u.href)); } catch (e) { prompt('Copy this link:', u.href); }
 };
 
+// How close the camera can see. An ordinary depth buffer is only as fine as this allows, so it is no nearer than it
+// has to be: a twentieth of the ball beside it, and a few metres from high above the menu, where nothing is close.
+const playNear = () => Math.max(0.05, S.d * 0.05);
+function setNear(n) { if (camera.near !== n) { camera.near = n; camera.updateProjectionMatrix(); } }
 function resize() {
   renderer.setSize(innerWidth, innerHeight, false);
   camera.aspect = innerWidth / innerHeight;
@@ -3120,25 +3277,40 @@ menuView('mvHome');
 { const code = cleanCode(new URLSearchParams(location.search).get('room')); if (code.length === 4) { $('joinCode').value = code; menuView('mvMulti'); joinRoom(code); } }   // opened from an invite link
 
 let last = performance.now(), menuSpin = 0;
-// Frame-rate watch (animation frames only): every two seconds of play, the average rate. Auto quality steps down below 30.
-const FPS = { n: 0, t0: performance.now(), now: 0, ms: 0, low: 0 };
+// Frame-rate watch (animation frames only): every two seconds, the average rate (for the readout) and the usual one:
+// the middle frame of the two seconds, which a hitch while something loads does not move. Auto quality steps down
+// when the usual rate stays under 27 for two spells running (27, not 30: a screen that only refreshes 30 times a second
+// is not a slow machine), at once when it is under 20, and two levels at once when it is under 12, so a machine far
+// out of its depth is not left to struggle while it goes down a level at a time. Behind the menu only the two urgent
+// rules apply: the whole island is on show there, which is a harder picture than a round.
+const FPS = { n: 0, t0: performance.now(), now: 0, ms: 0, low: 0, last: 0, gaps: [], usual: 0 };
 function watchFps(now) {
   FPS.n++;
+  if (FPS.last) FPS.gaps.push(now - FPS.last);
+  FPS.last = now;
   const span = now - FPS.t0;
   if (span < 2000) return;
   FPS.now = FPS.n * 1000 / span; FPS.ms = span / FPS.n; FPS.n = 0; FPS.t0 = now;
-  const playing = S.state === 'play' || S.state === 'battle';
-  if (!playing || document.hidden || span > 3000) { FPS.low = 0; return; }       // (a gap that long was a pause or a hidden tab, not a slow machine)
-  FPS.low = FPS.now < 30 ? FPS.low + 1 : 0;
-  if (save.gfx === 'auto' && FPS.low >= 2 && qualLevel < QUALITY.length - 1) { FPS.low = 0; setQuality(qualLevel + 1); save.gfxAuto = qualLevel; persist(); showGfx(); toast('Graphics lowered to keep the game smooth'); }
+  const gaps = FPS.gaps.sort((a, b) => a - b), mid = gaps.length ? gaps[gaps.length >> 1] : 0;
+  FPS.gaps = []; FPS.usual = mid ? 1000 / mid : 0;
+  const playing = S.state === 'play' || S.state === 'battle', menu = S.state === 'menu';
+  if ((!playing && !menu) || document.hidden || span > 3000 || !mid) { FPS.low = 0; return; }       // (a gap that long was a pause or a hidden tab, not a slow machine)
+  FPS.low = playing && FPS.usual < 27 ? FPS.low + 1 : 0;
+  const down = FPS.usual < 12 ? 2 : FPS.usual < 20 || FPS.low >= 2 ? 1 : 0;
+  if (save.gfx === 'auto' && down && qualLevel < QUALITY.length - 1) { FPS.low = 0; setQuality(qualLevel + down); save.gfxAuto = qualLevel; persist(); showGfx(); toast('Graphics lowered to keep the game smooth'); }
 }
 function showGfx() { for (const id of ['btnGfx', 'btnGfx2']) $(id).textContent = 'Graphics: ' + (save.gfx === 'auto' ? `auto (${QUAL.name})` : QUAL.name); }
 function cycleGfx() {
   const names = ['auto', ...QUALITY.map((q) => q.name)];
   save.gfx = names[(names.indexOf(save.gfx) + 1) % names.length]; if (save.gfx === 'auto') save.gfxAuto = 0;
   persist(); applyGfx();
+  if (QUAL.aa !== AA) toast(QUAL.aa ? 'Smooth edges come back the next time the game loads' : 'Smooth edges go the next time the game loads');
 }
-function applyGfx() { const k2 = QUALITY.findIndex((q) => q.name === save.gfx); setQuality(k2 >= 0 ? k2 : save.gfxAuto || 0); showGfx(); }
+function applyGfx() {
+  const k2 = QUALITY.findIndex((q) => q.name === save.gfx);
+  if (k2 < 0 && SOFTWARE_GPU) save.gfxAuto = QUALITY.length - 1;
+  setQuality(k2 >= 0 ? k2 : save.gfxAuto || 0); showGfx();
+}
 // The readout (F3): frame rate, and in multiplayer how the connection is doing. For telling a slow machine from a slow link.
 let statsT = 0;
 function showStats(now) {
@@ -3204,7 +3376,9 @@ function tick(now) {
     camera.lookAt(0, 0, 0);
     scene.fog.near = 400; scene.fog.far = 1600;
     aimSun(0, 0, 0, 12);
+    setNear(5);
   }
+  if (S.state !== 'menu' && S.state !== 'dex' && S.state !== 'play') setNear(playNear());
   netFlush(); lobbyTick();
   if ((document.hidden && !PROF.force) || catchingUp) return;
   const p3 = performance.now();
