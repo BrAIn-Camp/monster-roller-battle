@@ -68,7 +68,7 @@ const RUN_STEER = 0.45;   // steering multiplier during a burst: fast, and hard 
 // A longer wind-up gives a longer, faster burst. Energy refills on its own and a little with every thing rolled up.
 const CHARGE_TIME = 1.2;  // seconds of wind-up for a full charge (which costs a full energy meter)
 const CHARGE_CRAWL = 0.3; // share of top speed while winding up
-const ENERGY_FILL = 16;   // seconds for the meter to refill (time is the only thing that refills it: rolling things up does not)
+const ENERGY_FILL = 16 / 1.1;   // seconds for the meter to refill (time is the only thing that refills it: rolling things up does not). A tenth quicker than it was, since jumping draws on the meter too
 const DASH_MIN = 0.2;     // the least energy needed to start a wind-up
 const burstTime = (c) => 0.45 + 1.35 * c, burstKick = (c) => 0.75 + 0.55 * c;   // by charge 0..1: seconds of burst, and its speed as a share of RUN x top speed
 const DRIVE = 1.6;        // how quickly the ball gets up to speed (per second); lower = heavier
@@ -100,6 +100,27 @@ const heft = (d) => 1 / Math.pow(1 + d / 8, 0.6);
 const dashMult = (d) => 1 + (RUN - 1) * Math.pow(heft(d), 1.8);
 const dashLast = (d) => heft(d);
 const CHARGE_STEER = 0.35; // steering (keys and mouse) while winding up a dash: you commit to a direction
+// The jump. A starting ball clears one and a half times its own height; a bigger one clears less of itself (a third at
+// 10 m) though more in metres: 0.6 m -> 0.9 m up, 3 m -> 1.9 m, 10 m -> 3.3 m. Under the pull a ball already falls with
+// (ballPull) every size is in the air for half a second or so. A tap is a hop: while the ball is rising with the button
+// up it is pulled down JUMP_CUT times as hard. A jump takes a little dash energy but is never refused for want of it:
+// getting unstuck must not be something a ball can run out of.
+const JUMP_SMALL = 1.5, JUMP_AT_10M = 0.33, JUMP_FALL = Math.log(JUMP_SMALL / JUMP_AT_10M) / Math.log(10 / START_D);
+const jumpHeight = (d) => d * JUMP_SMALL * Math.pow(START_D / Math.max(d, START_D), JUMP_FALL);
+const ballPull = (d) => 9.8 * (1 + d);
+const jumpSpeed = (d) => Math.sqrt(2 * ballPull(d) * jumpHeight(d));
+const JUMP_CUT = 3;       // a quick tap reaches about half the full height
+const JUMP_COST = 0.1;    // share of the dash meter a jump takes
+const JUMP_KICK = 0.6;    // a jump with forward held leaves the ground at no less than this share of top speed: from a standstill, pressed against something, the ball leaps at it
+const JUMP_BUFFER = 0.12, JUMP_COYOTE = 0.1;      // a press just before landing still counts, and so does one just after rolling off an edge
+const AIR_DRIVE = 0.35, AIR_GRIP = 0.2;           // in the air the ball keeps the speed it left the ground with: little push, little grip (from a near standstill it gets its full push, so a hop on the spot can still be walked forward)
+// How much ground a jump can gain. Infinity: the ball lands on whatever its underside clears. That lets a starting
+// ball hop the 35 cm lip of the Green (rolling over it takes a 90 cm ball), a 2.7 m ball mount the 3.2 m mesas (7 m to
+// roll up them) and a 5.8 m ball the 5.2 m ones (12 m): ledges stop being a matter of size alone. A number caps it:
+// in the air the ball may only mount ground that many times higher than it could have rolled up from where it took
+// off. A ball then leaves the Green at 88 cm divided by the number (1.25: at 70 cm), and is stopped in mid-air by a
+// ledge it has visibly cleared.
+const JUMP_LEDGE_CAP = Infinity;
 // How many things a crash knocks off: nothing below top speed, then more the faster you were going (a full sprint: about 14).
 const crashLoss = () => 0;      // running into scenery only stops the ball; rams and charging critters are what knock things off
 const V3 = THREE.Vector3;
@@ -1410,12 +1431,12 @@ function populateSeeded(seed) {
 const keys = {};
 addEventListener('keydown', (e) => {
   if (e.target && e.target.tagName === 'INPUT') return;          // typing a room code
-  keys[e.code] = true;
+  keys[e.code] = true; S.padLast = false;
   if (e.repeat) return;
   if (e.code === 'KeyT') { S.tank = !S.tank; $('steer').textContent = S.tank ? 'tank' : 'simple'; toast('Steering: ' + (S.tank ? 'tank' : 'simple')); }
   if (e.code === 'Escape' || e.code === 'KeyP') togglePause();
   if (e.code === 'KeyM') setMuted(!save.muted);
-  if ((e.code === 'Space' || e.code === 'Enter') && S.state === 'battle' && battle && !battle.modern) skipBattle();     // (the arena fight is skipped by HOLDING Enter: Space is its dash)
+  if ((e.code === 'Space' || e.code === 'Enter') && S.state === 'battle' && battle && !battle.modern) skipBattle();     // (the arena fight is skipped by HOLDING Enter: Space is its jump)
   if ((e.code === 'Space' || e.code === 'Enter') && S.state === 'intro') S.introT = Math.max(S.introT, INTRO_LEN - 0.9);
   if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
 });
@@ -1464,13 +1485,15 @@ function readInput() {
   }
   let mouseTurn = 0;                                              // pointer parked at a screen edge: keep turning
   if (!S.locked && S.mouseIn && Math.abs(S.mouseX) > 0.94) mouseTurn = Math.sign(S.mouseX) * 0.8;
-  const run = !!(k('ShiftLeft', 'ShiftRight') || (pad && ((pad.buttons[0] && pad.buttons[0].pressed) || (pad.buttons[7] && pad.buttons[7].pressed))));
-  return { f, t: clamp(t + mouseTurn, -1, 1), run };
+  const run = !!(k('ShiftLeft', 'ShiftRight') || (pad && pad.buttons[7] && pad.buttons[7].pressed));      // (RT; A was a dash too until it became the jump)
+  const jump = !!(k('Space') || (pad && pad.buttons[0] && pad.buttons[0].pressed));
+  if (pad && (ax(0) !== 0 || ax(1) !== 0 || jump && !k('Space') || run && !k('ShiftLeft', 'ShiftRight'))) S.padLast = true;      // (which of the two the hints should name: tickTips)
+  return { f, t: clamp(t + mouseTurn, -1, 1), run, jump };
 }
 function readStick() {                          // screen-relative stick for the fixed-camera arena: x right, z down the screen
   const pad = readPad(), ax = (i) => (pad && pad.axes[i] !== undefined ? dz(pad.axes[i]) : 0);
   return { x: clamp(k('KeyD', 'ArrowRight') - k('KeyA', 'ArrowLeft') + ax(0), -1, 1), z: clamp(k('KeyS', 'ArrowDown') - k('KeyW', 'ArrowUp') + ax(1), -1, 1),
-    dash: !!(k('ShiftLeft', 'ShiftRight', 'Space') || (pad && ((pad.buttons[0] && pad.buttons[0].pressed) || (pad.buttons[7] && pad.buttons[7].pressed)))) };
+    dash: !!(k('ShiftLeft', 'ShiftRight') || (pad && pad.buttons[7] && pad.buttons[7].pressed)), jump: !!(k('Space') || (pad && pad.buttons[0] && pad.buttons[0].pressed)) };
 }
 function pollPadButtons() {
   const pad = readPad();
@@ -1726,6 +1749,36 @@ function trailFx(Bq, dt) {
   let n = 40 * dt; n = Math.floor(n) + (rand() < n % 1 ? 1 : 0);
   for (let i = 0; i < n; i++) puff(Bq.x - hx * r + (rand() - 0.5) * r, gy + rand() * r * 1.4, Bq.z - hz * r + (rand() - 0.5) * r, -hx * k + (rand() - 0.5) * k, rand() * k, -hz * k + (rand() - 0.5) * k, 0.35 + rand() * 0.3, (0.08 + 0.1 * rand()) * k, i % 3 === 0 ? 0xffffff : i % 3 === 1 ? col : DUST[0], 1.5 * k);
 }
+// A jump: dust kicked out from under the ball as it leaves the ground, a ring of it thrown up where it comes down (k: how
+// hard, 1 = a full jump's landing), and a dark spot on the ground under it in between, to judge the landing by.
+function jumpFx(Bq, gy) {
+  const r = Bq.d / 2, k = Math.pow(Bq.d, 0.7);
+  for (let i = 0; i < 12; i++) { const a = i / 12 * 6.28 + rand(), sp = (1.2 + rand() * 1.4) * k; puff(Bq.x + Math.cos(a) * r * 0.5, gy + 0.05 * k, Bq.z + Math.sin(a) * r * 0.5, Math.cos(a) * sp, (0.6 + rand()) * k, Math.sin(a) * sp, 0.3 + rand() * 0.2, (0.09 + 0.07 * rand()) * k, DUST[i % 3], 5 * k); }
+  if (Bq === S) { const f = 300 / (1 + Bq.d * 0.12); tone(f, f * 2.1, 0.13, 'sine', 0.11); }
+}
+function landFx(Bq, gy, k) {
+  const r = Bq.d / 2, kk = Math.pow(Bq.d, 0.7), n = Math.round(10 + 12 * k);
+  for (let i = 0; i < n; i++) { const a = i / n * 6.28, sp = (2 + 3 * k) * kk; puff(Bq.x + Math.cos(a) * r * 0.8, gy + 0.08 * kk, Bq.z + Math.sin(a) * r * 0.8, Math.cos(a) * sp, (0.5 + rand() * 1.2) * kk, Math.sin(a) * sp, 0.35 + rand() * 0.25, (0.11 + 0.09 * rand()) * kk, DUST[i % 3], 4 * kk); }
+  if (Bq === S) { const f0 = 210 / (1 + Bq.d * 0.06); tone(f0, f0 * 0.35, 0.15, 'triangle', Math.min(0.2, 0.09 + 0.07 * k)); }      // (a triangle wave from 200 Hz: a low sine is lost on a laptop's speakers)
+}
+// Squash and stretch: the ball's shell draws out upward as it leaves the ground and flattens as it lands, then springs
+// back (sq: +0.2 = a fifth taller and a tenth narrower; negative = flatter). It is done in the world's up, whichever
+// way the ball has rolled, by giving the shell its matrix directly: undo the ball's turn, scale, turn back.
+const sqA = new THREE.Matrix4(), sqB = new THREE.Matrix4(), sqS = new THREE.Matrix4();
+function squashShell(shell, quat, r, sq) {
+  if (Math.abs(sq) < 0.004) { shell.matrixAutoUpdate = true; shell.scale.setScalar(r); return; }
+  shell.matrixAutoUpdate = false;
+  sqA.makeRotationFromQuaternion(quat); sqB.copy(sqA).invert(); sqS.makeScale(r * (1 - sq * 0.5), r * (1 + sq), r * (1 - sq * 0.5));
+  shell.matrix.copy(sqB).multiply(sqS).multiply(sqA); shell.matrix.setPosition(tmpV.set(0, r * sq, 0).applyMatrix4(sqB)); shell.matrixWorldNeedsUpdate = true;      // (moved up or down by as much, so its underside stays where it was)
+}
+const spotGeo = new THREE.CircleGeometry(1, 24).rotateX(-Math.PI / 2);
+function airSpot(Bq, gy, up) {
+  const r = Bq.d / 2;
+  if (up < r * 0.2 || QUAL.shadows) { if (Bq.spot) Bq.spot.visible = false; return; }      // (with shadows drawn, the ball's own does the job)
+  if (!Bq.spot || Bq.spot.parent !== arrows) { Bq.spot = new THREE.Mesh(spotGeo, new THREE.MeshBasicMaterial({ color: 0x1c1830, transparent: true, opacity: 0.3, depthWrite: false, fog: false })); Bq.spot.renderOrder = 2; arrows.add(Bq.spot); }
+  const k = Math.min(1, up / jumpHeight(Bq.d));
+  Bq.spot.visible = true; Bq.spot.position.set(Bq.x, gy + 0.04 + Bq.d * 0.015, Bq.z); Bq.spot.scale.setScalar(r * (0.92 - 0.3 * k)); Bq.spot.material.opacity = 0.36 - 0.14 * k;
+}
 // The aim arrow: lies on the ground ahead of a ball that is winding up, pointing where the burst will go and growing with the charge.
 const arrows = new THREE.Group();
 scene.add(arrows);
@@ -1753,7 +1806,7 @@ function aimArrow(Bq, c) {
   });
 }
 function clearFx() {
-  parts.length = 0; pMesh.count = 0; arrows.clear(); S.arrow = null; for (const id of [...markers.keys()]) unmark(id); fx.clear(); NET.fxRoots.clear(); NET.fxNodes.clear(); }
+  parts.length = 0; pMesh.count = 0; arrows.clear(); S.arrow = null; S.spot = null; for (const id of [...markers.keys()]) unmark(id); fx.clear(); NET.fxRoots.clear(); NET.fxNodes.clear(); }
 
 // ---------- pickups and knocks ----------
 const tmpV = new V3(), tmpQ = new THREE.Quaternion(), tmpQ2 = new THREE.Quaternion(), UP = new V3(0, 1, 0), downLocal = new V3(), axis = new V3();
@@ -2134,14 +2187,21 @@ function rivalContacts(R) {
     if (o.kind === 'creature' && o.ai === 'charge') startLunge(o, R);
   }
 }
+function rivalHop(R) { if (R.jumped) return; R.jumped = true; R.vy = jumpSpeed(R.d); R.energy = Math.max(0, R.energy - JUMP_COST); }
 function rivalRender(R, dt) {
   const r = R.d / 2, hx = Math.sin(R.heading), hz = Math.cos(R.heading);
+  // off the ground (its own hop, or another player's jump as it is reported): dust as it leaves and lands, the spot under it, and its trainer jumps too
+  const g = groundAt(R.x, R.z), up = R.y - r - g, inJump = R.remote ? !!R.nj : !!R.jumped, hop = inJump || R.upT > 0 ? Math.max(0, up) : 0;
+  if (inJump && !R.wasJump && S.state === 'play') jumpFx(R, g);
+  if (!inJump && R.wasJump && S.state === 'play') landFx(R, g, 0.8);
+  R.wasJump = inJump; R.upT = inJump ? 0.25 : Math.max(0, (R.upT || 0) - dt);      // (upT: a moment's grace after the word that it has landed, while its height catches up)
+  airSpot(R, g, up);
   const vx = R.remote ? R.rvx : hx * R.v, vz = R.remote ? R.rvz : hz * R.v, sp = Math.hypot(vx, vz);
   if (sp > 1e-4) { rollAxis.set(vz / sp, 0, -vx / sp); tmpQ.setFromAxisAngle(rollAxis, sp * dt / r); R.ball.quaternion.premultiply(tmpQ); }
   R.ball.position.set(R.x, R.y, R.z);
   const th = trainerHeight(R.d), fx2 = R.x - hx * (r + th * 0.32), fz = R.z - hz * (r + th * 0.32);
-  let fy = groundAt(fx2, fz); if (Math.abs(fy - (R.y - r)) > Math.max(r, th * 0.4)) fy = R.y - r;
-  R.trainer.scale.setScalar(th); R.trainer.position.set(fx2, fy, fz); R.trainer.rotation.y = R.heading;
+  let fy = groundAt(fx2, fz); if (Math.abs(fy - (R.y - r - hop)) > Math.max(r, th * 0.4)) fy = R.y - r - hop;
+  R.trainer.scale.setScalar(th); R.trainer.position.set(fx2, fy + Math.min(hop, th * 0.9), fz); R.trainer.rotation.y = R.heading;
   poseTrainer(R.trainer, S.time + R.team, sp > 0.25);
   R.core.scale.setScalar(r);
 }
@@ -2216,12 +2276,22 @@ function updateRivals(dt, frozen) {
     const hx = Math.sin(R.heading), hz = Math.cos(R.heading);
     const nx = clamp(R.x + hx * R.v * dt, BOUNDS.x1 + 5, BOUNDS.x2 - 5), nz = clamp(R.z + hz * R.v * dt, BOUNDS.z1 + 5, BOUNDS.z2 - 5);
     const px = nx + hx * r * 0.8, pz = nz + hz * r * 0.8;
-    if (groundAt(px, pz) - g0 > r * CLIMB || (R.d < SEA_MIN_D && !MODS.iced && T.waterAt(px, pz) === 2 && T.waterAt(R.x, R.z) !== 2)) {
-      R.v *= -0.3; R.wander = 1.5; R.wh = R.heading + (rand() < 0.5 ? 1 : -1) * (1.2 + rand());      // blocked: turn away
+    // A CPU jumps only to free itself: at a ledge that has turned it back once already and that a jump would clear, and
+    // whenever it has been stuck in one place for three seconds.
+    const stepUp = groundAt(px, pz) - (R.jumped ? Math.max(g0, R.y - r) : g0), sea = R.d < SEA_MIN_D && !MODS.iced && T.waterAt(px, pz) === 2 && T.waterAt(R.x, R.z) !== 2;
+    if (stepUp > r * CLIMB || sea) {
+      if (R.jumped && !sea) R.v *= Math.exp(-2 * dt);            // in mid-hop and not yet high enough: it waits against the ledge
+      else if (!sea && !frozen && R.wander <= 0 && S.time - (R.blockT ?? -9) < 6 && stepUp < r * CLIMB + jumpHeight(R.d) * 0.85) rivalHop(R);
+      else { R.blockT = S.time; R.v *= -0.3; R.wander = 1.5; R.wh = R.heading + (rand() < 0.5 ? 1 : -1) * (1.2 + rand()); }      // blocked: turn away
     } else { R.x = nx; R.z = nz; }
     R.stuckT -= dt;
-    if (R.stuckT <= 0) { R.stuckT = 3; if (Math.hypot(R.x - R.lastX, R.z - R.lastZ) < R.d * 0.5 + 0.3) { if (R.chasing) R.avoid.add(R.chasing); R.wander = 3; R.wh = rand() * 6.28; } R.lastX = R.x; R.lastZ = R.z; }   // stuck: give up on that thing for good
-    R.y += (groundAt(R.x, R.z) + r - R.y) * Math.min(1, 10 * dt);
+    if (R.stuckT <= 0) { R.stuckT = 3; if (Math.hypot(R.x - R.lastX, R.z - R.lastZ) < R.d * 0.5 + 0.3) { if (R.chasing) R.avoid.add(R.chasing); R.wander = 3; R.wh = rand() * 6.28; if (!frozen) rivalHop(R); } R.lastX = R.x; R.lastZ = R.z; }   // stuck: give up on that thing for good, and hop clear
+    const restY = groundAt(R.x, R.z) + r;
+    if (R.jumped) {                                 // up and down under the same pull as the player's ball
+      const a = ballPull(R.d);
+      R.y += R.vy * dt - 0.5 * a * dt * dt; R.vy -= a * dt;
+      if (R.vy <= 0 && R.y <= restY) { R.y = restY; R.vy = 0; R.jumped = false; }
+    } else R.y += (restY - R.y) * Math.min(1, 10 * dt);
     rivalContacts(R);
     rivalRender(R, dt);
   }
@@ -2724,7 +2794,7 @@ function netTick(dt) {
     if (NET.slowT <= 0) { NET.slowT = 1 / 5; netWorld(); }
   } else {
     NET.upT -= dt; NET.pingT -= dt;
-    if (NET.upT <= 0) { NET.upT = 1 / 12; netFast('host', ['u', ++NET.seq, Math.round(S.x * 10), Math.round(S.y * 10), Math.round(S.z * 10), Math.round((S.heading % (2 * Math.PI)) * 100), Math.round(S.vx * 10), Math.round(S.vz * 10), S.boostT > 0 ? 1 : 0, Math.round(S.charge * 10), Math.round(S.energy * 100)]); }
+    if (NET.upT <= 0) { NET.upT = 1 / 12; netFast('host', ['u', ++NET.seq, Math.round(S.x * 10), Math.round(S.y * 10), Math.round(S.z * 10), Math.round((S.heading % (2 * Math.PI)) * 100), Math.round(S.vx * 10), Math.round(S.vz * 10), (S.boostT > 0 ? 1 : 0) | (S.jumped ? 2 : 0), Math.round(S.charge * 10), Math.round(S.energy * 100)]); }      // (the ninth: 1 = in a burst, 2 = in a jump)
     if (NET.pingT <= 0) { NET.pingT = 1; netFast('host', ['pg', Math.round(performance.now())]); }
     if (NET.lunges.size) { netHost(['lg', [...NET.lunges]]); NET.lunges.clear(); }
     for (const e of NET.fxNodes.values()) for (const o of e.nodes) if (o.userData.tp) o.position.lerp(o.userData.tp, Math.min(1, 12 * dt));
@@ -2758,7 +2828,7 @@ function netBalls() {
   for (let t = 0; t < TEAMS.length; t++) {
     const b = ballOf(t), [vx, vz] = velOf(b);
     const chg = b === S ? S.charge : b.remote ? b.chg : b.wind > 0 ? 0.65 * (1 - b.wind / (CHARGE_TIME * 0.65)) : 0;
-    balls.push(Math.round(b.x * 10), Math.round(b.y * 10), Math.round(b.z * 10), Math.round((b.heading % (2 * Math.PI)) * 100), Math.round(vx * 10), Math.round(vz * 10), Math.round(b.d * 1000), b.boostT > 0 ? 1 : 0, Math.round(chg * 10));
+    balls.push(Math.round(b.x * 10), Math.round(b.y * 10), Math.round(b.z * 10), Math.round((b.heading % (2 * Math.PI)) * 100), Math.round(vx * 10), Math.round(vz * 10), Math.round(b.d * 1000), (b.boostT > 0 ? 1 : 0) | ((b.remote ? b.nj : b.jumped) ? 2 : 0), Math.round(chg * 10));
   }
   const seq = ++NET.seq, tl = Math.round(S.timeLeft * 10);
   for (let t = 0; t < TEAMS.length; t++) {
@@ -2794,7 +2864,7 @@ function netSnap(m) {
   for (let t = 0; t < TEAMS.length; t++) {
     const R = t === S.team ? null : rivalOf(t), i = t * 9;
     if (!R) continue;
-    R.nx = balls[i] / 10; R.ny = balls[i + 1] / 10; R.nz = balls[i + 2] / 10; R.nh = balls[i + 3] / 100; R.rvx = balls[i + 4] / 10; R.rvz = balls[i + 5] / 10; R.nb = balls[i + 7]; R.chg = balls[i + 8] / 10; R.nAge = 0;
+    R.nx = balls[i] / 10; R.ny = balls[i + 1] / 10; R.nz = balls[i + 2] / 10; R.nh = balls[i + 3] / 100; R.rvx = balls[i + 4] / 10; R.rvz = balls[i + 5] / 10; R.nb = balls[i + 7] & 1; R.nj = balls[i + 7] & 2; R.chg = balls[i + 8] / 10; R.nAge = 0;
     const d = balls[i + 6] / 1000;
     if (Math.abs(d - R.d) > 1e-6) { R.d = d; R.vol3 = d ** 3; seatOn(R.attached, d / 2); }
   }
@@ -3026,7 +3096,7 @@ function hostMsg(id, m) {
       if (m[1] <= (R.seqIn || 0)) break;         // an older report that arrived late
       R.seqIn = m[1];
       R.nx = clamp((+m[2] || 0) / 10, BOUNDS.x1, BOUNDS.x2); R.ny = (+m[3] || 0) / 10; R.nz = clamp((+m[4] || 0) / 10, BOUNDS.z1, BOUNDS.z2); R.nh = (+m[5] || 0) / 100;
-      R.rvx = (+m[6] || 0) / 10; R.rvz = (+m[7] || 0) / 10; R.nb = m[8] ? 1 : 0; R.chg = (+m[9] || 0) / 10; R.ren = (+m[10] || 0) / 100; R.nAge = 0;
+      R.rvx = (+m[6] || 0) / 10; R.rvz = (+m[7] || 0) / 10; R.nb = m[8] & 1; R.nj = m[8] & 2; R.chg = (+m[9] || 0) / 10; R.ren = (+m[10] || 0) / 100; R.nAge = 0;
       break;
     case 'cl': {                                 // they rolled something up: first come, first served
       const o = S.byId.get(m[1]);
@@ -3038,7 +3108,7 @@ function hostMsg(id, m) {
       break;
     }
     case 'lg': for (const oid of m[1]) { const o = S.byId.get(oid); if (o && !o.on && !o.gone && Math.hypot(o.group.position.x - R.x, o.group.position.z - R.z) < R.d * 2 + o.size * 3) startLunge(o, R); } break;
-    case 'ai': NET.aLatest[seat] = [clamp(Math.round(+m[1] || 0), -100, 100), clamp(Math.round(+m[2] || 0), -100, 100), m[3] ? 1 : 0]; break;
+    case 'ai': NET.aLatest[seat] = [clamp(Math.round(+m[1] || 0), -100, 100), clamp(Math.round(+m[2] || 0), -100, 100), (+m[3] || 0) & 3]; break;
   }
 }
 
@@ -3047,9 +3117,9 @@ function hostMsg(id, m) {
 // steps of 1/60 s; the host decides when each step happens and what every player's stick was doing in it, and sends
 // that. The others replay the steps as they arrive (a player's own steering comes back with the rest, a moment late).
 const ASTEP = 1 / 60;
-const stickBits = () => { const st = readStick(); return [Math.round(clamp(st.x, -1, 1) * 100), Math.round(clamp(st.z, -1, 1) * 100), st.dash ? 1 : 0]; };
+const stickBits = () => { const st = readStick(); return [Math.round(clamp(st.x, -1, 1) * 100), Math.round(clamp(st.z, -1, 1) * 100), (st.dash ? 1 : 0) | (st.jump ? 2 : 0)]; };      // (the third: 1 = dash held, 2 = jump held)
 function arenaStep(row) {
-  for (let t = 0; t < TEAMS.length; t++) NET.arenaIn[t] = { x: row[t * 3] / 100, z: row[t * 3 + 1] / 100, dash: !!row[t * 3 + 2] };
+  for (let t = 0; t < TEAMS.length; t++) NET.arenaIn[t] = { x: row[t * 3] / 100, z: row[t * 3 + 1] / 100, dash: !!(row[t * 3 + 2] & 1), jump: !!(row[t * 3 + 2] & 2) };
   battle.step(ASTEP);
 }
 function tickBattleNet(dt) {
@@ -3218,7 +3288,7 @@ function update(dt) {
   S.hitCool = Math.max(0, S.hitCool - dt); S.ghostT = Math.max(0, (S.ghostT || 0) - dt);
   const vmax = topSpeed(S.d) * MODS.speed;
   let boxers = null, touching = 0;
-  const inp = frozen ? { f: 0, t: 0, run: false } : readInput();
+  const inp = frozen ? { f: 0, t: 0, run: false, jump: false } : readInput();
   let f = inp.f, t = inp.t, run = !!inp.run;
   if (frozen) S.mdx = 0;
   if (S.stallT > 0) { S.stallT -= dt; f = 0; }
@@ -3236,6 +3306,22 @@ function update(dt) {
   if (charging) chargeFx(S, S.charge, dt);
   else if (S.boostT > 0 && S.dashed && !frozen) trailFx(S, dt);
   aimArrow(S, charging ? S.charge : 0);
+  // the jump: off the ground (or just off it), whatever the meter says; it keeps the charge of a dash being wound up
+  const jumpHeld = !!inp.jump;
+  if (jumpHeld && !S.jumpWas) S.jumpBuf = JUMP_BUFFER; else S.jumpBuf -= dt;
+  S.jumpWas = jumpHeld;
+  S.coyote = S.air ? S.coyote - dt : JUMP_COYOTE;
+  if (S.jumpBuf > 0 && S.coyote > 0 && S.stallT <= 0) {
+    S.jumpBuf = 0; S.coyote = 0; S.jumped = true; S.air = true; S.jumps = (S.jumps | 0) + 1;
+    S.vy = jumpSpeed(S.d); S.jumpGy = S.y - S.sup; S.energy = Math.max(0, S.energy - JUMP_COST);
+    jumpFx(S, S.jumpGy); S.sq = 0.2; S.heldT = 0;
+    if (f > 0.3 && !charging) {                     // not yet rolling (held against something, say): it leaps forward all the same
+      const jx = Math.sin(S.heading), jz = Math.cos(S.heading), want = vmax * JUMP_KICK * f, has = S.vx * jx + S.vz * jz;
+      if (has < want) { S.vx += jx * (want - has); S.vz += jz * (want - has); }
+    }
+    const bolt = document.querySelector('#size .bolt');
+    if (bolt) { bolt.classList.remove('spent'); void bolt.offsetWidth; bolt.classList.add('spent'); }
+  }
   const boosting = S.boostT > 0;
   if (boosting) { S.boostT -= dt; f = 1; }
   run = boosting;
@@ -3245,29 +3331,40 @@ function update(dt) {
   S.mdx = 0;
   const hx = Math.sin(S.heading), hz = Math.cos(S.heading);
   if (released > 0.05) { const v = vmax * dashMult(S.d) * burstKick(released); S.vx = hx * v; S.vz = hz * v; S.shake = 0.08; }
-  if (charging) { const br = Math.exp(-4 * dt); S.vx *= br; S.vz *= br; }          // winding up: the ball digs in
+  if (charging && !S.air) { const br = Math.exp(-4 * dt); S.vx *= br; S.vz *= br; }          // winding up: the ball digs in (it cannot in mid-air: a ball that jumps while winding up sails on)
   // Momentum: the ball takes time to get up to speed and to stop, and the faster it is going the less it grips,
   // so at a sprint it keeps sliding the way it was headed long after the camera has turned.
   const fast = Math.hypot(S.vx, S.vz) / vmax;                 // speed as a share of ordinary top speed
-  const drive = DRIVE * (boosting ? Math.sqrt(hf) : hf);                  // a heavy ball is slower to get going and to stop
+  const drive = DRIVE * (boosting ? Math.sqrt(hf) : hf) * (S.air && fast > 0.4 ? AIR_DRIVE : 1);      // a heavy ball is slower to get going and to stop; one in the air hardly changes speed at all
   S.vx += hx * f * top * drive * dt; S.vz += hz * f * top * drive * dt;
   let vf = S.vx * hx + S.vz * hz, vl = -S.vx * hz + S.vz * hx;
   vf *= Math.exp(-drive * (f * vf < 0 ? 2.2 : 1) * dt);        // pulling back brakes harder than coasting
-  vl *= Math.exp(-(GRIP * Math.sqrt(hf) / (1 + 2.6 * fast * fast)) * dt);
+  vl *= Math.exp(-(GRIP * Math.sqrt(hf) / (1 + 2.6 * fast * fast)) * (S.air ? AIR_GRIP : 1) * dt);
   S.vx = hx * vf - hz * vl; S.vz = hz * vf + hx * vl;
 
   // sideways movement, one axis at a time, stopped by any step too tall to climb
   let r = S.d / 2;
   let feet = S.y - S.sup;                          // the lowest point of the (lumpy) ball
-  if (terrainContact(S.x, S.z, feet, r)) {         // grew into a cliff: ease away from it
+  const vaulting = S.jumped && S.vy > 0;           // on the way up in a jump: whatever is in the way only holds the ball until it is high enough, it does not knock it back
+  const stepFeet = S.jumped && JUMP_LEDGE_CAP < Infinity ? Math.min(feet, S.jumpGy + r * CLIMB * (JUMP_LEDGE_CAP - 1)) : feet;      // (what a jump may mount: see JUMP_LEDGE_CAP)
+  if (terrainContact(S.x, S.z, stepFeet, r)) {     // grew into a cliff: ease away from it
     const l = Math.hypot(tc.x, tc.z);
     if (l > 0.01) { S.x -= tc.x / l * r * 0.06; S.z -= tc.z / l * r * 0.06; }
   }
+  let hoppable = false;                            // held against something a jump would clear? (for the hint: tickTips)
+  const ledgeAhead = (x, z, dx, dz) => {           // the step that stopped the ball, going (dx, dz) at (x, z): is it one a jump would clear?
+    if (S.air) return false;
+    let up = 0;
+    for (let a = 0; a < 8; a++) if (COS8[a] * dx + SIN8[a] * dz >= 0.3) up = Math.max(up, groundAt(x + COS8[a] * r * 0.85, z + SIN8[a] * r * 0.85) - feet);
+    // (high enough, for long enough to get the ball's middle over the edge at the speed a jump from here would have)
+    const H = jumpHeight(S.d), need = up - r * CLIMB;
+    return up > r * CLIMB && up < r * CLIMB * JUMP_LEDGE_CAP && need < H * 0.9 && 2 * Math.sqrt(2 * (H - need) / ballPull(S.d)) * Math.max(Math.hypot(S.vx, S.vz), vmax * JUMP_KICK) > r * 0.9;
+  };
   const tryX = clamp(S.x + S.vx * dt, BOUNDS.x1 + 5, BOUNDS.x2 - 5);
-  if (S.vx !== 0 && terrainContact(tryX, S.z, feet, r, Math.sign(S.vx), 0)) { const n = crashLoss(Math.abs(S.vx), vmax); if (n) hardHit(Math.sign(S.vx), 0, vmax, n); S.vx *= -0.35; }
+  if (S.vx !== 0 && terrainContact(tryX, S.z, stepFeet, r, Math.sign(S.vx), 0)) { const n = crashLoss(Math.abs(S.vx), vmax); if (n) hardHit(Math.sign(S.vx), 0, vmax, n); const way = Math.sign(S.vx); if (!vaulting) S.vx *= -0.35; hoppable = hoppable || ledgeAhead(tryX, S.z, way, 0); }
   else S.x = tryX;
   const tryZ = clamp(S.z + S.vz * dt, BOUNDS.z1 + 5, BOUNDS.z2 - 5);
-  if (S.vz !== 0 && terrainContact(S.x, tryZ, feet, r, 0, Math.sign(S.vz))) { const n = crashLoss(Math.abs(S.vz), vmax); if (n) hardHit(0, Math.sign(S.vz), vmax, n); S.vz *= -0.35; }
+  if (S.vz !== 0 && terrainContact(S.x, tryZ, stepFeet, r, 0, Math.sign(S.vz))) { const n = crashLoss(Math.abs(S.vz), vmax); if (n) hardHit(0, Math.sign(S.vz), vmax, n); const way = Math.sign(S.vz); if (!vaulting) S.vz *= -0.35; hoppable = hoppable || ledgeAhead(S.x, tryZ, 0, way); }
   else S.z = tryZ;
 
   // roll (and, while winding up, spin on the spot)
@@ -3279,18 +3376,36 @@ function update(dt) {
     ball.quaternion.premultiply(tmpQ);
   }
 
-  // height: ride up over steps, ramps and the ball's own lumps; fall when there is nothing underneath
-  const sup = lumpSupport(r), target = groundAt(S.x, S.z) + sup;
+  // height: ride up over steps, ramps and the ball's own lumps; up and over with a jump; fall when there is nothing underneath
+  const sup = lumpSupport(r), gy = groundAt(S.x, S.z), target = gy + sup, pull = ballPull(S.d);
+  // Coming down from a jump, the ball loses nearly half of whatever speed it has over its ordinary top speed: one long
+  // jump out of a burst keeps its speed in the air, but a string of hops does not carry a burst across the map.
+  const touchDown = () => { const sp = Math.hypot(S.vx, S.vz); if (sp > vmax && !boosting) { const keep = (vmax + (sp - vmax) * 0.55) / sp; S.vx *= keep; S.vz *= keep; } };
+  if (S.vy > 0) { const a = pull * (S.jumped && !jumpHeld ? JUMP_CUT : 1); S.y += S.vy * dt - 0.5 * a * dt * dt; S.vy -= a * dt; }      // rising: let go of the button and the jump is cut short
   if (S.y < target) {
     const rise = Math.min(target - S.y, (target - S.y) * Math.min(1, 20 * dt) + r * 0.02);
-    const slow = Math.max(0.5, 1 - 0.6 * rise / r);         // heaving the ball upward costs speed
-    S.vx *= slow; S.vz *= slow;
-    S.y += rise; S.vy = 0;
-  } else if (S.y > target) {
-    S.vy -= 9.8 * (1 + S.d) * dt;
+    if (S.vy > 0) S.y += rise;                              // on the way up in a jump, over ground that is higher still: lifted with it, and on up
+    else {
+      const slow = S.jumped ? 1 : Math.max(0.5, 1 - 0.6 * rise / r);         // heaving the ball upward costs speed (not at the end of a jump: that is a landing)
+      S.vx *= slow; S.vz *= slow;
+      S.y += rise; S.vy = 0;
+      if (S.jumped) { S.jumped = false; landFx(S, gy, 0.5); S.sq = -0.12; touchDown(); }
+    }
+  } else if (S.y > target && S.vy <= 0) {
+    S.vy -= pull * dt;
     S.y += S.vy * dt;
-    if (S.y <= target) { if (S.vy < -3 - S.d) { S.shake = 0.18; tone(90, 50, 0.18, 'sine', 0.2); } S.y = target; S.vy = 0; }
+    if (S.y <= target) {
+      const hit = -S.vy, full = jumpSpeed(S.d);
+      if (S.jumped || hit > 3 + S.d) landFx(S, gy, clamp(hit / full, 0.3, 1.6));
+      if (hit > Math.max(3 + S.d, full * 1.15)) S.shake = 0.18;      // a drop from higher than its own jump jolts the camera; a jump's landing only dips it
+      else if (S.jumped) S.landT = 0.22;
+      if (S.jumped || hit > 3 + S.d) S.sq = -0.24 * clamp(hit / full, 0.4, 1.2);
+      if (S.jumped) touchDown();
+      S.y = target; S.vy = 0; S.jumped = false;
+    }
   }
+  S.air = S.jumped || S.y - target > r * 0.15;
+  airSpot(S, gy, S.y - target);
   S.sup = sup;
   feet = S.y - sup;
 
@@ -3376,13 +3491,24 @@ function update(dt) {
     if (o.spec.flat) continue;
     if (o.onBump && o.cool <= 0) o.onBump(S, o);
     if (o.kind === 'creature' && S.ghostT > 0) continue;        // just thrown clear by a lunge: passes through critters for a moment
+    if (S.jumped && S.vy <= 0 && feet > p.y + o.size - r * 0.6 && !o.onBump) {      // coming down on top of it from a jump: the ball skips off its top and carries on, rather than being squeezed out sideways
+      S.y = p.y + o.size + S.sup; feet = S.y - S.sup; S.vy = jumpSpeed(S.d) * 0.35; S.sq = -0.14;
+      const k = Math.pow(S.d, 0.7);
+      for (let i = 0; i < 6; i++) { const a = i / 6 * 6.28; puff(S.x + Math.cos(a) * r * 0.5, feet, S.z + Math.sin(a) * r * 0.5, Math.cos(a) * 2 * k, (0.5 + rand()) * k, Math.sin(a) * 2 * k, 0.3, 0.09 * k, DUST[i % 3], 5 * k); }
+      tone(420, 640, 0.07, 'triangle', 0.08);
+      continue;
+    }
     touching++;
     const nx = dist > 1e-6 ? ox / dist : 1, nz = dist > 1e-6 ? oz / dist : 0;
-    S.x -= nx * (reach - dist); S.z -= nz * (reach - dist);
+    const out = S.air ? Math.min(reach - dist, r * 0.2) : reach - dist;      // (in the air, eased out over a few frames)
+    S.x -= nx * out; S.z -= nz * out;
     const vn = S.vx * nx + S.vz * nz;
-    if (vn > 0) { S.vx -= 1.6 * vn * nx; S.vz -= 1.6 * vn * nz; if (o.size > S.d * 0.8 && !o.onBump) { const n = crashLoss(vn, vmax); if (n) hardHit(nx, nz, vmax, n); } }      // only a sprint into something big knocks things loose
+    if (!S.air && nx * hx + nz * hz > 0.4 && p.y + o.size - feet < jumpHeight(S.d) * 0.85) S.hopAt = clock;      // it is in the way, and low enough to jump
+    if (vn > 0 && !(vaulting && p.y + o.size < S.jumpGy + jumpHeight(S.d) * 0.95)) { S.vx -= 1.6 * vn * nx; S.vz -= 1.6 * vn * nz; if (o.size > S.d * 0.8 && !o.onBump) { const n = crashLoss(vn, vmax); if (n) hardHit(nx, nz, vmax, n); } }      // only a sprint into something big knocks things loose
     if (o.kind === 'creature' && o.ai === 'charge') startLunge(o, S);
   }
+  if (!S.air && clock - (S.hopAt ?? -9) < 0.5) hoppable = true;      // (the ball bounces off a thing it is pushed against, so it only touches it now and then: half a second's grace)
+  S.heldT = hoppable && f > 0.3 ? Math.min(1, (S.heldT || 0) + dt) : Math.max(0, (S.heldT || 0) - dt * 0.6);
   // boxed in: hardly moving for most of a second with three or more too-big critters right beside the ball, or held between
   // two solid things at least one of which is such a critter. The critters attack, and their lunges throw the ball clear (see strike).
   S.boxT = boxers && !frozen && Math.hypot(S.vx, S.vz) < vmax * 0.3 && (boxers.length >= 3 || touching >= 2) ? (S.boxT || 0) + dt : 0;
@@ -3406,17 +3532,20 @@ function update(dt) {
   // ball, trainer, camera
   r = S.d / 2;
   ball.position.set(S.x, S.y, S.z);
-  core.scale.setScalar(r);
+  S.sq = (S.sq || 0) * Math.exp(-11 * dt);
+  squashShell(core, ball.quaternion, r, S.sq);
   const th = trainerHeight(S.d);
   trainer.scale.setScalar(th);
   const tx = S.x - hx * (r + th * 0.32), tz = S.z - hz * (r + th * 0.32);
   let ty = groundAt(tx, tz);
-  if (Math.abs(ty - feet) > Math.max(r, th * 0.4)) ty = feet;
-  trainer.position.set(tx, ty + Math.abs(Math.sin(S.time * 12)) * th * 0.04 * Math.min(1, speed / (vmax * 0.3)), tz);
+  const hop = S.jumped ? Math.max(0, S.y - target) : 0;      // the trainer jumps when the ball does (as high as the ball, up to about their own height)
+  if (Math.abs(ty - (feet - hop)) > Math.max(r, th * 0.4)) ty = feet - hop;
+  trainer.position.set(tx, ty + Math.min(hop, th * 0.9) + (hop > 0 ? 0 : Math.abs(Math.sin(S.time * 12)) * th * 0.04 * Math.min(1, speed / (vmax * 0.3))), tz);
   trainer.rotation.y = S.heading;
   poseTrainer(trainer, S.time, speed > 0.25);
 
-  S.camY += (feet - S.camY) * (1 - Math.exp(-5 * dt));      // follows the ground level, not every wobble
+  const camBase = Math.max(gy, Math.min(S.jumpGy, feet));      // (in a jump: the ground it left, or the ball itself once it has dropped below that, off a cliff)
+  S.camY += ((S.jumped ? camBase + (feet - camBase) * 0.35 : feet) - S.camY) * (1 - Math.exp(-5 * dt));      // follows the ground level, not every wobble (and only a third of a jump, so the ball is seen to leave the ground)
   const cd = S.d * 2.7 + th * 1.6, ch = S.d * 1.15 + th;    // close and low; framed on the trainer while the ball is small
   const camL = Math.hypot(cd, ch) * S.zoom, camE = clamp(Math.atan2(ch, cd) + S.pitch, 0.06, 1.35);
   tmpV.set(S.x - hx * camL * Math.cos(camE), S.camY + camL * Math.sin(camE), S.z - hz * camL * Math.cos(camE));
@@ -3429,6 +3558,7 @@ function update(dt) {
   if (charging) { camera.position.x += (rand() - 0.5) * S.d * 0.05 * S.charge; camera.position.y += (rand() - 0.5) * S.d * 0.05 * S.charge; }     // the wind-up rumbles
   $('speedlines').style.opacity = boosting ? Math.min(0.85, S.boostT * 2.5).toFixed(2) : '0';
   if (S.shake > 0) { S.shake -= dt; camera.position.x += (rand() - 0.5) * S.d * 0.25; camera.position.y += (rand() - 0.5) * S.d * 0.25; }
+  if (S.landT > 0) { S.landT -= dt; camera.position.y -= S.d * 1.3 * dt * Math.sin(Math.PI * clamp(S.landT / 0.22, 0, 1)); }      // landing from a jump: the camera sinks a little and comes back
   S.camLook.set(S.x + hx * S.d, S.camY + Math.max(S.d * 0.7, th * 0.6), S.z + hz * S.d);
   camera.lookAt(S.camLook);
   camera.near = playNear();
@@ -3514,7 +3644,7 @@ function start(mode, cfg = null) {
   const gy = groundAt(START.x, START.z), timed = mode === 'timed';
   Object.assign(S, { state: timed ? 'intro' : 'play', mode, d: START_D, vol3: START_D ** 3, x: START.x, y: gy + START_D / 2, z: START.z, vx: 0, vy: 0, vz: 0, sup: START_D / 2, camY: gy,
     heading: Math.atan2(-START.x, -START.z), time: 0, timeLeft: LEVEL.seconds, reachedAt: null, hitCool: 0, shake: 0, caught: 0, attachedCritters: 0, counts: { type: {}, species: {} }, pitch: 0, zoom: 1, mdx: 0, runSeen: new Map(), runNew: new Set(), zone: '', army: [], autoGate: null,
-    phase: 0, lastSec: -1, boostT: 0, stallT: 0, energy: 1, charge: 0, boostK: 1.35, pen: [], anchor: null, ghostT: 0, boxT: 0, introT: 0, cdT: 0, cdStep: -1, cdHold: null, ev: null, evCount: 0, evUsed: new Set(), evTimes: cfg ? cfg.evTimes.slice() : EVENT_TIMES.map((t) => t + Math.round((rand() - 0.5) * 6)), skyOverride: null, fogK: 1, battleResult: null, battleArena: null, ratioBonus: 0, menuOpen: false });
+    phase: 0, lastSec: -1, boostT: 0, stallT: 0, energy: 1, charge: 0, boostK: 1.35, pen: [], anchor: null, ghostT: 0, boxT: 0, air: false, jumped: false, jumpBuf: 0, jumpWas: false, coyote: 0, jumpGy: 0, landT: 0, introT: 0, cdT: 0, cdStep: -1, cdHold: null, ev: null, evCount: 0, evUsed: new Set(), evTimes: cfg ? cfg.evTimes.slice() : EVENT_TIMES.map((t) => t + Math.round((rand() - 0.5) * 6)), skyOverride: null, fogK: 1, battleResult: null, battleArena: null, ratioBonus: 0, menuOpen: false });
   MODS.knock = 1; MODS.fog = 1; MODS.energy = 1; MODS.speed = 1; MODS.lure = false; H.setIce(false);
   DIFF = DIFFS[cfg ? cfg.diff : save.difficulty] || DIFFS.normal; CPU_SPEED = DIFF.speed;
   clearFx();

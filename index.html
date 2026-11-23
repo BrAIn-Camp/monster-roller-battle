@@ -18,7 +18,8 @@
   #bar { height: 8px; border: 2px solid #2b2540; border-radius: 6px; margin-top: 4px; overflow: hidden; background: #fff; }
   #barfill { height: 100%; width: 0; background: #ffb52e; }
   #size .dashrow { display: flex; align-items: center; gap: 8px; margin-top: 5px; }
-  #size .bolt { font-size: 18px; line-height: 1; filter: drop-shadow(0 1px 0 #2b2540); }
+  #size .bolt { font-size: 18px; line-height: 1; filter: drop-shadow(0 1px 0 #2b2540); display: inline-block; }
+  #size .bolt.spent { animation: boltspent .4s; } @keyframes boltspent { 0% { transform: scale(1); } 30% { transform: scale(1.7) rotate(-12deg); filter: drop-shadow(0 1px 0 #2b2540) brightness(1.6); } 100% { transform: scale(1); } }      /* a jump has taken its bit of the meter */
   #dashlabel { font-size: 10px; font-weight: 800; letter-spacing: 2px; margin-top: 3px; opacity: .7; }
   #energy { position: relative; flex: 1; height: 18px; border: 3px solid #2b2540; border-radius: 10px; overflow: hidden; background: #e9e4f0; }
   #energy .ticks { position: absolute; inset: 0; background: repeating-linear-gradient(90deg, transparent 0 calc(25% - 2px), rgba(43,37,64,.55) calc(25% - 2px) 25%); pointer-events: none; }
@@ -284,11 +285,12 @@
       <b>Roll</b><span><kbd>W</kbd> <kbd>S</kbd> or the arrow keys</span>
       <b>Turn</b><span><kbd>A</kbd> <kbd>D</kbd> or move the mouse (click to capture it)</span>
       <b>Dash</b><span>hold <kbd>Shift</kbd> to wind up, let go to burst</span>
+      <b>Jump</b><span><kbd>Space</kbd>: tap for a hop, hold for full height (up ledges, over what is in your way). It uses a little dash energy.</span>
       <b>Rocket start</b><span>hold forward as the countdown's <b>2</b> lands</span>
       <b>Zoom</b><span>mouse wheel</span>
       <b>Menu</b><span><kbd>Esc</kbd> &nbsp; mute <kbd>M</kbd> &nbsp; steering <kbd>T</kbd> (now: <span id="steer">simple</span>) &nbsp; speed readout <kbd>F3</kbd></span>
-      <b>In the arena</b><span><kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> to roll, <kbd>Shift</kbd> or <kbd>Space</kbd> to dash, hold <kbd>Enter</kbd> to skip</span>
-      <b>Gamepad</b><span>left stick to roll, A or RT to dash, Start for the menu, hold Y to skip the arena</span>
+      <b>In the arena</b><span><kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> to roll, <kbd>Shift</kbd> to dash, <kbd>Space</kbd> to jump over what is coming, hold <kbd>Enter</kbd> to skip</span>
+      <b>Gamepad</b><span>left stick to roll, right trigger to dash, A to jump, Start for the menu, hold Y to skip the arena</span>
     </div>
     <button id="btnHelpBack">Back</button>
   </div>

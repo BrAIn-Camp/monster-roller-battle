@@ -53,6 +53,15 @@ export const TUNE = {
   SCOOP_RATIO: 0.45, SCOOP_GROW: 0.8, SCOOP_GULP: 0.7, SCOOP_DRAG: 0.35,
   BALL_BASE: 1.05, BALL_SPREAD: 0.5, BALL_MAX_GROW: 1.5, BALL_GRIP: 4.5,
   DASH_MULT: 1.8, DASH_TIME: 0.34, DASH_CD: 2.2,           // (a dash covers about 8 m before the ball can stop: with no walls, more was a trap)
+  // The jump. It shares the dash's cooldown: one or the other. For JUMP_AIR seconds the ball is off the floor (its
+  // underside as high as JUMP_H of its width at the top), and while it is more than JUMP_CLEAR of its width up,
+  // whatever comes along the floor passes under it: a hazard going off, a wave, a signature move's shove, a charging
+  // monster, a bumper, a rival ball. Only the wind still pushes it. It cannot steer much up there (JUMP_GRIP of its
+  // grip), it still meets monsters as it would on the floor, and coming down past the edge is as final as rolling
+  // over it. A CPU's ball jumps what it sees coming CPU_JUMP of the time.
+  // A ball that something has passed under cannot be stunned for JUMP_SAFE seconds: without that a dodged rival was
+  // simply still there when the ball came down, and a jump was not worth its cooldown.
+  JUMP_H: 0.9, JUMP_AIR: 0.6, JUMP_CLEAR: 0.22, JUMP_GRIP: 0.3, CPU_JUMP: 0.6, JUMP_LEAD: 0.14, JUMP_SAFE: 1.2,
   CPU_SPEED: 0.9, CPU_THINK: [0.3, 0.55],
   CLASH_STUN: 1.0,
   FREEZE_HEAVY: 0.07, FREEZE_KO: 0.05, FREEZE_GAP: 0.5,   // hit-stop, and the least time between two of them
@@ -113,7 +122,7 @@ export const moveTypeOf = (spec) => (spec.types[0] === 'normal' && spec.types[1]
 // ---------- setting up ----------
 // teams: [{ roster: [{ spec, stars, boost, value }], bonus, ballD, human }]   (roster and bonus from arena-merge.js;
 // bonus is the share the team's spare critters add to each of the six stats, the same for every fighter)
-// rand: the dice. input(team) -> { x, z, dash } for a human-steered ball.
+// rand: the dice. input(team) -> { x, z, dash, jump } for a human-steered ball.
 export function createSim({ arena, teams, rand = Math.random, input = null }) {
   const NT = teams.length, events = [];
   const emit = (e) => { events.push(e); };
@@ -192,11 +201,20 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
   const balls = teams.map((tm, k) => {
     const [cx, cz] = CORNERS[k % 4], D = baseD * (1 + T.BALL_SPREAD * (Math.sqrt(finishD[k] / loD) - 1) / spanD);
     return { isBall: true, team: k, cpu: !tm.human, x: cx * L * 0.12, z: cz * L * 0.12, vx: 0, vz: 0, D, D0: D, R: D / 2, hd: Math.atan2(-cx, -cz),
-      hx: -cx * Math.SQRT1_2, hz: -cz * Math.SQRT1_2, stun: 0, safe: 0, gulp: 0, dashT: 0, dashCd: 0, combo: 0, comboT: 0, rallyCd: 0, cargo: [], scoops: 0, rams: 0, smashes: 0, rallies: 0, ringOuts: 0,
+      hx: -cx * Math.SQRT1_2, hz: -cz * Math.SQRT1_2, y: 0, vy: 0, jumps: 0, dodges: 0, passJ: -1, clipJ: -1, landT: -9, jumpBuf: 0, jumpWas: false, noJump: 0, stun: 0, safe: 0, gulp: 0, dashT: 0, dashCd: 0, combo: 0, comboT: 0, rallyCd: 0, cargo: [], scoops: 0, rams: 0, smashes: 0, rallies: 0, ringOuts: 0,
       aim: null, plan: '', rt: rand() * 0.5, ax: 0, az: 0, wob: rand() * 6.28, moving: false, gone: !!tm.sitOut, teamOut: false };      // (sitOut: no ball at all, for the balance test)
   });
   const maxD = (b) => b.D0 * T.BALL_MAX_GROW;
   function stunBall(b, dur) { if (b.safe > 0 || b.gone) return false; b.stun = dur; b.safe = dur + 1.5; b.dashT = 0; return true; }
+  // Is this ball high enough for what is on the floor to pass under it? Asked only by something that would otherwise
+  // have hit it. A jump that something passed under, and that nothing caught at its start or its end, is a dodge:
+  // counted, and made something of on the screen, a moment after the ball is back down (see moveBall).
+  const up = (b) => b.y > b.D * T.JUMP_CLEAR;
+  function clears(b) {
+    if (up(b)) { b.passJ = b.jumps; if (b.safe < T.JUMP_SAFE) b.safe = T.JUMP_SAFE; return true; }
+    if (b.y > 0 || now - b.landT < 0.25) b.clipJ = b.jumps;
+    return false;
+  }
 
   // ---- things in flight and things that happen a little later (all deterministic: kept in order)
   const shots = [], waves = [], pools = [], timers = [];
@@ -265,7 +283,7 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
     for (const b of balls) {
       if (b.gone || b.team === team) continue;
       const ex = b.x - x, ez = b.z - z, d = hyp(ex, ez) || 0.01;
-      if (d > radius + b.R) continue;
+      if (d > radius + b.R || clears(b)) continue;
       const nx = dx === undefined ? ex / d : dx, nz = dx === undefined ? ez / d : dz;
       b.vx += nx * force; b.vz += nz * force; b.dashT = 0;
     }
@@ -282,7 +300,7 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
     const within = (x, z, s) => { for (const q of Z) if (q.s === s && (x - q.x) * (x - q.x) + (z - q.z) * (z - q.z) < q.r * q.r) return true; return false; };
     const blast = (q, dist, dmg, stun) => {                     // knock back and hurt whatever stands in zone q
       for (const u of field) { if (u.fav || !u.alive || u.drop > 0) continue; const dx = u.x - q.x, dz = u.z - q.z, d = hyp(dx, dz) || 0.01; if (d < q.r + u.r) { u.hp = Math.max(1, u.hp - u.st.maxHp * dmg); emit({ e: 'hit', u: null, t: u, dmg: 0, eff: 1, type: arena.types[0], heavy: false, special: false, dist }); knock(u, dx, dz, dist * K / u.st.weight); stunUnit(u, 0.4); } }
-      for (const b of balls) { if (b.gone) continue; const dx = b.x - q.x, dz = b.z - q.z, d = hyp(dx, dz) || 0.01; if (d < q.r + b.R * 0.6) { b.vx += dx / d * dist * 6.5; b.vz += dz / d * dist * 6.5; if (stun) stunBall(b, stun); } }
+      for (const b of balls) { if (b.gone) continue; const dx = b.x - q.x, dz = b.z - q.z, d = hyp(dx, dz) || 0.01; if (d < q.r + b.R * 0.6 && !clears(b)) { b.vx += dx / d * dist * 6.5; b.vz += dz / d * dist * 6.5; if (stun) stunBall(b, stun); } }
     };
     const cycle = (q, dt, idle, warn, act, onWarn, onFire) => {     // idle -> warn (telegraph) -> active -> idle
       q.t -= dt; if (q.t > 0) return;
@@ -315,7 +333,7 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
         else if (W.s === 2) {
           W.p += speed * dt;
           for (const u of field) if (!u.fav && !u.air && u.alive && Math.abs(u.x * W.dx + u.z * W.dz - W.p) < 1.6 + u.r) shove(u, W.dx * speed * 0.55 * dt, W.dz * speed * 0.55 * dt);
-          for (const b of balls) if (!b.gone && Math.abs(b.x * W.dx + b.z * W.dz - W.p) < 1.6 + b.R * 0.5) { b.vx += W.dx * 22 * dt; b.vz += W.dz * 22 * dt; }
+          for (const b of balls) if (!b.gone && Math.abs(b.x * W.dx + b.z * W.dz - W.p) < 1.6 + b.R * 0.5 && !clears(b)) { b.vx += W.dx * 22 * dt; b.vz += W.dz * 22 * dt; }
           if (W.p > half + 2) { W.s = 0; W.t = 6 + rand() * 4; }
         }
       };
@@ -341,7 +359,7 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
       cross(L * 0.24).slice(1).forEach(([x, z]) => Z.push({ x, z, r, s: 2, hit: 0, bad: false }));
       H.step = (dt) => { for (const q of Z) {
         q.hit = Math.max(0, q.hit - dt);
-        for (const b of balls) { if (b.gone) continue; const dx = b.x - q.x, dz = b.z - q.z, d = hyp(dx, dz) || 0.01; if (d < r + b.R) { const sp = Math.max(hyp(b.vx, b.vz) * 1.05, topSpeed0 * 1.1); b.x = q.x + dx / d * (r + b.R); b.z = q.z + dz / d * (r + b.R); b.vx = dx / d * sp; b.vz = dz / d * sp; b.dashT = 0; q.hit = 0.25; emit({ e: 'bumper', q, b }); } }
+        for (const b of balls) { if (b.gone) continue; const dx = b.x - q.x, dz = b.z - q.z, d = hyp(dx, dz) || 0.01; if (d < r + b.R && !clears(b)) { const sp = Math.max(hyp(b.vx, b.vz) * 1.05, topSpeed0 * 1.1); b.x = q.x + dx / d * (r + b.R); b.z = q.z + dz / d * (r + b.R); b.vx = dx / d * sp; b.vz = dz / d * sp; b.dashT = 0; q.hit = 0.25; emit({ e: 'bumper', q, b }); } }
         for (const u of field) { const dx = u.x - q.x, dz = u.z - q.z, d = hyp(dx, dz) || 0.01; if (d < r + u.r) { u.x = q.x + dx / d * (r + u.r); u.z = q.z + dz / d * (r + u.r); if (u.launched > 0 && q.hit <= 0) { const sp = hyp(u.kx, u.kz) * 1.1 + 4; u.kx = dx / d * sp; u.kz = dz / d * sp; u.launched = Math.max(u.launched, 0.4); q.hit = 0.25; emit({ e: 'bumper', q, b: null }); } } }
       } };
     } else if (kind === 'ice') { H.grip = 2.2; H.top = 1.08; }   // Frost Rink: balls slide (but with no walls, not so far that stopping is hopeless)
@@ -372,7 +390,7 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
       }
       case 'beam': {
         foes(u.team, (v) => { const dx = v.x - u.x, dz = v.z - u.z, along = dx * w.dx + dz * w.dz, side = Math.abs(dx * w.dz - dz * w.dx); if (along > -v.r && along < w.reach + v.r && side < w.width * 0.5 + v.r) { ev.hits.push(v); strike(u, v, w.power, Object.assign({}, o, { dx: w.dx, dz: w.dz })); } });
-        for (const b of balls) { if (b.gone || b.team === u.team) continue; const dx = b.x - u.x, dz = b.z - u.z, along = dx * w.dx + dz * w.dz, side = Math.abs(dx * w.dz - dz * w.dx); if (along > 0 && along < w.reach && side < w.width * 0.5 + b.R) { b.vx += w.dx * 9; b.vz += w.dz * 9; b.dashT = 0; } }
+        for (const b of balls) { if (b.gone || b.team === u.team) continue; const dx = b.x - u.x, dz = b.z - u.z, along = dx * w.dx + dz * w.dz, side = Math.abs(dx * w.dz - dz * w.dx); if (along > 0 && along < w.reach && side < w.width * 0.5 + b.R && !clears(b)) { b.vx += w.dx * 9; b.vz += w.dz * 9; b.dashT = 0; } }
         break;
       }
       case 'wave':                                              // rolls forward from the user, carrying what it meets
@@ -390,7 +408,7 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
         const cx = w.tx, cz = w.tz;
         foes(u.team, (v) => { const dx = v.x - cx, dz = v.z - cz, d = hyp(dx, dz); if (d < w.size + v.r) { ev.hits.push(v); strike(u, v, w.power, M.away ? Object.assign({}, o, { dx: v.x - u.x, dz: v.z - u.z }) : Object.assign({}, o, { dx: dx || 0.01, dz })); } });
         if (M.kb > 1) shoveBalls(u.team, cx, cz, w.size, 2.4 * M.kb, M.away ? w.dx : undefined, M.away ? w.dz : undefined);
-        else if (M.frozen) for (const b of balls) if (!b.gone && b.team !== u.team && hyp(b.x - cx, b.z - cz) < w.size + b.R * 0.5) stunBall(b, 0.8);
+        else if (M.frozen) for (const b of balls) if (!b.gone && b.team !== u.team && hyp(b.x - cx, b.z - cz) < w.size + b.R * 0.5 && !clears(b)) stunBall(b, 0.8);
         break;
       }
       case 'pool':
@@ -406,7 +424,7 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
           foes(u.team, (v) => { if (seen.has(v)) return; const d = (v.x - cur.x) * (v.x - cur.x) + (v.z - cur.z) * (v.z - cur.z); if (d < bd) { bd = d; nxt = v; } });
           from = cur; cur = nxt;
         }
-        for (const b of balls) if (!b.gone && b.team !== u.team && ev.chain.some((v) => hyp(b.x - v.x, b.z - v.z) < b.R + 1.5 * K)) stunBall(b, 0.7);
+        for (const b of balls) if (!b.gone && b.team !== u.team && ev.chain.some((v) => hyp(b.x - v.x, b.z - v.z) < b.R + 1.5 * K) && !clears(b)) stunBall(b, 0.7);
         break;
       }
       case 'strike': {
@@ -454,7 +472,7 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
         if (!W.hit.has(v)) { W.hit.add(v); W.ev.hits.push(v); strike(W.u, v, W.power, Object.assign({}, W.o, { dx: W.dx, dz: W.dz })); if (v.alive) { v.launched = Math.max(v.launched, 0.5); breakWind(v); } }
         if (v.alive && !v.fav) { v.x += W.dx * step * W.carry / v.st.weight; v.z += W.dz * step * W.carry / v.st.weight; v.launched = Math.max(v.launched, 0.12); }
       });
-      for (const b of balls) { if (b.gone || b.team === W.team) continue; const dx = b.x - W.x, dz = b.z - W.z, along = dx * W.dx + dz * W.dz, side = Math.abs(dx * W.dz - dz * W.dx); if (side < W.width * 0.5 + b.R && Math.abs(along - W.p) < 1.4 * K + b.R) { b.vx += W.dx * 34 * dt; b.vz += W.dz * 34 * dt; b.dashT = 0; } }
+      for (const b of balls) { if (b.gone || b.team === W.team) continue; const dx = b.x - W.x, dz = b.z - W.z, along = dx * W.dx + dz * W.dz, side = Math.abs(dx * W.dz - dz * W.dx); if (side < W.width * 0.5 + b.R && Math.abs(along - W.p) < 1.4 * K + b.R && !clears(b)) { b.vx += W.dx * 34 * dt; b.vz += W.dz * 34 * dt; b.dashT = 0; } }
       if (W.p > W.reach) waves.splice(i, 1);
     }
     for (let i = pools.length - 1; i >= 0; i--) {               // lingering pools
@@ -492,7 +510,7 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
       const R = u.rush, step = Math.min(R.left, R.speed * dt);
       u.x += R.dx * step; u.z += R.dz * step; R.left -= step; u.moving = true;
       foes(u.team, (v) => { if (!R.hit.has(v) && hyp(v.x - u.x, v.z - u.z) < u.r + v.r + R.width * 0.5) { R.hit.add(v); const side = (v.x - u.x) * R.dz - (v.z - u.z) * R.dx >= 0 ? 1 : -1; strike(u, v, R.power, Object.assign({}, R.o, { dx: R.dx * 0.75 + R.dz * side * 0.6, dz: R.dz * 0.75 - R.dx * side * 0.6 })); } });
-      for (const b of balls) if (!b.gone && b.team !== u.team && !R.hit.has(b) && hyp(b.x - u.x, b.z - u.z) < u.r + b.R) { R.hit.add(b); b.vx += R.dx * 9; b.vz += R.dz * 9; b.dashT = 0; }
+      for (const b of balls) if (!b.gone && b.team !== u.team && !R.hit.has(b) && hyp(b.x - u.x, b.z - u.z) < u.r + b.R && !clears(b)) { R.hit.add(b); b.vx += R.dx * 9; b.vz += R.dz * 9; b.dashT = 0; }
       // it stops when it runs INTO an edge; one that starts on the edge line and runs along it carries on
       const wall = (Math.abs(u.x) >= lim && u.x * R.dx > 0.25 * Math.abs(u.x)) || (Math.abs(u.z) >= lim && u.z * R.dz > 0.25 * Math.abs(u.z));
       u.x = clamp(u.x, -lim, lim); u.z = clamp(u.z, -lim, lim);
@@ -583,12 +601,42 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
     }
     b.aim = bestT; b.plan = plan;
   }
+  // Is something about to reach this ball along the floor that a jump would take it over? (What a CPU's ball looks
+  // out for: a vent or a bolt about to go off under it, the tide or a rolling move about to arrive, a charging
+  // monster, a signature move about to fire with the ball inside it.)
+  function threat(b) {
+    const lead = T.JUMP_LEAD;
+    if (haz.kind === 'vents' || haz.kind === 'lightning') { for (const q of haz.zones) if (q.s === 1 && q.t < lead && hyp(b.x - q.x, b.z - q.z) < q.r + b.R * 0.6) return true; }
+    else if (haz.kind === 'wave' && haz.W.s === 2) { const gap = b.x * haz.W.dx + b.z * haz.W.dz - haz.W.p - 1.6 - b.R * 0.5; if (gap > 0 && gap < L / 3 * lead) return true; }
+    for (const W of waves) {
+      if (W.team === b.team) continue;
+      const dx = b.x - W.x, dz = b.z - W.z, gap = dx * W.dx + dz * W.dz - W.p - 1.4 * K - b.R, side = Math.abs(dx * W.dz - dz * W.dx);
+      if (side < W.width * 0.5 + b.R && gap > 0 && gap < W.speed * lead) return true;
+    }
+    for (const o of balls) {                                    // a heavier, faster ball about to ram this one
+      if (o === b || o.gone || o.y > 0) continue;
+      const dx = b.x - o.x, dz = b.z - o.z, d = hyp(dx, dz) || 0.001, cs = ((o.vx - b.vx) * dx + (o.vz - b.vz) * dz) / d;
+      if (cs > 3 && d - cs * lead < o.R + b.R && o.D * Math.sqrt(o.D) * (cs + 1) > b.D * Math.sqrt(b.D) * 1.15) return true;
+    }
+    for (const u of field) {
+      if (!u.alive || u.team === b.team) continue;
+      if (u.rush) { const R = u.rush, s = Math.min(R.left, R.speed * lead); if (hyp(b.x - u.x - R.dx * s, b.z - u.z - R.dz * s) < u.r + b.R) return true; }
+      const w = u.wind;
+      if (!w || w.dur - w.t > lead) continue;
+      const M = w.M, dx = b.x - u.x, dz = b.z - u.z;
+      if (M.shape === 'cone') { if (hyp(dx - w.dx * w.reach * 0.5, dz - w.dz * w.reach * 0.5) < w.reach * 0.55 + b.R) return true; }
+      else if (M.shape === 'beam') { const along = dx * w.dx + dz * w.dz; if (along > 0 && along < w.reach && Math.abs(dx * w.dz - dz * w.dx) < w.width * 0.5 + b.R) return true; }
+      else if (M.shape === 'nova') { if (hyp(dx, dz) < w.size + u.r + b.R) return true; }
+      else if (M.shape === 'blast' && (M.kb > 1 || M.frozen)) { if (hyp(b.x - w.tx, b.z - w.tz) < w.size + b.R * 0.5) return true; }
+    }
+    return false;
+  }
   // how far a ram from ball b at closing speed v sends monster u
   const ramDist = (b, u, v, smash) => T.RAM_PUSH * v * clamp(Math.sqrt(b.D / u.h), 0.6, 1.5) * (1 + T.RAM_WEAK * (1 - Math.max(0, u.hp) / u.st.maxHp)) * (smash ? T.SMASH_PUSH : 1) * (1 + (ramp - 1) * T.RAMP_KB) / u.st.weight;
   function moveBall(b, dt, auto) {
     if (b.gone) return;
     const cpu = b.cpu || auto, top = topSpeed0 * (1 + 0.12 * (b.D / b.D0 - 1)) * haz.top * haz.slow(b.x, b.z) * (cpu ? T.CPU_SPEED : 1);
-    let ix = 0, iz = 0, dash = false;
+    let ix = 0, iz = 0, dash = false, jump = false;
     b.dashCd -= dt; b.safe -= dt; b.comboT -= dt; b.gulp -= dt; b.rallyCd -= dt;
     if (b.stun > 0) b.stun -= dt;
     else if (cpu) {
@@ -621,8 +669,13 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
       if (Math.abs(fz) > safe) { iz = -Math.sign(fz) * 1.6; dash = false; }
       const m = hyp(ix, iz); if (m > 1) { ix /= m; iz /= m; }
       b.ax += (ix - b.ax) * Math.min(1, dt * 7); b.az += (iz - b.az) * Math.min(1, dt * 7); ix = b.ax; iz = b.az;      // reaction lag
+      // it jumps what it sees coming, most of the time (a miss is not tried again for half a second)
+      if (b.dashCd <= 0 && b.y <= 0 && now >= b.noJump && threat(b)) { if (rand() < T.CPU_JUMP) { jump = true; dash = false; } else b.noJump = now + 0.5; }
     } else {
       const s = (input && input(b.team)) || {}; ix = +s.x || 0; iz = +s.z || 0; dash = !!s.dash;
+      // (a jump is a press, not a hold: held down, it would go off by itself the moment the cooldown ended. A press a little early still counts.)
+      if (s.jump && !b.jumpWas) b.jumpBuf = 0.15; else b.jumpBuf -= dt;
+      b.jumpWas = !!s.jump; jump = b.jumpBuf > 0;
       const m = hyp(ix, iz); if (m > 1) { ix /= m; iz /= m; }
     }
     if (dash && b.dashCd <= 0 && b.stun <= 0) {
@@ -631,9 +684,22 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
       b.vx = hx * top * T.DASH_MULT; b.vz = hz * top * T.DASH_MULT; b.dashT = T.DASH_TIME; b.dashCd = T.DASH_CD;
       emit({ e: 'dash', b });
     }
+    if (jump && b.dashCd <= 0 && b.stun <= 0 && b.y <= 0) {      // (after the dash: pressed together, the dash has the cooldown)
+      b.vy = 4 * T.JUMP_H * b.D / T.JUMP_AIR; b.dashCd = T.DASH_CD; b.jumps++; b.jumpBuf = 0;
+      emit({ e: 'jump', b });
+    }
+    if (b.vy !== 0 || b.y > 0) {
+      const g = 8 * T.JUMP_H * b.D / (T.JUMP_AIR * T.JUMP_AIR);
+      b.y += b.vy * dt - 0.5 * g * dt * dt; b.vy -= g * dt;
+      if (b.y <= 0) {
+        b.y = 0; b.vy = 0; b.landT = now; emit({ e: 'land', b });
+        const j = b.jumps;
+        later(0.25, () => { if (!b.gone && b.passJ === j && b.clipJ !== j) { b.dodges++; emit({ e: 'dodge', b }); } });
+      }
+    }
     if (b.stun > 0) { const f = fade(2.2 * dt); b.vx *= f; b.vz *= f; }
     else if (b.dashT > 0) b.dashT -= dt;                         // a dash is a committed burst: no steering until it ends
-    else { const k = 1 - fade(haz.grip * dt); b.vx += (ix * top - b.vx) * k; b.vz += (iz * top - b.vz) * k; }
+    else { const k = 1 - fade(haz.grip * (b.y > 0 ? T.JUMP_GRIP : 1) * dt); b.vx += (ix * top - b.vx) * k; b.vz += (iz * top - b.vz) * k; }
     let sp = hyp(b.vx, b.vz);
     const cap = topSpeed0 * 3.2;                                 // however hard it was hit
     if (sp > cap) { b.vx *= cap / sp; b.vz *= cap / sp; sp = cap; }
@@ -709,6 +775,7 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
       if (a.gone || b.gone) continue;
       const dx = b.x - a.x, dz = b.z - a.z, min = a.R + b.R, d = hyp(dx, dz) || 0.001;
       if (d >= min) continue;
+      if (up(a) !== up(b)) { clears(up(a) ? a : b); continue; }      // one of them is in the air: it goes over the other
       const nx = dx / d, nz = dz / d, ma = cube(a.D), mb = cube(b.D), sh = (min - d) / (ma + mb);
       a.x -= nx * sh * mb; a.z -= nz * sh * mb; b.x += nx * sh * ma; b.z += nz * sh * ma;
       const va = a.vx * nx + a.vz * nz, vb = b.vx * nx + b.vz * nz, cs = va - vb;
@@ -796,7 +863,7 @@ export function createSim({ arena, teams, rand = Math.random, input = null }) {
     status() { tally(); return teams.map((tm, k) => ({ alive: stat[k].alive, all: recs[k].length, hp: maxHpAll[k] ? clamp(stat[k].hp / maxHpAll[k], 0, 1) : 0, scooped: balls[k].cargo.length, favoured: stat[k].fav, ballOut: balls[k].gone })); },
     result() {
       const mvp = everyone.reduce((a, u) => (!a || u.dmg > a.dmg ? u : a), null);
-      return { winner, timedOut, seconds: fought, scoops: balls.map((b) => b.scoops), rams: balls.map((b) => b.rams), smashes: balls.map((b) => b.smashes), rallies: balls.map((b) => b.rallies), ringOuts: balls.map((b) => b.ringOuts),
+      return { winner, timedOut, seconds: fought, jumps: balls.map((b) => b.jumps), dodges: balls.map((b) => b.dodges), scoops: balls.map((b) => b.scoops), rams: balls.map((b) => b.rams), smashes: balls.map((b) => b.smashes), rallies: balls.map((b) => b.rallies), ringOuts: balls.map((b) => b.ringOuts),
         mvp: mvp && mvp.dmg > 0 ? { name: mvp.spec.name, dex: mvp.spec.dex, team: mvp.team, damage: Math.round(mvp.dmg), kills: mvp.kills } : null };
     },
   };

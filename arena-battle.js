@@ -602,6 +602,10 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
       }
       case 'clash': { const a = e.a, b = e.b, x = (a.x + b.x) / 2, z = (a.z + b.z) / 2; if (e.speed < 3) break; fx.puff(x, Math.min(a.R, b.R), z, 10, 0xffffff, 6, 0.35, 0.4); fx.star(x, Math.min(a.R, b.R), z, { size: 2.5 * K, color: 0xffffff, life: 0.3 }); tone(170, 70, 0.22, 'sawtooth', 0.18); bump(0.25); if (e.loser) tone(900, 300, 0.3, 'triangle', 0.14); break; }
       case 'dash': { const b = e.b; if (!b.cpu) tone(300, 700, 0.14, 'sine', 0.14); fx.puff(b.x, 0.3, b.z, 8, 0xf5efe0, 4, 0.4, 0.5); break; }
+      case 'jump': { const b = e.b; if (!b.cpu) tone(280, 620, 0.13, 'sine', 0.13); fx.puff(b.x, 0.2, b.z, 7, 0xf5efe0, 3.5, 0.35, 0.45); fx.ring(b.x, b.z, { r0: b.R * 0.6, r1: b.R * 1.5, color: 0xffffff, life: 0.22, thin: true }); break; }
+      case 'land': { const b = e.b; if (!b.cpu) tone(200, 70, 0.14, 'triangle', 0.14); fx.puff(b.x, 0.2, b.z, 10, 0xf5efe0, 5, 0.4, 0.5); fx.ring(b.x, b.z, { r0: b.R * 0.8, r1: b.R * 2.1, color: teams[b.team].hex, life: 0.28 }); break; }
+      // whatever it was passed under the ball: a flash of sparks at its feet and, for the player's own, a bright two-note "got away with it"
+      case 'dodge': { const b = e.b, mine = b.team === myTeam; fx.ring(b.x, b.z, { r0: b.R, r1: b.R * 2.6, color: 0xffe169, life: 0.35, thin: true }); fx.burst(b.x, 0.3, b.z, mine ? 12 : 6, 0xffe169, 7, 0.3 * K, 0.4); if (mine) { tone(988, 1319, 0.08, 'triangle', 0.12); tone(1319, 1976, 0.12, 'triangle', 0.1, 0.07); } break; }
       case 'scoop': {
         const b = e.b, u = e.u, w = ballViews[b.team]; stick(w, u);
         const f = 520 * 1.09 ** Math.min(b.combo, 12);
@@ -612,7 +616,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
       }
       case 'free': { unstick(ballViews[e.b.team], e.u); fx.burst(e.u.x, e.u.h * 0.5, e.u.z, 8, teams[e.u.team].hex, 5, 0.3 * K, 0.5); fx.chevrons(e.u.x, e.u.h + 0.5, e.u.z, { color: teams[e.u.team].hex, n: 2, size: 0.4 }); tone(600, 1200, 0.15, 'triangle', 0.1); break; }
       case 'ballout': {
-        const b = e.b, w = ballViews[b.team]; w.fallen = true; w.vy = 2; w.y = b.R; w.fx = b.x; w.fz = b.z;
+        const b = e.b, w = ballViews[b.team]; w.fallen = true; w.vy = Math.max(2, b.vy); w.y = b.R + b.y; w.fx = b.x; w.fz = b.z;
         tone(1100, 140, 0.9, 'sine', 0.2); fx.ring(b.x, b.z, { r0: b.R, r1: b.R + 4 * K, color: teams[b.team].hex, life: 0.5, opacity: 1 }); bump(0.4);
         if (hud) hud.panels[b.team].root.classList.add('ar-noball');
         break;
@@ -880,9 +884,9 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
       musterCam = { x: c.cx * L * 0.1, z: c.cz * L * (c.cz > 0 ? 0.3 : 0.1), f: 0.3 };
       tone(330, 494, 0.16, 'triangle', c.team === myTeam ? 0.13 : 0.06);
     }
-    // a press of dash (any player's) hurries the count to its end
+    // a press of dash or jump (any player's) hurries the count to its end
     let dash = false;
-    if (input) for (let k = 0; k < NT; k++) if (teams[k].human) { const st = input(k); if (st && st.dash) dash = true; }
+    if (input) for (let k = 0; k < NT; k++) if (teams[k].human) { const st = input(k); if (st && (st.dash || st.jump)) dash = true; }
     if (dash && !dashWas && turnT > 0.2 && turnT < TURN_IN + c.sixT + c.restT) turnT = TURN_IN + c.sixT + c.restT;
     dashWas = dash;
     turnT += dt;
@@ -935,7 +939,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     hud.big = el('div', 'ar-big', root); hud.sub = el('div', 'ar-pill ar-sub', root);
     hud.skip = el('div', 'ar-pill ar-skip', root, 'Hold Enter to skip<i></i>'); if (noSkip) hud.skip.style.display = 'none';
     hud.skipFill = hud.skip.lastChild;
-    const KEYS = '<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> roll <span></span> <kbd>Shift</kbd> dash';
+    const KEYS = '<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> roll <span></span> <kbd>Shift</kbd> dash <span></span> <kbd>Space</kbd> jump';
     if (myTeam >= 0) hud.keys = el('div', 'ar-pill ar-keys', root, phase === 'muster' ? '<kbd>Shift</kbd> hurry' : KEYS);      // gone after the first dash
     hud.keysHtml = KEYS;
     if (phase !== 'muster') root.classList.add('ar-fighting');
@@ -946,7 +950,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     if (!hud) return;
     const t = sim.time, left = Math.max(0, Math.ceil(TUNE.RAMP_AT - t)), hot = sim.ramp > 1;
     setText(hud.clock, hot ? '×' + sim.ramp.toFixed(1) : Math.floor(left / 60) + ':' + String(left % 60).padStart(2, '0'));
-    if (hud.keys && !hud.keysGone && (sim.balls[myTeam].dashCd > 0 || sim.balls[myTeam].gone || t > 14)) { hud.keysGone = true; hud.keys.classList.add('ar-gone'); }
+    if (hud.keys && !hud.keysGone && ((sim.balls[myTeam].dashCd > 0 && t > 6) || sim.balls[myTeam].gone || t > 14)) { hud.keysGone = true; hud.keys.classList.add('ar-gone'); }
     const low = phase === 'fight' && !hot && left <= 5;
     if (hud.low !== low) { hud.low = low; hud.clock.classList.toggle('ar-low', low); }
     if (low && left !== lowTick) { lowTick = left; tone(1000, 1000, 0.05, 'square', 0.1); }
@@ -1057,7 +1061,7 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
     if (bench.length) {                                         // the stands: a restless crowd, on its feet when its team scores or wins
       for (let k = 0; k < NT; k++) excite[k] = Math.max(k === cheerTeam ? 1 : 0, excite[k] - dt * 0.9);
       // a player whose ball has gone can still get their stand on its feet with the dash button (it changes nothing in the fight)
-      if (myTeam >= 0 && sim.balls[myTeam].gone && phase === 'fight' && input) { const st = input(myTeam); if (st && st.dash && excite[myTeam] < 0.5) { excite[myTeam] = 1; tone(660, 990, 0.12, 'triangle', 0.1); tone(990, 1320, 0.14, 'triangle', 0.1, 0.1); } }
+      if (myTeam >= 0 && sim.balls[myTeam].gone && phase === 'fight' && input) { const st = input(myTeam); if (st && (st.dash || st.jump) && excite[myTeam] < 0.5) { excite[myTeam] = 1; tone(660, 990, 0.12, 'triangle', 0.1); tone(990, 1320, 0.14, 'triangle', 0.1, 0.1); } }
       for (let i = 0; i < bench.length; i++) { const q = bench[i], e = excite[q.k], hop = Math.abs(Math.sin(T * (4 + e * 5) + q.phase)) * q.s * (0.12 + e * 0.9); m4.makeScale(q.s, q.s * 1.2, q.s).setPosition(q.x, 0.06 + q.s * 0.6 + hop, q.z); crowd.setMatrixAt(i, m4); }
       crowd.instanceMatrix.needsUpdate = true;
     }
@@ -1078,23 +1082,23 @@ export function createBattle({ arena, teams = [], specOf, plans, buildActor, bui
         if (w.trainer) { const [ox, oz] = Math.abs(w.fx) > Math.abs(w.fz) ? [Math.sign(w.fx), 0] : [0, Math.sign(w.fz)]; w.trainer.rotation.y = Math.atan2(ox, oz) + Math.sin(T * 5) * 0.15; if (poseTrainer) poseTrainer(w.trainer, T, false); }
         continue;
       }
-      w.group.visible = dropIn > 0; w.group.position.set(b.x, R + (1 - bounceOut(dropIn)) * L * 0.4, b.z); w.roll.scale.setScalar(R);
+      w.group.visible = dropIn > 0; w.group.position.set(b.x, R + b.y + (1 - bounceOut(dropIn)) * L * 0.4, b.z); w.roll.scale.setScalar(R);
       for (let i = 0; i < w.roll.children.length; i++) { const c = w.roll.children[i]; if (c.userData.arH) c.scale.setScalar(Math.min(c.userData.arH, R * 0.9) / R); }
       if (sp > 0.05 && fdt > 0) { v3.set(b.vz / sp, 0, -b.vx / sp); w.roll.quaternion.premultiply(q4.setFromAxisAngle(v3, sp * fdt / R)); }
       // the ring under a ball swells when it has just scooped; under the player's own it turns red when the ball is
       // about to run out of floor (where it will be in half a second is past the edge)
       const risk = b.team === myTeam && !w.dim && (Math.abs(b.x + b.vx * 0.5) > half - R * 0.3 || Math.abs(b.z + b.vz * 0.5) > half - R * 0.3);
       if (risk !== w.risk) { w.risk = risk; w.ring.material = risk ? glass(0xff3b2e, 0.95) : glass(tm.hex, 0.9); if (risk) tone(880, 660, 0.08, 'square', 0.1); }
-      w.ring.position.set(b.x, 0.03, b.z); w.ring.scale.setScalar(R * (1.25 + 0.35 * Math.max(0, b.gulp) / TUNE.SCOOP_GULP + (risk ? 0.35 + 0.2 * Math.sin(T * 26) : 0))); w.ring.visible = dropIn >= 1;
+      w.ring.position.set(b.x, 0.03, b.z); w.ring.scale.setScalar(R * (1.25 - 0.4 * Math.min(1, b.y / (b.D * TUNE.JUMP_H)) + 0.35 * Math.max(0, b.gulp) / TUNE.SCOOP_GULP + (risk ? 0.35 + 0.2 * Math.sin(T * 26) : 0))); w.ring.visible = dropIn >= 1;      // (under a ball in the air it draws in: where it will come down)
       if (w.trainer) {
         const th = clamp(b.D * 0.7, 1.2, L * 0.09), back = R + th * 0.22;
-        w.trainer.visible = dropIn >= 1; w.trainer.scale.setScalar(th); w.trainer.position.set(b.x - Math.sin(b.hd) * back, b.team === cheerTeam ? Math.abs(Math.sin(T * 7)) * 0.8 : 0, b.z - Math.cos(b.hd) * back); w.trainer.rotation.y = b.hd;
+        w.trainer.visible = dropIn >= 1; w.trainer.scale.setScalar(th); w.trainer.position.set(b.x - Math.sin(b.hd) * back, b.team === cheerTeam ? Math.abs(Math.sin(T * 7)) * 0.8 : Math.min(b.y, th * 0.8), b.z - Math.cos(b.hd) * back); w.trainer.rotation.y = b.hd;
         if (poseTrainer) poseTrainer(w.trainer, T, b.moving && b.stun <= 0);
       }
-      w.stars.visible = b.stun > 0; if (b.stun > 0) { w.stars.position.set(b.x, R * 2 + 0.7, b.z); w.stars.rotation.y = T * 9; }
-      if (sp > 1 && (b.dashT > 0 || sp > sim.topSpeed0 * 1.3)) { w.dust += dt; if (w.dust > 0.03) { w.dust = 0; fx.spark(b.x - b.vx / sp * R, 0.2, b.z - b.vz / sp * R, (vr() - 0.5) * 2, 1 + vr(), (vr() - 0.5) * 2, 0xf5efe0, 0.25 + R * 0.2, 0.45); } }
+      w.stars.visible = b.stun > 0; if (b.stun > 0) { w.stars.position.set(b.x, R * 2 + b.y + 0.7, b.z); w.stars.rotation.y = T * 9; }
+      if (sp > 1 && b.y <= 0 && (b.dashT > 0 || sp > sim.topSpeed0 * 1.3)) { w.dust += dt; if (w.dust > 0.03) { w.dust = 0; fx.spark(b.x - b.vx / sp * R, 0.2, b.z - b.vz / sp * R, (vr() - 0.5) * 2, 1 + vr(), (vr() - 0.5) * 2, 0xf5efe0, 0.25 + R * 0.2, 0.45); } }
       if (w.arrow) {
-        w.arrow.position.set(b.x, R * 2 + 1.6 + Math.sin(T * 5) * 0.25, b.z); w.arrow.visible = dropIn >= 1;
+        w.arrow.position.set(b.x, R * 2 + b.y + 1.6 + Math.sin(T * 5) * 0.25, b.z); w.arrow.visible = dropIn >= 1;
         const wd = Math.max(1.6, R * 1.8), f = clamp(1 - b.dashCd / TUNE.DASH_CD, 0, 1), on = dropIn >= 1 && f < 1;
         w.cdBg.visible = w.cdFill.visible = on;
         if (on) { w.cdBg.position.set(b.x, 0.04, b.z + R + 0.7); w.cdBg.scale.x = wd + 0.16; w.cdFill.position.set(b.x - wd / 2 + wd * f / 2, 0.06, b.z + R + 0.7); w.cdFill.scale.x = Math.max(0.01, wd * f); }
