@@ -1365,7 +1365,7 @@ function populateSeeded(seed) {
     const o = { id: opt.id ?? S.nextId, kind: e.kind, spec: e.spec, size, rad, group, bonus: opt.bonus ?? 1, on: false, fly: null, cool: 0, contrib: 0, ldist: 0, vis: size, lump: new V3(), spawnT: 0,
       gk: e.kind === 'creature' ? (e.spec.height0 ?? e.spec.height) / e.spec.height : 1,
       due: 0, baked: false, understudy: false, gone: false, casts: false, cell: null, by: null, script: null, noPick: false, onPick: null, onBump: null,
-      ai: undefined, timer: 0, home: null, tx: 0, tz: 0, phase: 0, leader: null, aiT: 0, yaw: undefined, lt: 0, struck: false, lunB: null, nearT: 0, armySpec: null,
+      ai: undefined, timer: 0, home: null, tx: 0, tz: 0, phase: 0, leader: null, aiT: 0, yaw: undefined, lt: 0, struck: false, lunB: null, nearT: 0, armySpec: null, stunEnd: 0, stunAt: 0, stunYaw: 0, shrugEnd: 0,
       mx: NaN, my: 0, mz: 0, ms: 0, mv: 0, bN: null, bS: null, ntx: undefined, ntz: 0, nyaw: undefined, nsig: undefined, wpos: null,
       restT: undefined, rx: 0, ry: 0, rz: 0, rs: 0, rr: 0, bi: 0, big: 0, bm: null, bgeo: null, bkx: 0, bky: 0, bkz: 0, bks: 0, brx: 0, bry: 0, brz: 0 };
     S.nextId = Math.max(S.nextId, o.id) + 1; S.byId.set(o.id, o);
@@ -1726,6 +1726,39 @@ function tickParts(dt) {
   if (pMesh.instanceColor) pMesh.instanceColor.needsUpdate = true;
 }
 const DUST = [0xe6d9b8, 0xd8c8a0, 0xf3ead7];
+// Stars circling a stunned critter's head: three of them, going out one at a time as its seconds run down, so how long
+// is left can be read at a glance; they flicker at the very end. Each is drawn twice, a dark one just behind a bright
+// one, to stand out against snow and sky as well as grass. One batch for all of them.
+const STAR_MAX = 96, dazed = [], starFwd = new V3();
+const starGeo = (() => {
+  const pts = [], pos = [];
+  for (let i = 0; i < 10; i++) { const a = i / 10 * Math.PI * 2 + Math.PI / 2, r = i % 2 ? 0.45 : 1; pts.push(Math.cos(a) * r, Math.sin(a) * r); }
+  for (let i = 0; i < 10; i++) { const j = (i + 1) % 10; pos.push(0, 0, 0, pts[i * 2], pts[i * 2 + 1], 0, pts[j * 2], pts[j * 2 + 1], 0); }
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); return g;
+})();
+const starMesh = new THREE.InstancedMesh(starGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, fog: false }), STAR_MAX);
+starMesh.frustumCulled = false; starMesh.count = 0; scene.add(starMesh);
+function drawStars() {
+  let n = 0;
+  camera.getWorldDirection(starFwd);
+  for (let i = dazed.length - 1; i >= 0; i--) {
+    const o = dazed[i], left = o.stunEnd - clock;
+    if (left <= 0 || o.on || o.gone) { dazed.splice(i, 1); if (!o.on && !o.gone) o.group.rotation.set(0, o.stunYaw, 0); continue; }      // (it has come round: upright again)
+    const p = o.group.position, h = o.size, age = clock - o.stunAt, stars = Math.min(3, Math.ceil(left / (STUN_TIME / 3)));
+    const sz = Math.max(h * 0.2, S.d * 0.085) * Math.min(1, age * 7) * (1 + 0.5 * Math.max(0, 1 - age * 4)) * (left < 0.6 && Math.floor(left * 14) % 2 ? 0.5 : 1);
+    const orbit = Math.max(o.rad * 0.9, h * 0.36), y = p.y + h * 1.05 + sz * 0.9;
+    for (let k = 0; k < stars && n < STAR_MAX - 1; k++) {
+      const a = age * 4.2 + k * 2.094, x = p.x + Math.cos(a) * orbit, z = p.z + Math.sin(a) * orbit, yy = y + Math.sin(a * 1.3) * h * 0.05;
+      pDummy.quaternion.copy(camera.quaternion); pDummy.rotateZ(age * 3 + k);
+      pDummy.position.set(x, yy, z); pDummy.scale.setScalar(sz); pDummy.updateMatrix();
+      starMesh.setMatrixAt(n, pDummy.matrix); starMesh.setColorAt(n++, pCol.setHex(k === 1 ? 0xfff3a8 : 0xffd23f));
+      pDummy.position.set(x + starFwd.x * sz * 0.2, yy + starFwd.y * sz * 0.2, z + starFwd.z * sz * 0.2); pDummy.scale.setScalar(sz * 1.35); pDummy.updateMatrix();
+      starMesh.setMatrixAt(n, pDummy.matrix); starMesh.setColorAt(n++, pCol.setHex(0x2b2540));
+    }
+  }
+  starMesh.count = n; starMesh.instanceMatrix.needsUpdate = true;
+  if (starMesh.instanceColor) starMesh.instanceColor.needsUpdate = true;
+}
 // Winding up: dust kicked out behind the spinning ball and sparks flying off it, more as the charge builds (c = 0..1).
 function chargeFx(Bq, c, dt) {
   const d = Bq.d, r = d / 2, hx = Math.sin(Bq.heading), hz = Math.cos(Bq.heading), gy = groundAt(Bq.x, Bq.z), k = Math.pow(d, 0.7), col = TEAMS[Bq.team].hex;
@@ -1806,7 +1839,7 @@ function aimArrow(Bq, c) {
   });
 }
 function clearFx() {
-  parts.length = 0; pMesh.count = 0; arrows.clear(); S.arrow = null; S.spot = null; for (const id of [...markers.keys()]) unmark(id); fx.clear(); NET.fxRoots.clear(); NET.fxNodes.clear(); }
+  parts.length = 0; pMesh.count = 0; dazed.length = 0; starMesh.count = 0; arrows.clear(); S.arrow = null; S.spot = null; for (const id of [...markers.keys()]) unmark(id); fx.clear(); NET.fxRoots.clear(); NET.fxNodes.clear(); }
 
 // ---------- pickups and knocks ----------
 const tmpV = new V3(), tmpQ = new THREE.Quaternion(), tmpQ2 = new THREE.Quaternion(), UP = new V3(0, 1, 0), downLocal = new V3(), axis = new V3();
@@ -1839,9 +1872,10 @@ function stick(ballGroup, o, cx, cy, cz, r) {
   ballGroup.position.set(cx, cy, cz);
   ballGroup.updateMatrixWorld(true);
   ballGroup.attach(o.group);
-  o.on = true; o.mx = NaN;                       // (its matrix is its place on the ball now: once free again it must be worked out afresh, wherever it lands)
+  o.on = true; o.stunEnd = 0; o.mx = NaN;        // (its matrix is its place on the ball now: once free again it must be worked out afresh, wherever it lands)
 }
 function attach(o) {
+  if (o.stunEnd > clock) S.stunGot = (S.stunGot | 0) + 1;
   stick(ball, o, S.x, S.y, S.z, S.d / 2);
   o.contrib = growthOf(S, o);
   S.vol3 += o.contrib; S.d = Math.cbrt(S.vol3);
@@ -1938,7 +1972,7 @@ const armyDrop = (army, o) => { const k = army.lastIndexOf(o.armySpec || o.spec)
 // lets it pass through critters, so a ball boxed in by several of them always gets out.
 function startLunge(o, Bq) {
   if (NET.client) { if (Bq === S && o.spec.move !== 'still') NET.lunges.add(o.id); return; }      // the host runs the critters: ask it
-  if (o.ai === 'lunge' || o.ai === 'retreat' || o.script || o.spec.move === 'still') return;
+  if (o.ai === 'lunge' || o.ai === 'retreat' || o.script || o.spec.move === 'still' || o.stunEnd > clock) return;
   o.ai = 'lunge'; o.lt = 0; o.struck = false; o.lunB = Bq;
   cry(o.spec, 0.04);
 }
@@ -1948,7 +1982,7 @@ function strike(Bq, o, nx, nz) {                  // (nx, nz) points from the cr
   const k = Math.pow(Bq.d, 0.7);
   for (let i = 0; i < 10; i++) puff(Bq.x - nx * Bq.d / 2, groundAt(Bq.x, Bq.z) + Bq.d * (0.2 + 0.5 * rand()), Bq.z - nz * Bq.d / 2, (nx + rand() - 0.5) * 4 * k, (1 + 2 * rand()) * k, (nz + rand() - 0.5) * 4 * k, 0.35, 0.1 * k, i % 2 ? 0xffffff : 0xffe169, 6 * k);
   if (Bq === S) {
-    S.vx = nx * vm * 1.8; S.vz = nz * vm * 1.8; S.charge = 0;
+    S.vx = nx * vm * 1.8; S.vz = nz * vm * 1.8; S.energy = Math.min(1, S.energy + S.charge); S.charge = 0; S.ramT = 0;      // (a wind-up it broke is given back to the meter: that dash was never used)
     if (o.size > S.d) hardHit(-nx, -nz, vm, 1);           // only a critter taller than the ball knocks anything off; smaller ones just shove
     else { S.shake = 0.15; sfxBump(); }
   } else if (Bq.remote) {                            // another player's ball: their machine moves it, so send the shove
@@ -1960,6 +1994,45 @@ function strike(Bq, o, nx, nz) {                  // (nx, nz) points from the cr
   }
 }
 const pickRatio = (Bq) => PICK_RATIO + (Bq.ratioBonus || 0);
+// The ram. A dash burst into a critter that is a little too big to roll up (up to STUN_REACH times the limit) stuns it
+// for STUN_TIME seconds, and while it is stunned any ball that could have stunned it can roll it up. One bigger than
+// that shrugs the ram off. (`clock`, not the round's own: a stun must not be cut short or drawn out when that restarts.)
+const STUN_TIME = 4, STUN_REACH = 1.3, RAM_MIN = 0.9;      // RAM_MIN: how fast the ball must be closing, as a share of its ordinary top speed (so only a burst does it)
+const RAM_CHARGE = 0.5;   // and the burst must have been wound up at least this far (half the meter): a tap of the dash button, which costs next to nothing, stuns nothing
+const canRoll = (Bq, o) => !o.noPick && o.size <= Bq.d * pickRatio(Bq) * (o.stunEnd > clock ? STUN_REACH : 1);
+const stunnable = (Bq, o) => o.kind === 'creature' && !o.noPick && !o.script && !o.onBump && o.size <= Bq.d * pickRatio(Bq) * STUN_REACH;
+const earshot = (p) => Math.hypot(p.x - S.x, p.z - S.z) < 25 + S.d * 6;
+function stunCritter(o, dur = STUN_TIME) {         // (on every machine: the host decides, the others are told)
+  const again = o.stunEnd > clock;                 // (a player's own machine has shown it already when the host's word comes back)
+  if (!again) { o.stunAt = clock; o.stunYaw = o.group.rotation.y; }
+  o.stunEnd = clock + dur; o.cool = Math.max(o.cool, 0.3); o.due = 0;
+  if (!NET.client) { o.ai = 'rest'; o.timer = 1.2; }
+  if (!dazed.includes(o)) dazed.push(o);
+  if (again) return;
+  const p = o.group.position, h = o.size, k = Math.pow(Math.max(h, 0.2), 0.7);
+  for (let i = 0; i < 16; i++) { const a = i / 16 * 6.28; puff(p.x, p.y + h * 0.75, p.z, Math.cos(a) * 3.4 * k, (1.4 + rand() * 2.2) * k, Math.sin(a) * 3.4 * k, 0.35 + rand() * 0.2, (0.1 + 0.08 * rand()) * k, i % 2 ? 0xffffff : 0xffe169, 7 * k); }
+  if (earshot(p)) { tone(250, 85, 0.16, 'square', 0.13); for (let i = 0; i < 3; i++) tone(i % 2 ? 1760 : 1320, i % 2 ? 1320 : 1760, 0.09, 'sine', 0.085 - i * 0.012, 0.1 + i * 0.12); }
+}
+// A ball has rammed a critter it can stun. A player who is not the host sees it at once and asks the host, who tells everyone.
+function ramStun(o, Bq) {
+  Bq.stuns = (Bq.stuns | 0) + 1;
+  if (NET.client) { if (Bq === S) { stunCritter(o); netHost(['st', o.id]); } return; }
+  stunCritter(o); netAll(['sn', o.id, STUN_TIME]);
+}
+// Too big even for that: it shakes its head and stands its ground.
+function shrug(o) {
+  if (o.shrugEnd > clock - 0.5) return;
+  o.shrugEnd = clock + 0.45; o.due = 0; o.stunYaw = o.group.rotation.y;
+  const p = o.group.position, k = Math.pow(Math.max(o.size, 0.2), 0.7);
+  for (let i = 0; i < 6; i++) puff(p.x, p.y + o.size * 0.5, p.z, (rand() - 0.5) * 3 * k, (0.8 + rand()) * k, (rand() - 0.5) * 3 * k, 0.3, 0.09 * k, 0xcfc8d8, 6 * k);
+  if (earshot(p)) tone(150, 120, 0.09, 'square', 0.08);
+}
+// How a stunned critter stands (it sways on the spot), and the head-shake of one that shrugged a ram off.
+function dazePose(o) {
+  const t = clock - o.stunAt;
+  o.group.rotation.set(Math.sin(t * 5.3) * 0.16, o.stunYaw + Math.sin(t * 2.1) * 0.3, Math.cos(t * 4.1) * 0.2);
+}
+function shrugPose(o) { const left = o.shrugEnd - clock; if (left > 0) o.group.rotation.y = o.stunYaw + Math.sin(left * 42) * 0.32 * left / 0.45; }      // (from where it faced, not added frame on frame: some critters' facing is never set again)
 const ballName = (Bq) => `${TOK}N${Bq.team}${TOK}`;        // read as "You" or the team's name by whoever sees it (loc)
 function give(Bq, o) { if (o.on || !S.objects.includes(o)) return; if (Bq === S) attach(o); else rivalAttach(Bq, o); }
 function knock(Bq, nx, nz, n) { n = Math.max(1, Math.round(n * MODS.knock)); if (Bq === S) hardHit(nx, nz, topSpeed(S.d), n); else rivalKnock(Bq, nx, nz, n); }
@@ -2026,7 +2099,8 @@ function updateCreature(o, dt, B) {
   const sp = o.spec, h = o.size, p = o.group.position;
   const bx = B.x - p.x, bz = B.z - p.z, dist = Math.hypot(bx, bz) || 1e-6;
   if (o.script) { o.script(o, dt, B); if (!o.gone && !o.on) { const air2 = sp.move === 'fly' || sp.move === 'float'; p.y = groundAt(p.x, p.z) + (air2 ? h * 0.3 : Math.abs(Math.sin(S.time * 9 + o.phase)) * h * 0.08); } return; }
-  const pickable = !o.noPick && h <= B.d * pickRatio(B), air = sp.move === 'fly' || sp.move === 'float', still = sp.move === 'still';
+  if (o.stunEnd > clock) { dazePose(o); return; }
+  const pickable = canRoll(B, o), air = sp.move === 'fly' || sp.move === 'float', still = sp.move === 'still';
   let speed = (sp.move === 'fly' ? 1.4 : sp.move === 'slither' ? 0.75 : 0.95) * Math.sqrt(h), ux = 0, uz = 0;
   o.timer -= dt;
   const scare = sp.temper === 'timid' ? 6 * B.d + 4 * h : sp.temper === 'calm' ? 2.2 * B.d + 1.5 * h : 3.5 * B.d + 2.5 * h;
@@ -2095,6 +2169,7 @@ function updateCreature(o, dt, B) {
   if (moving && o.ai !== 'lunge') o.yaw = Math.atan2(ux, uz);
   const tip = o.ai === 'lunge' ? (o.lt < 0.4 ? -0.45 * (o.lt / 0.4) : 0.6) : 0;          // leans back to wind up, then pitches forward into the lunge
   if (o.yaw !== undefined) o.group.rotation.set(tip, o.yaw + (moving && sp.move === 'slither' ? Math.sin(wob) * 0.35 : 0), moving && !air ? Math.sin(wob) * 0.09 : 0);
+  if (o.shrugEnd > clock) shrugPose(o);
 }
 
 // ---------- rivals: three CPU players rolling their own balls on the same map ----------
@@ -2128,6 +2203,7 @@ function makeRivals() {
 const rivalOf = (t) => rivals.find((R) => R.team === t);
 const ballOf = (t) => (t === S.team ? S : rivalOf(t));
 function rivalAttach(R, o) {
+  if (o.stunEnd > clock) R.stunGot = (R.stunGot | 0) + 1;
   stick(R.ball, o, R.x, R.y, R.z, R.d / 2);
   o.contrib = growthOf(R, o);
   R.vol3 += o.contrib; R.d = Math.cbrt(R.vol3);
@@ -2179,11 +2255,15 @@ function rivalContacts(R) {
     if (o.fly || o.on || o.gone) continue;       // (in the air, or rolled up or taken away since the list was made)
     const p = o.group.position, ox = p.x - R.x, oz = p.z - R.z, dist = Math.hypot(ox, oz), reach = R.d / 2 + o.rad;
     if (dist >= reach || R.y - r > p.y + o.size || R.y + r < p.y) continue;
-    if (!o.noPick && o.size <= R.d * pickRatio(R)) { if (o.cool <= 0 && !R.remote) rivalAttach(R, o); continue; }
+    if (canRoll(R, o)) { if (o.cool <= 0 && !R.remote) rivalAttach(R, o); continue; }
     if (o.spec.flat) continue;
     if (o.onBump && o.cool <= 0) o.onBump(R, o);
     if (o.kind === 'creature' && R.ghostT > 0) continue;       // just thrown clear by a lunge: passes through critters for a moment
     if (!R.remote) { R.x -= ox / (dist || 1) * (reach - dist); R.z -= oz / (dist || 1) * (reach - dist); }
+    if (!R.remote && o.kind === 'creature' && R.boostT > 0 && R.v * (ox * Math.sin(R.heading) + oz * Math.cos(R.heading)) / (dist || 1) > topSpeed(R.d) * RAM_MIN * CPU_SPEED && !(o.stunEnd > clock)) {      // a CPU's burst into a critter (a player's own machine reports theirs: see 'st')
+      if (stunnable(R, o)) { ramStun(o, R); R.boostT = 0; R.v = -0.3 * topSpeed(R.d); R.target = R.chasing = o; R.wander = 0; continue; }      // (whichever of a herd it hit is the one it goes back for)
+      shrug(o);
+    }
     if (o.kind === 'creature' && o.ai === 'charge') startLunge(o, R);
   }
 }
@@ -2240,16 +2320,22 @@ function updateRivals(dt, frozen) {
     // choose what to chase: the nearest thing it can roll up on its own level, preferring critters
     R.retarget -= dt;
     if (R.wander > 0) { R.wander -= dt; R.target = null; }
+    else if (R.target && !R.target.on && !R.target.gone && R.target.stunEnd > clock && canRoll(R, R.target)) R.retarget = 0.2;      // a stunned critter it can take: it does not look away
     else if (R.retarget <= 0) {
       R.retarget = (0.45 + rand() * 0.3) * DIFF.think;                 // CPUs dither: they only look for a new target every second or two
       let best = null, bd = 1e9;
       // Only a team's best six fight, and three of a kind merge into something stronger: so a CPU keeps count of
       // what it carries and goes a little out of its way for a critter that would bring a merge closer.
       if (DIFF.hunt < 1 && (R.wantT = (R.wantT || 0) - 1) <= 0) { R.wantT = 4; R.want = new Map(); for (const sp of R.army) { const dex = baseOf(sp).dex; R.want.set(dex, (R.want.get(dex) || 0) + 1); } }
+      // With a full enough meter it will also go for a critter a little too big, to stun it with a burst first (never on Easy,
+      // where the CPUs do not dash; and only one close by, since it is more trouble).
+      const ramOK = DIFF.dash > 0 && R.energy >= 0.75 && R.boostT <= 0 && S.time > (R.noRam || 0);
       for (const o of S.objects) {
-        if (o.fly || o.cool > 0 || o.noPick || o.size > R.d * pickRatio(R) || o.size < R.d * 0.08 || R.avoid.has(o)) continue;
+        if (o.fly || o.cool > 0 || o.noPick || o.size < R.d * 0.08 || R.avoid.has(o)) continue;
+        const ram = !canRoll(R, o);
+        if (ram && !(ramOK && stunnable(R, o))) continue;
         const p = o.group.position, worth = 0.35 + o.size / (R.d * PICK_RATIO);       // bigger pickups are worth a longer trip
-        const d = Math.hypot(p.x - R.x, p.z - R.z) * (o.kind === 'creature' ? 0.6 * (DIFF.hunt < 1 && R.want && R.want.get(baseOf(o.spec).dex) % 3 ? DIFF.hunt : 1) : 1) / worth;
+        const d = Math.hypot(p.x - R.x, p.z - R.z) * (ram ? 2.2 - 0.6 * Math.min(1, DIFF.dash) : 1) * (o.kind === 'creature' ? 0.6 * (DIFF.hunt < 1 && R.want && R.want.get(baseOf(o.spec).dex) % 3 ? DIFF.hunt : 1) : 1) / worth;
         if (d < bd && d < (60 + R.d * 6) / worth && groundAt(p.x, p.z) - g0 < R.d * 0.4 && (R.d >= SEA_MIN_D || MODS.iced || T.waterAt(p.x, p.z) !== 2)) { bd = d; best = o; }
       }
       R.target = best; if (best) R.chasing = best;
@@ -2265,6 +2351,10 @@ function updateRivals(dt, frozen) {
     const hf = heft(R.d), turnR = 2.6 * Math.sqrt(hf) * (R.wind > 0 ? CHARGE_STEER : 1) * dt;
     R.heading += clamp(diff, -turnR, turnR);
     const clear = Math.abs(diff) < 0.2 && (goal || (tp && Math.hypot(tp.x - R.x, tp.z - R.z) > R.d * 5));     // lined up with a long run ahead: sprint
+    // after a critter it has to stun: lined up and close, it winds up and bursts into it; with the meter spent and the critter still on its feet, it leaves it be for a while
+    const ramT = tp && !goal && R.wind <= 0 && R.boostT <= 0 && R.target.kind === 'creature' && !canRoll(R, R.target) ? R.target : null;
+    if (ramT && (R.energy < 0.7 || !stunnable(R, ramT))) { R.noRam = S.time + 5; R.target = null; R.retarget = 0; }
+    else if (ramT && !frozen && Math.abs(diff) < 0.3 && Math.hypot(tp.x - R.x, tp.z - R.z) < R.d * 6 + ramT.rad) { R.wind = CHARGE_TIME * 0.65; R.energy -= 0.65; }
     // the charge dash: with a clear run ahead and energy to spare it winds up (crawling), then bursts
     const windC = R.wind > 0 ? 0.65 * (1 - R.wind / (CHARGE_TIME * 0.65)) : 0;
     aimArrow(R, windC);
@@ -2889,6 +2979,7 @@ function netWorldIn(mm, fxu) {                   // (client) markers and event e
 // (client) a critter or thing the host is moving: glide to where it was last said to be, and bob as it walks
 function puppetThing(o, dt, dist) {
   const p = o.group.position, sp = o.spec, h = o.size;
+  if (o.stunEnd > clock) { o.ntx = undefined; dazePose(o); return; }
   let moving = false;
   if (o.ntx !== undefined) {
     const dx = o.ntx - p.x, dz2 = o.ntz - p.z, d = Math.hypot(dx, dz2);
@@ -2906,6 +2997,7 @@ function puppetThing(o, dt, dist) {
   else if (moving) lift = Math.abs(Math.sin(wob)) * h * (sp.move === 'hop' ? 0.22 : sp.move === 'slither' ? 0 : 0.06);
   p.y = groundAt(p.x, p.z) + lift;
   if (o.nyaw !== undefined) o.group.rotation.set(0, o.nyaw + (moving && sp.move === 'slither' ? Math.sin(wob) * 0.35 : 0), moving && !air ? Math.sin(wob) * 0.09 : 0);
+  if (o.shrugEnd > clock) shrugPose(o);
 }
 // Takes a thing off whichever ball it is on and puts it back in the world (where it goes next is the caller's business).
 function unstick(Bq, o) {
@@ -3025,6 +3117,7 @@ function clientMsg(m) {
     case 'cd': NET.cdGo = true; if (S.state === 'intro') S.introT = Math.max(S.introT, INTRO_LEN); break;
     case 'pk': netPick(m[1], m[2]); break;
     case 'dn': netDeny(m[1]); break;
+    case 'sn': { const o = S.byId.get(m[1]); if (o && !o.on && !o.gone) { if (m[2] > 0) stunCritter(o, m[2]); else o.stunEnd = 0; } break; }
     case 'dr': netDrop(m[1], m[2], m[3]); break;
     case 'tk': netTake(m[1], m[2]); break;
     case 'sp': {
@@ -3056,7 +3149,7 @@ function clientMsg(m) {
       if (p.vx !== undefined) { S.vx = p.vx; S.vz = p.vz; }
       if (p.energy !== undefined) S.energy = p.energy;
       if (p.ghost) S.ghostT = p.ghost;
-      if (p.chg0) S.charge = 0;
+      if (p.chg0) { S.energy = Math.min(1, S.energy + S.charge); S.charge = 0; S.ramT = 0; }
       if (p.bump) { S.shake = 0.2; sfxBump(); }
       break;
     }
@@ -3096,15 +3189,24 @@ function hostMsg(id, m) {
       if (m[1] <= (R.seqIn || 0)) break;         // an older report that arrived late
       R.seqIn = m[1];
       R.nx = clamp((+m[2] || 0) / 10, BOUNDS.x1, BOUNDS.x2); R.ny = (+m[3] || 0) / 10; R.nz = clamp((+m[4] || 0) / 10, BOUNDS.z1, BOUNDS.z2); R.nh = (+m[5] || 0) / 100;
-      R.rvx = (+m[6] || 0) / 10; R.rvz = (+m[7] || 0) / 10; R.nb = m[8] & 1; R.nj = m[8] & 2; R.chg = (+m[9] || 0) / 10; R.ren = (+m[10] || 0) / 100; R.nAge = 0;
+      R.rvx = (+m[6] || 0) / 10; R.rvz = (+m[7] || 0) / 10; R.nb = m[8] & 1; R.nj = m[8] & 2; R.chg = (+m[9] || 0) / 10;
+      if (R.chg >= RAM_CHARGE - 0.1) R.ramOK = true; else if (!R.nb && R.chg <= 0) R.ramOK = false;      // wound up far enough to stun (as near as tenths can say), until that burst is over
+      if (R.ramOK) R.nbAt = clock; R.ren = (+m[10] || 0) / 100; R.nAge = 0;
       break;
     case 'cl': {                                 // they rolled something up: first come, first served
       const o = S.byId.get(m[1]);
       R.claims = (R.claims || 0) + 1;            // every claim gets exactly one answer: ok or dn
       let ok = false;
-      try { if (o && !o.on && !o.gone && !o.noPick && S.state === 'play' && o.size <= R.d * pickRatio(R) * 1.25 && S.objects.includes(o)) { o.fly = null; rivalAttach(R, o); ok = true; } }
+      try { if (o && !o.on && !o.gone && !o.noPick && S.state === 'play' && o.size <= R.d * pickRatio(R) * (o.stunEnd > clock - 0.5 ? STUN_REACH : 1) * 1.25 && S.objects.includes(o)) { o.fly = null; rivalAttach(R, o); ok = true; } }
       catch (e) { console.error('claim failed', e); ok = !!(o && o.on && o.by === R.team); }
       netTo(id, [ok ? 'ok' : 'dn', m[1]]);
+      break;
+    }
+    case 'st': {                                 // they rammed a critter with a burst: stun it, if that could be so
+      const o = S.byId.get(m[1]);
+      // (their reports of where they are and what they are doing come 12 times a second and one can go astray: a wind-up or a burst at any time in the last second and a half will do)
+      if (o && !o.on && !o.gone && S.state === 'play' && clock - (R.nbAt ?? -9) < 1.5 && stunnable({ d: R.d * 1.1, ratioBonus: R.ratioBonus }, o) && Math.hypot(o.group.position.x - R.x, o.group.position.z - R.z) < R.d * 1.5 + o.rad + 3) ramStun(o, R);
+      else if (!(o && o.stunEnd > clock)) netTo(id, ['sn', m[1], 0]);      // no: they have shown it stunned already, so they are told it is not
       break;
     }
     case 'lg': for (const oid of m[1]) { const o = S.byId.get(oid); if (o && !o.on && !o.gone && Math.hypot(o.group.position.x - R.x, o.group.position.z - R.z) < R.d * 2 + o.size * 3) startLunge(o, R); } break;
@@ -3285,7 +3387,7 @@ function update(dt) {
   S.tickN = (S.tickN | 0) + 1;
   const frozen = S.state !== 'play' && S.state !== 'sim';      // the fly-over and the countdown: everything stands still
   S.time += dt;
-  S.hitCool = Math.max(0, S.hitCool - dt); S.ghostT = Math.max(0, (S.ghostT || 0) - dt);
+  S.hitCool = Math.max(0, S.hitCool - dt); S.ghostT = Math.max(0, (S.ghostT || 0) - dt); S.ramT = Math.max(0, (S.ramT || 0) - dt); S.weakT = Math.max(0, (S.weakT || 0) - dt);
   const vmax = topSpeed(S.d) * MODS.speed;
   let boxers = null, touching = 0;
   const inp = frozen ? { f: 0, t: 0, run: false, jump: false } : readInput();
@@ -3302,7 +3404,7 @@ function update(dt) {
     S.charge += add; S.energy -= add; charging = true;
     if (add > 0 && Math.floor(S.time * 14) !== Math.floor((S.time - dt) * 14)) tone(180 + 520 * S.charge, 200 + 560 * S.charge, 0.05, 'sawtooth', 0.035);
   } else if (S.charge > 0) { released = S.charge; S.charge = 0; }
-  if (released > 0.05) { S.boostT = burstTime(released) * dashLast(S.d); S.boostK = 1 + 0.2 * released; S.dashed = true; burstFx(S, released); tone(240, 1100 + 500 * released, 0.3, 'sawtooth', 0.11); }
+  if (released > 0.05) { S.boostT = burstTime(released) * dashLast(S.d); S.boostK = 1 + 0.2 * released; S.dashed = true; S.ramT = released >= RAM_CHARGE ? S.boostT + 0.3 : 0; S.weakT = released >= RAM_CHARGE ? 0 : S.boostT; burstFx(S, released); tone(240, 1100 + 500 * released, 0.3, 'sawtooth', 0.11); }
   if (charging) chargeFx(S, S.charge, dt);
   else if (S.boostT > 0 && S.dashed && !frozen) trailFx(S, dt);
   aimArrow(S, charging ? S.charge : 0);
@@ -3484,10 +3586,10 @@ function update(dt) {
       spare = Math.min(spare, gap - 60 - B.d * 11);
     }
     if (spare > 3 && !(o.cool > 0) && !(o.spawnT > 0) && !o.script) o.due = clock + Math.min(0.6, spare / nearing);
-    if (o.kind === 'creature' && dist < reach + S.d * 0.35 && (o.noPick || o.size > S.d * pickRatio(S)) && !(S.ghostT > 0)) (boxers || (boxers = [])).push(o);   // a critter too big to roll up, right beside the ball
+    if (o.kind === 'creature' && dist < reach + S.d * 0.35 && !canRoll(S, o) && !(o.stunEnd > clock) && !(S.ghostT > 0)) (boxers || (boxers = [])).push(o);   // a critter too big to roll up, right beside the ball
     if (dist >= reach) continue;
     if (feet > p.y + o.size || S.y + r < p.y) continue;      // on a different level: passes over or under
-    if (!o.noPick && o.size <= S.d * pickRatio(S)) { if (o.cool <= 0) { if (NET.client) claim(o); else attach(o); } continue; }
+    if (canRoll(S, o)) { if (o.cool <= 0) { if (NET.client) claim(o); else attach(o); } continue; }
     if (o.spec.flat) continue;
     if (o.onBump && o.cool <= 0) o.onBump(S, o);
     if (o.kind === 'creature' && S.ghostT > 0) continue;        // just thrown clear by a lunge: passes through critters for a moment
@@ -3502,11 +3604,22 @@ function update(dt) {
     const nx = dist > 1e-6 ? ox / dist : 1, nz = dist > 1e-6 ? oz / dist : 0;
     const out = S.air ? Math.min(reach - dist, r * 0.2) : reach - dist;      // (in the air, eased out over a few frames)
     S.x -= nx * out; S.z -= nz * out;
-    const vn = S.vx * nx + S.vz * nz;
-    if (!S.air && nx * hx + nz * hz > 0.4 && p.y + o.size - feet < jumpHeight(S.d) * 0.85) S.hopAt = clock;      // it is in the way, and low enough to jump
+    const vn = S.vx * nx + S.vz * nz, canStun = stunnable(S, o) && !(o.stunEnd > clock);
+    if (!S.air && nx * hx + nz * hz > 0.4 && !canStun && p.y + o.size - feet < jumpHeight(S.d) * 0.85) S.hopAt = clock;      // it is in the way, and low enough to jump (one that wants a dash is the other hint's business)
+    // A dash burst into a critter too big to roll up. (The burst itself, or the moment after it while the ball is still going faster than it can roll.)
+    if (o.kind === 'creature' && S.ramT > 0 && vn > vmax * (boosting ? RAM_MIN : 1.1) && !(o.stunEnd > clock)) {
+      if (canStun) {                                // stunned: the burst is spent on it and the ball rocks back, ready to roll in and take it
+        ramStun(o, S); S.boostT = 0; S.ramT = 0; S.vx = -nx * vmax * 0.3; S.vz = -nz * vmax * 0.3; S.shake = 0.18; S.sq = -0.2; S.rams = (S.rams | 0) + 1;
+        const k = Math.pow(S.d, 0.7), cx = S.x + nx * r, cz = S.z + nz * r, col = TEAMS[S.team].hex;
+        for (let i = 0; i < 12; i++) puff(cx, S.y + (rand() - 0.5) * r, cz, (-nx + (rand() - 0.5) * 1.6) * 4 * k, (1 + rand() * 2.5) * k, (-nz + (rand() - 0.5) * 1.6) * 4 * k, 0.3 + rand() * 0.2, (0.08 + 0.07 * rand()) * k, i % 3 ? 0xffffff : col, 8 * k);
+        continue;
+      }
+      shrug(o);
+    }
     if (vn > 0 && !(vaulting && p.y + o.size < S.jumpGy + jumpHeight(S.d) * 0.95)) { S.vx -= 1.6 * vn * nx; S.vz -= 1.6 * vn * nz; if (o.size > S.d * 0.8 && !o.onBump) { const n = crashLoss(vn, vmax); if (n) hardHit(nx, nz, vmax, n); } }      // only a sprint into something big knocks things loose
     if (o.kind === 'creature' && o.ai === 'charge') startLunge(o, S);
   }
+  drawStars();
   if (!S.air && clock - (S.hopAt ?? -9) < 0.5) hoppable = true;      // (the ball bounces off a thing it is pushed against, so it only touches it now and then: half a second's grace)
   S.heldT = hoppable && f > 0.3 ? Math.min(1, (S.heldT || 0) + dt) : Math.max(0, (S.heldT || 0) - dt * 0.6);
   // boxed in: hardly moving for most of a second with three or more too-big critters right beside the ball, or held between
@@ -3700,7 +3813,7 @@ function go(q) {
   $('boosthint').className = 'pill';
   setTimeout(() => { $('lights').className = ''; }, 900);
   const hx = Math.sin(S.heading), hz = Math.cos(S.heading), v = topSpeed(S.d) * RUN;
-  S.boostK = 1.35; S.dashed = true;
+  S.boostK = 1.35; S.dashed = true; S.ramT = S.boostT + 0.3;
   if (q === 2) { S.boostT = 2.3; S.vx = hx * v * 1.2; S.vz = hz * v * 1.2; toast('ROCKET START!'); tone(200, 1400, 0.5, 'sawtooth', 0.12); }
   else if (q === 1) { S.boostT = 1.1; S.vx = hx * v * 0.8; S.vz = hz * v * 0.8; toast('Boost start!'); tone(200, 900, 0.35, 'sawtooth', 0.1); }
   else if (q === -1) { S.stallT = 0.9; toast('Stalled! Too early'); tone(220, 60, 0.5, 'sawtooth', 0.14); }
