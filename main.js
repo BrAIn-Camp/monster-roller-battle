@@ -423,6 +423,7 @@ sun.shadow.bias = -0.0004;
 scene.add(sun, sun.target);
 const SUN_DIR = new V3(0.45, 1, 0.35).normalize();
 let QUAL = QUALITY[0], qualLevel = 0;
+let wakeAll = false;                  // every sleeping thing is to be looked at afresh (see update)
 function setQuality(level) {
   qualLevel = clamp(level, 0, QUALITY.length - 1); QUAL = QUALITY[qualLevel];
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, QUAL.res));
@@ -430,6 +431,7 @@ function setQuality(level) {
   if (S.models) S.models(QUAL.actors);
   if (QUAL.map && sun.shadow.mapSize.x !== QUAL.map) { sun.shadow.mapSize.set(QUAL.map, QUAL.map); if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; } }
   if (typeof resize === 'function') resize();
+  wakeAll = true;                               // (how far things are drawn has changed)
 }
 
 function aimSun(x, y, z, d) {                 // the shadow box follows the ball and scales with it
@@ -2880,6 +2882,19 @@ function update(dt) {
   S.sup = sup;
   feet = S.y - sup;
 
+  // Most of what is on the map is too far from every ball for anything about it to change: it cannot be touched, it
+  // is not in sight, no critter there has a ball to mind. Such a thing is left alone ("asleep") until the soonest a
+  // ball could have got near enough to matter: `due`, worked out below from how far off that is and the fastest a
+  // ball can go, with as much again to spare. Looking at all 6,800 things every frame was most of the cost of the
+  // rules. A ball that jumps (an event, a correction from the host) wakes everything.
+  let fastest = 0;
+  for (const B of allBalls()) {
+    fastest = Math.max(fastest, topSpeed(B.d) * dashMult(B.d));
+    if (Math.hypot(B.x - (B.wasX ?? B.x), B.z - (B.wasZ ?? B.z)) > 8) wakeAll = true;
+    B.wasX = B.x; B.wasZ = B.z;
+  }
+  const nearing = 2 * (fastest * 1.5 * Math.max(1, MODS.speed) + 6);      // metres a second a ball and a thing could close at, doubled
+  if (wakeAll) { wakeAll = false; for (const o of S.objects) o.due = 0; }
   for (let i = S.objects.length - 1; i >= 0; i--) {
     const o = S.objects[i], p = o.group.position;
     if (o.fly) {                                 // knocked loose, in the air
@@ -2897,6 +2912,7 @@ function update(dt) {
       }
       continue;
     }
+    if (o.due > S.time) continue;                // asleep
     if (o.cool > 0) o.cool -= dt;
     if (o.spawnT > 0) {                          // materialising: grows in with a wobble, and cannot be rolled up for a moment
       o.spawnT -= dt;
@@ -2905,19 +2921,24 @@ function update(dt) {
       if (o.spawnT > 0.3) continue;
     }
     const ox = p.x - S.x, oz = p.z - S.z, dist = Math.hypot(ox, oz);
-    o.group.visible = !o.understudy && dist < (o.size * 130 + S.d * 10 + 25) * QUAL.view;   // out to where it is about half a degree across; an understudied critter is drawn as its model instead
-    const casts = QUAL.shadows && o.size > S.d * 0.07 && dist < S.d * 14 + 12 + o.size;      // shadows only fall near the ball (see aimSun), and specks need none: which batch it is drawn in (drawWorld)
+    const seen = (o.size * 130 + S.d * 10 + 25) * QUAL.view, shade = S.d * 14 + 12 + o.size;
+    o.group.visible = !o.understudy && dist < seen;   // out to where it is about half a degree across; an understudied critter is drawn as its model instead
+    const casts = QUAL.shadows && o.size > S.d * 0.07 && dist < shade;      // shadows only fall near the ball (see aimSun), and specks need none: which batch it is drawn in (drawWorld)
     o.casts = casts;
-    if (NET.client) { if (o.kind === 'creature' || o.ntx !== undefined) puppetThing(o, dt, dist); }      // the host moves the critters; here they glide to where it says
+    r = S.d / 2;
+    const reach = r + o.rad;
+    // how far the player's ball is from mattering to it: from touching it, from its shadow showing, from it coming into or going out of sight
+    let spare = Math.min(dist - reach - S.d, QUAL.shadows ? dist - shade : 1e9, Math.abs(dist - seen));
+    if (NET.client) { if (o.kind === 'creature' || o.ntx !== undefined) puppetThing(o, dt, dist); if (o.ntx !== undefined || (o.kind === 'creature' && dist < 150 + S.d * 12)) spare = 0; }      // the host moves the critters; here they glide to where it says
     else if (o.kind === 'creature') {                 // it minds the nearest ball, whoever is pushing it
       let B = S, gap = dist - S.d;
       for (const R of rivals) { const g2 = Math.hypot(p.x - R.x, p.z - R.z) - R.d; if (g2 < gap) { B = R; gap = g2; } }
       // (its rules run every frame near a ball, and every third frame, for three frames' worth, further off)
       if (gap < 22 + B.d * 4) updateCreature(o, dt, B);
       else if (gap < 60 + B.d * 11 && (o.id + S.tickN) % 3 === 0) updateCreature(o, dt * 3, B);
+      spare = Math.min(spare, gap - 60 - B.d * 11);
     }
-    r = S.d / 2;
-    const reach = r + o.rad;
+    if (spare > 3 && !(o.cool > 0) && !(o.spawnT > 0) && !o.script) o.due = S.time + Math.min(0.6, spare / nearing);
     if (o.kind === 'creature' && dist < reach + S.d * 0.35 && (o.noPick || o.size > S.d * pickRatio(S)) && !(S.ghostT > 0)) (boxers || (boxers = [])).push(o);   // a critter too big to roll up, right beside the ball
     if (dist >= reach) continue;
     if (feet > p.y + o.size || S.y + r < p.y) continue;      // on a different level: passes over or under
