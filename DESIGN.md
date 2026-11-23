@@ -362,6 +362,7 @@ Up to four players, one of them hosting; CPU teams take the empty seats. See REA
 | plainer shapes for things smaller than (radius over distance) | 0.03 | 0.045 | 0.07 | 0.2 |
 | critters with the model proper (flames, gas) | 16 | 12 | 8 | 3 |
 | critters breathe | yes | yes | yes | no |
+| how far into a cell of baked props its distance is judged (`slack`) | 0 | 0.2 | 0.4 | 0.5 |
 
 - **Auto** starts at the top and steps down when the game cannot keep up; it never steps back up by itself, and remembers
   where it settled. Every two seconds it looks at the usual frame (the middle one of the two seconds, so a hitch while
@@ -409,6 +410,85 @@ draw. Start of a round, 1280x720:
 - **Not tried on a slow machine**, so the levels' numbers are guesses. The readout (F3) on one would say which of the
   rules, the batches and the drawing is the dear part there.
 
+## For slow processors (23 November 2026)
+
+The levels above all turn down work for the graphics card. An old computer is short of processor first, and the
+levels hardly touched that: on a stand-in for one (below) a frame at the start of a round was 26 ms on high and 23 ms
+on lowest. So this pass went after what the processor does each frame.
+
+**The stand-in** (`tools/slow-machine/`): a separate headless Chrome kept to two of this machine's efficiency cores,
+with its main thread slowed four times over the DevTools protocol, and the game's own `bench` run in it; a profile of
+the main thread says where the time goes by function. It still has the fast graphics card, so it shows the
+processor's share and nothing about a weak card. A second one draws in software (SwiftShader) on four slow cores.
+
+Frame at the start of a round, 1344x670, processor slowed four times (before, after):
+
+| | high | medium | low | lowest |
+|---|---|---|---|---|
+| a frame | 26.3 ms, 9.9 | 28.9, 9.0 | 26.8, 7.7 | 23.4, 8.0 |
+| draw calls | 610, 201 | 581, 171 | 460, 154 | 392, 136 |
+| triangles | 592,000, 546,000 | 535,000, 464,000 | 459,000, 348,000 | 363,000, 234,000 |
+
+With four full balls in view (300 things stuck to each, the worst there is): about 39 ms to 23 on high, 32 to 20 on
+lowest. On the two slow cores without the slowing: 8.1 ms to 3.4.
+
+What was costing it, and what was done:
+
+- **World matrices for 9,000 objects every frame.** A three.js scene works its own (unchanging) matrix out again each
+  frame, takes that for a change, and so multiplies out a new world matrix for everything in it, the hidden meshes of
+  the 7,000 things included. `scene.matrixAutoUpdate = false`, the group of batches likewise, and a thing's own mesh
+  is given a method that does nothing in place of the one that works its world matrix out (it is never drawn itself).
+  A sixth of the frame.
+- **Props: 370 draw calls for 1,300 props.** There are 4,700 props of 419 kinds in several colours each, so a batch a
+  shape held under four props. A prop nobody has touched never moves, so the ones standing still are baked into the
+  map (`settle`, `bakeCell`, `drawProps` in `main.js`): the map is cut into cells 40 m square and a cell's props are
+  one mesh in world coordinates, biggest first, so a far cell draws only as many of them as are big enough to see from
+  there. Two meshes a cell: every prop as its plainer shape, and (made when a cell first needs it) as its full shape.
+  A prop that is rolled up, taken away or moved has its triangles blanked and is a loose thing again, drawn through
+  the batches; when it has stood still for a second and a half it goes back in and its cell is built again. Cells are
+  built a few milliseconds a frame, nearest first, and a prop is drawn the old way until its cell is there. 370 draw
+  calls to about 60. A cell errs towards showing more than each prop would have had by itself, so there are more
+  triangles of props than before on high (355,000 for 227,000); the lower levels judge by a point some way into the
+  cell (`slack` in the table above) and come out about level.
+- **Shapes share corners between faces.** A generated shape was put together from parts with their corners split
+  apart, three to a triangle; the parts keep their indices now. A third as many corners to shade.
+- **A change of material at every critter species.** Each still had a material of its own, and at every change of
+  material three.js sends the whole set-up again (lights, fog, shadow): a critter's draw call cost four times a
+  prop's. Every model's skin is copied, as it arrives, into one sheet (4096x2048, `shareSkins` in `stadium.js`), the
+  still's UVs are moved to its patch, and every still is drawn with the same material (one for stills that stand, one
+  for stills with poses, each again for two-sided models). A card that cannot hold the sheet keeps a material apiece.
+- **The same material drawn two ways.** A material used by both a batch (instanced) and a single mesh has its
+  program worked out afresh at every change-over. Single meshes (baked props, figures, balls) have `solidMat`, a copy.
+- **Figures, balls and clouds in pieces.** A figure was 28 draw calls, a ball 6, a cloud 5; they are 5, 1 and 1
+  (`fuse`).
+- **The rules looked at all 6,800 things every frame.** A thing too far from every ball for anything about it to
+  change is left alone until the soonest a ball could have got near enough to matter (`due`, in `update`; a ball that
+  jumps wakes everything). It goes by a clock that is never reset: the round's own starts again at nought when the
+  countdown ends, which left everything asleep for the first seconds of a round until that was found. A critter at a
+  middle distance sleeps through the two frames between its turns. And every thing is made with all its fields from
+  the start, in one order: the loop that remains reads two fields of each of 7,000 objects, and that read was several
+  times slower with the objects built up differently from one another.
+- **Empty batches in the scene.** There are 1,700 batches and most are empty at any moment; only the ones with
+  something in them are in the scene, which three.js walks every frame.
+- **The ground: a face a tile.** 493,000 triangles, more than half of what was on screen at the lower levels. The
+  ground is level terraces, so a stretch at one height is one face, with the tiles' colours in a picture laid over
+  the ground from above (a pixel a tile, nearest-pixel close to so the tiles look as they did). 83,000 triangles.
+  Where a neighbour has a corner part of the way along a stretch's edge, the stretch has one there too and is a fan
+  about its middle: without that the seams let the sky through as a sprinkle of dots (1,700 over sixty views, counted
+  by drawing the ground against magenta; with it 2, the same as a face a tile). `?ground=tiles` puts a face a tile
+  back, for comparing. Its faces are all wound to be seen from the side they are seen from, so it is drawn from one
+  side only.
+
+Not helped: **software graphics** (204 ms to 200 on high, 103 to 94 on lowest). What that is short of is pixels
+and a fixed cost a frame, not triangles or draw calls: with the ground now a twelfth of the triangles it costs the
+same there, a quarter of the pixels saves a fifth, and the ground from one side only saved an eighth. (The first
+reading of it, that the ground's cost there was its triangles, was wrong.) Software graphics is not a weak graphics
+chip either, so what a real one would say is still not known.
+
+Still to do if it is wanted: **things stuck to balls**. Each is still given a new matrix every frame (the ball
+rolls) and sent to the card: with four full balls in view that is most of what is left. A batch per ball, in the
+ball's own frame, would only need sending when the ball picks something up.
+
 ## Drawing cost of the models (measured and trimmed 22 November 2026)
 
 `__game.bench(frames)` in the console runs frames back to back, waits for the graphics card after each and says what a frame
@@ -443,8 +523,9 @@ costs and where it went; it works in a hidden tab. Measured with it at 1920x1080
   1,740 draws to 625, and the main thread's share of drawing the frame 7.8 ms to 3.9. The whole frame as `bench` times it
   falls less, 11.0 ms to 9.6, because `bench` waits for the card after every frame and the card's own work no longer
   hides behind the main thread's; frames drawn back to back with no wait go from 4.5 ms to 3.6. At "low" graphics
-  `bench` reads slightly worse (7.7 to 8.2) while back to back is still better (3.7 to 3.1). `__game.gfx.loose(true)`
-  draws them one by one again, for comparing.
+  `bench` reads slightly worse (7.7 to 8.2) while back to back is still better (3.7 to 3.1). (`__game.gfx.loose(true)`
+  drew them one by one again, for comparing; it went on 23 November, when a thing's own mesh stopped being given a
+  world matrix.)
 - **A batch is only sent to the card when it has changed** (22 November 2026). Every batch's matrices were sent every
   frame, about 390 small uploads, and that was a third of the frame: 2.3 ms, nearly all of it on the card's side. Most
   batches hold things that never move, so `batchPut` remembers which thing (and which of its matrices) filled each slot
@@ -469,7 +550,7 @@ Measured in single player with a 3 m ball: 3,981 draw calls and 5.0 million tria
 - A thing is drawn out to 130 times its size (about half a degree on screen), not 300.
 - Only things near the ball and at least 7% of its width cast shadows; the shadow map is 1024 on the medium level.
 - Instancing (`drawWorld` in `main.js`): the things lying about the map keep their own meshes for the game to move, but those are not drawn. Each frame, every thing that is switched on and on screen has its matrix copied into a batch, one `InstancedMesh` per shape and material (and a second, shadow-casting batch for the few near the ball). A thing stuck on a ball was drawn the ordinary way then (it goes through the batches now: see above). Every item is now a single mesh (a model is baked to one normalised geometry). With a 3 m ball: 740 draw calls and 1.9 million triangles a frame.
-- Done since (22 November 2026): the logarithmic depth buffer is gone and the terrain is in chunks. The terrain has to stay double-sided: its cliff faces are not wound consistently.
+- Done since (22 November 2026): the logarithmic depth buffer is gone and the terrain is in chunks. (The terrain was double-sided because its cliff faces were not wound consistently; since 23 November they are, and it is drawn from one side.)
 - Reliable messages are sent in packets of about a kilobyte and only as fast as the link takes them (`netFlush`). Sent as one lump per frame, a wave of critters, the refill or an event's effects made a single very large message, which on a slow link held up everything else, the ball positions included. The refill is now sent as numbers into the starting layout (`rf`), and each event-effect shape is described once per round.
 - PeerJS refuses any JSON message of 16,300 bytes or more. `room.send` in `net.js` now splits a long message into numbered pieces that are joined at the other end, and a connection error no longer counts as the player leaving (only the connection closing does). Before this, the armies sent at the end of a full round were too long: the host got an error, dropped the player, and their screen stayed on TIME UP. Armies are also sent as runs of the same critter, which keeps that message to a few kilobytes.
 
