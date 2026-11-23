@@ -212,12 +212,14 @@ function loadModel(path) {
           pg.setAttribute('color', new THREE.BufferAttribute(arr, 3));
           return pg;
         });
-        const geo = mergeGeometries(parts);
+        const loose = mergeGeometries(parts), geo = mergeVertices(loose);      // (corners shared between faces where they can be: fewer to shade)
+        loose.dispose();
         geo.computeBoundingBox();
         const b = geo.boundingBox, k2 = 1 / (Math.max(b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z) || 1);
         geo.translate(-(b.min.x + b.max.x) / 2, -b.min.y, -(b.min.z + b.max.z) / 2);
         geo.scale(k2, k2, k2);
         geo.computeBoundingBox(); geo.computeBoundingSphere();
+        geo.userData.far = () => thinGeometry(geo, 0.4, 60);      // (its plainer shape, for when it is small on screen: see farShape)
         res(geo);
       } catch (e) { console.warn('model could not be baked:', path, e); res(null); }
     }, undefined, rej)));
@@ -237,7 +239,9 @@ function shapeGeometry(spec, color, far = false) {      // far: the same shape f
     g.updateMatrixWorld(true);
     g.traverse((n) => {
       if (!n.isMesh) return;
-      const pg = n.geometry.index ? n.geometry.toNonIndexed() : n.geometry.clone();
+      // (the parts keep their indices, so a ball's corners are shared between its faces: a third as many to shade)
+      const pg = n.geometry.clone();
+      if (!pg.index) pg.setIndex([...Array(pg.attributes.position.count).keys()]);
       for (const a of Object.keys(pg.attributes)) if (a !== 'position' && a !== 'normal') pg.deleteAttribute(a);
       pg.applyMatrix4(n.matrixWorld);
       const c = n.material.color, col = new Float32Array(pg.attributes.position.count * 3);
@@ -246,6 +250,7 @@ function shapeGeometry(spec, color, far = false) {      // far: the same shape f
       parts.push(pg);
     });
     geo = (parts.length && mergeGeometries(parts)) || G.box;
+    if (geo !== G.box && !geo.attributes.color) geo = G.box;
     if (!far && geo !== G.box) geo.userData.far = () => { const f = shapeGeometry(spec, color, true); return triangles(f) < triangles(geo) * 0.8 ? f : null; };
     itemGeo.set(key, geo);
   }
@@ -288,12 +293,12 @@ const CRITTER_LOD = 0.35;             // a critter has to be this much smaller a
 function farShape(geo, material) {
   const u = geo.userData, f = u.far;
   if (!f) return null;
-  if (typeof f === 'function') { u.far = null; farQueue.push([geo, f]); return null; }
+  if (typeof f === 'function') { u.far = null; u.farMake = f; farQueue.push([geo, f]); return null; }
   return f.userData.mat && material !== u.still.mat ? null : f;      // (a gold critter keeps its full shape: the plain one is in the model's own colours)
 }
 function makeFarShapes(ms) {
   const t0 = performance.now();
-  while (farQueue.length && performance.now() - t0 < ms) { const [geo, make] = farQueue.shift(); geo.userData.far = make() || null; }
+  while (farQueue.length && performance.now() - t0 < ms) { const [geo, make] = farQueue.shift(), u = geo.userData; if (u.farMake) { u.far = make() || null; u.farMake = null; } }      // (unless a cell being baked has made it meanwhile: farNow)
 }
 // The same shape with fewer triangles. Its corners are gathered into a grid of cells; every corner in a cell becomes
 // the one of them furthest from the middle (which keeps the outline), and the triangles that collapse to nothing are
@@ -342,7 +347,7 @@ function buildItem(spec) {
   const mesh = new THREE.Mesh(shapeGeometry(spec, color), itemMat);
   mesh.castShadow = true;
   const path = Array.isArray(spec.model) ? spec.model[Math.floor(rand() * spec.model.length)] : spec.model;
-  if (path) loadModel(path).then((geo) => { if (geo) mesh.geometry = geo; }).catch((e) => console.warn('Could not load model for', spec.id, path, e));
+  if (path) loadModel(path).then((geo) => { if (geo) { mesh.geometry = geo; propChanged(mesh); } }).catch((e) => console.warn('Could not load model for', spec.id, path, e));
   return mesh;
 }
 // Critters are generated in code from the parts lists in critters/*.js: one merged mesh per species.
@@ -412,12 +417,13 @@ function persist() { try { localStorage.setItem(SAVE_KEY, JSON.stringify(save));
 //   grass    how far away the grass is drawn, as a share of the usual distance (0: none)
 //   lod      a thing smaller on screen than this (its radius over its distance) is drawn as its simpler shape
 //   actors   how many critters at once get the model proper, for their flames and gas (critters/local-mode.js)
+//   slack    how far into a cell of baked props the point is that says how many of them are in sight (see drawProps)
 //   still    the critters do not breathe
 const QUALITY = [
-  { name: 'high',   res: 2,   shadows: true,  view: 1,   map: 2048, aa: true,  grass: 1,   lod: 0.03,  actors: 16 },
-  { name: 'medium', res: 1,   shadows: true,  view: 0.9, map: 1024, aa: true,  grass: 0.8, lod: 0.045, actors: 12 },
-  { name: 'low',    res: 1,   shadows: false, view: 0.8,            aa: false, grass: 0.5, lod: 0.07,  actors: 8 },
-  { name: 'lowest', res: 0.7, shadows: false, view: 0.6,            aa: false, grass: 0,   lod: 0.2,   actors: 3, still: true },
+  { name: 'high',   res: 2,   shadows: true,  view: 1,   map: 2048, aa: true,  grass: 1,   lod: 0.03,  actors: 16, slack: 0 },
+  { name: 'medium', res: 1,   shadows: true,  view: 0.9, map: 1024, aa: true,  grass: 0.8, lod: 0.045, actors: 12, slack: 0.2 },
+  { name: 'low',    res: 1,   shadows: false, view: 0.8,            aa: false, grass: 0.5, lod: 0.07,  actors: 8,  slack: 0.4 },
+  { name: 'lowest', res: 0.7, shadows: false, view: 0.6,            aa: false, grass: 0,   lod: 0.2,   actors: 3,  slack: 0.5, still: true },
 ];
 const savedQuality = () => { const k = QUALITY.findIndex((q) => q.name === save.gfx); return k >= 0 ? k : clamp(save.gfxAuto | 0, 0, QUALITY.length - 1); };
 const AA = QUALITY[savedQuality()].aa;
@@ -637,7 +643,7 @@ function growBatch(b) {
   m.onAfterRender = () => { b.lo = -1; b.hi = 0; };
   batchGroup.add(m); b.mesh = m; b.cap = cap; b.arr = m.instanceMatrix.array; b.from = 0; b.lo = -1; b.hi = 0;
 }
-const DRAW = { things: 0, batches: 0, sent: 0, held: 0, far: 0, sendAll: false };            // last frame's count, for the readout
+const DRAW = { things: 0, batches: 0, sent: 0, held: 0, far: 0, props: 0, sendAll: false };            // last frame's count, for the readout
 // The things stuck to one ball. Where each is in the world is the ball's place times its own on the ball.
 const heldM = new THREE.Matrix4(), heldW = new THREE.Matrix4();
 function drawHeld(bg, list, inGame, near, pxH) {
@@ -667,6 +673,189 @@ function drawHeld(bg, list, inGame, near, pxH) {
   }
   return n;
 }
+// ---------- props that stay put are baked into the map ----------
+// There are 4,700 props of 419 kinds, in several colours each, so a batch per shape came to 370 draw calls for the
+// 1,300 or so in view, under four props a call: a quarter of a frame on a slow processor, and every one of them looked
+// at every frame to find that out. But a prop that nobody has touched never moves. So the map is cut into cells
+// (BAKE metres square) and the props standing still in a cell are baked into one mesh in the shared material, in
+// world coordinates, biggest first: the far cells then draw only as many of them as are big enough to see from
+// there (a run from the start of the mesh), and a cell costs one draw call, or two.
+//   far, near   the cell's two meshes: every prop as its plainer shape, and as its full shape. Props 0 to a-1 (those
+//               big enough on screen to need it) are drawn from `near` and a to b-1 from `far`; `end` is where each
+//               prop's triangles stop. `near` is only made once a cell first needs it.
+//   settle(o)   a prop standing still joins its cell, and is in the mesh the next time the cell is built
+//   unsettle(o) it has been rolled up, taken away or moved: its triangles are blanked (no rebuild) and it is an
+//               ordinary loose thing again, drawn through the batches like a critter (drawWorld), until it has
+//               stood still for a moment once more (see update)
+// Cells are built a few milliseconds a frame, the ones nearest the camera first; until a prop's cell has been
+// built it is drawn the old way, so nothing is ever missing.
+const BAKE = 40, BAKE_NX = Math.ceil((BOUNDS.x2 - BOUNDS.x1) / BAKE), BAKE_NZ = Math.ceil((BOUNDS.z2 - BOUNDS.z1) / BAKE);
+let bakeCells = [];
+const bakeQueue = new Set(), thingOf = new WeakMap();
+const propGroup = new THREE.Group();
+propGroup.matrixAutoUpdate = false; propGroup.matrixWorldAutoUpdate = false;
+scene.add(propGroup);
+function resetBake() {
+  for (const c of bakeCells) for (const part of [c.far, c.near]) if (part) { propGroup.remove(part.mesh); part.mesh.geometry.dispose(); }
+  bakeQueue.clear();
+  bakeCells = [];
+  for (let j = 0; j < BAKE_NZ; j++) for (let i = 0; i < BAKE_NX; i++) {
+    const x0 = BOUNDS.x1 + i * BAKE, z0 = BOUNDS.z1 + j * BAKE;
+    bakeCells.push({ x0, z0, x1: x0 + BAKE, z1: z0 + BAKE, y0: 0, y1: 0, members: [], items: [], bigs: null, far: null, near: null, wantNear: false, dirty: false });
+  }
+}
+resetBake();
+const cellAt = (x, z) => bakeCells[clamp(Math.floor((z - BOUNDS.z1) / BAKE), 0, BAKE_NZ - 1) * BAKE_NX + clamp(Math.floor((x - BOUNDS.x1) / BAKE), 0, BAKE_NX - 1)];
+const plainAttr = (a) => a && a.isBufferAttribute && !a.isInterleavedBufferAttribute && a.itemSize === 3 && a.array instanceof Float32Array;
+function bakeable(o) {
+  const g = o.group, geo = g.geometry;
+  return o.kind === 'item' && !o.on && !o.gone && !o.fly && !(o.spawnT > 0) && o.ntx === undefined && g.material === itemMat && g.parent === worldGroup
+    && plainAttr(geo.attributes.position) && plainAttr(geo.attributes.normal) && plainAttr(geo.attributes.color);
+}
+function settle(o) {
+  if (o.cell) return;
+  const p = o.group.position, c = cellAt(p.x, p.z);
+  o.cell = c; c.members.push(o); c.dirty = true; bakeQueue.add(c);
+}
+function unsettle(o) {
+  const c = o.cell;
+  if (!c) return;
+  o.cell = null; o.restT = undefined;
+  const i = c.members.indexOf(o);
+  if (i >= 0) c.members.splice(i, 1);
+  if (!o.baked) return;
+  o.baked = false; o.mx = NaN;                       // (drawn through the batches from here on: its matrix is to be worked out afresh)
+  for (const part of [c.far, c.near]) {
+    if (!part) continue;
+    const from = o.bi ? part.end[o.bi - 1] : 0, to = part.end[o.bi], idx = part.mesh.geometry.index;
+    if (to <= from) continue;
+    idx.array.fill(0, from, to);                     // (every corner the same one: triangles of no size)
+    if (idx.addUpdateRange) idx.addUpdateRange(from, to - from);
+    idx.needsUpdate = true;
+  }
+}
+// A prop's shape has changed under it (its model has arrived): its cell is built again.
+function propChanged(mesh) { const o = thingOf.get(mesh); if (o && o.cell) { o.cell.dirty = true; bakeQueue.add(o.cell); } }
+// A shape's plainer one, made now if it has not been yet (farShape makes them a few a frame, as they are asked for).
+function farNow(geo) {
+  const u = geo.userData, make = typeof u.far === 'function' ? u.far : u.farMake;
+  if (make) { u.far = make() || null; u.farMake = null; }
+  return u.far || null;
+}
+// One of a cell's two meshes, from the props in c.items. `fresh`: all of them (the cell is being built); otherwise
+// only those still in the mesh (the full shapes, made later than the plain ones: some may have gone since).
+function packCell(c, near, fresh) {
+  const items = c.items, n = items.length, geos = new Array(n), end = new Uint32Array(n);
+  let nv = 0, ni = 0;
+  for (let i = 0; i < n; i++) {
+    const o = items[i];
+    let g = null;
+    if (fresh || (o.baked && o.cell === c && o.bi === i)) { g = o.bgeo; if (!near) g = farNow(g) || g; nv += g.attributes.position.count; ni += g.index ? g.index.count : g.attributes.position.count; }
+    geos[i] = g;
+  }
+  if (!nv) return null;
+  const pos = new Float32Array(nv * 3), nor = new Int8Array(nv * 3), col = new Uint16Array(nv * 3), idx = nv > 65535 ? new Uint32Array(ni) : new Uint16Array(ni);
+  let v = 0, k = 0;
+  for (let i = 0; i < n; i++) {
+    const g = geos[i];
+    if (g) {
+      const o = items[i], e = o.bm, s = 127 / (o.bs || 1);
+      const P = g.attributes.position.array, N = g.attributes.normal.array, C = g.attributes.color.array, cnt = P.length / 3;
+      for (let j = 0, w = v * 3; j < cnt * 3; j += 3, w += 3) {
+        const x = P[j], y = P[j + 1], z = P[j + 2], a = N[j], b = N[j + 1], d = N[j + 2];
+        pos[w] = e[0] * x + e[4] * y + e[8] * z + e[12]; pos[w + 1] = e[1] * x + e[5] * y + e[9] * z + e[13]; pos[w + 2] = e[2] * x + e[6] * y + e[10] * z + e[14];
+        nor[w] = Math.round((e[0] * a + e[4] * b + e[8] * d) * s); nor[w + 1] = Math.round((e[1] * a + e[5] * b + e[9] * d) * s); nor[w + 2] = Math.round((e[2] * a + e[6] * b + e[10] * d) * s);
+        col[w] = C[j] * 65535; col[w + 1] = C[j + 1] * 65535; col[w + 2] = C[j + 2] * 65535;
+      }
+      const I = g.index ? g.index.array : null, ic = I ? I.length : cnt;
+      if (I) for (let j = 0; j < ic; j++) idx[k + j] = v + I[j]; else for (let j = 0; j < ic; j++) idx[k + j] = v + j;
+      v += cnt; k += ic;
+    }
+    end[i] = k;
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('normal', new THREE.BufferAttribute(nor, 3, true));
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3, true));
+  geo.setIndex(new THREE.BufferAttribute(idx, 1));
+  geo.computeBoundingSphere();
+  const mesh = new THREE.Mesh(geo, itemMat);
+  mesh.matrixAutoUpdate = false; mesh.visible = false;
+  propGroup.add(mesh);
+  return { mesh, end };
+}
+function bakeCell(c) {
+  for (const part of [c.far, c.near]) if (part) { propGroup.remove(part.mesh); part.mesh.geometry.dispose(); }
+  for (const o of c.items) if (o.cell === c) o.baked = false;
+  c.far = c.near = null; c.dirty = false;
+  // Biggest first, by one measure (`big`) that has to do for both questions asked of a cell: how far off a prop is
+  // in sight (which goes by its size: its height, mostly) and whether it needs its full shape (which goes by how
+  // far across it is). It is the larger of its size and one and a half times its radius, so neither answer ever
+  // leaves out a prop that would have been drawn, or drawn in full, by itself; a rug is seen from further than it
+  // was, and a lamp post is drawn in full from further.
+  const items = c.members.filter(bakeable), n = items.length;
+  for (const o of items) { const geo = o.group.geometry; if (!geo.boundingSphere) geo.computeBoundingSphere(); const bs = geo.boundingSphere; o.big = Math.max(o.size, 1.5 * (bs.radius + Math.hypot(bs.center.x, bs.center.z)) * o.group.scale.x); }
+  c.items = items.sort((p, q) => q.big - p.big);
+  c.bigs = new Float32Array(n);
+  let y0 = Infinity, y1 = -Infinity;
+  for (let i = 0; i < n; i++) {
+    const o = items[i], g = o.group, p = g.position, geo = g.geometry, bs = geo.boundingSphere;
+    g.updateMatrix();
+    o.bm = Float32Array.from(g.matrix.elements); o.bgeo = geo; o.bi = i;
+    o.bx = p.x; o.by = p.y; o.bz = p.z; o.bs = g.scale.x; o.brx = g.rotation.x; o.bry = g.rotation.y; o.brz = g.rotation.z;
+    c.bigs[i] = o.big;
+    y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y + (bs.center.y + bs.radius) * o.bs);
+  }
+  c.y0 = n ? y0 : 0; c.y1 = n ? y1 : 0;
+  c.far = packCell(c, false, true);
+  if (c.far && c.wantNear) c.near = packCell(c, true, true);
+  if (c.far) for (const o of items) o.baked = true;
+  for (const o of items) o.bm = null;
+}
+// Builds what is waiting, nearest the camera first, for `ms` milliseconds (always one cell at least).
+function bakeSome(ms) {
+  if (!bakeQueue.size) return;
+  const t0 = performance.now(), cam = camera.position;
+  do {
+    let best = null, bd = Infinity;
+    for (const c of bakeQueue) { const d = Math.hypot(Math.max(c.x0 - cam.x, 0, cam.x - c.x1), Math.max(c.z0 - cam.z, 0, cam.z - c.z1)) + (c.dirty ? 0 : 1e-3); if (d < bd) { bd = d; best = c; } }
+    bakeQueue.delete(best);
+    if (best.dirty) bakeCell(best);
+    else if (best.wantNear && !best.near && best.far) { for (const o of best.items) if (o.baked && o.cell === best) { o.group.updateMatrix(); o.bm = o.group.matrix.elements; } best.near = packCell(best, true, false); for (const o of best.items) o.bm = null; }
+  } while (bakeQueue.size && performance.now() - t0 < ms);
+}
+// How many of a list that only ever falls are above v.
+function countAbove(list, v) { let lo = 0, hi = list.length; while (lo < hi) { const mid = (lo + hi) >> 1; if (list[mid] > v) lo = mid + 1; else hi = mid; } return lo; }
+// Each frame: how much of each cell to draw. A prop is in sight, in a round, as far from the ball as a loose thing
+// would be (see update), and behind the menu when it is more than a speck; it is drawn in full when it is big enough
+// on screen (QUAL.lod, as for loose things). What is in sight is judged by the nearest point of the cell, so a cell
+// errs towards showing more than each prop by itself would have had; the lower levels judge by a point some way
+// into the cell (QUAL.slack), which shows about what there was before and lets the props on the near side of a cell
+// appear a little late.
+function drawProps(inGame, pxH) {
+  const cam = camera.position, sh = inGame && QUAL.shadows, shade = S.d * 14 + 12;
+  let shown = 0;
+  for (const c of bakeCells) {
+    const far = c.far;
+    if (!far) continue;
+    const dBall = Math.hypot(Math.max(c.x0 - S.x, 0, S.x - c.x1), Math.max(c.z0 - S.z, 0, S.z - c.z1));
+    const dCam = Math.hypot(Math.max(c.x0 - cam.x, 0, cam.x - c.x1), Math.max(c.y0 - cam.y, 0, cam.y - c.y1), Math.max(c.z0 - cam.z, 0, cam.z - c.z1));
+    const b = countAbove(c.bigs, inGame ? ((dBall + BAKE * QUAL.slack) / QUAL.view - S.d * 10 - 25) / 130 : 1.5 * 1.5 * dCam / (1.05 * pxH));
+    // (full shapes: in the cell the camera is in, all but the smallest; in the others, by a point a third of the way in)
+    let a = Math.min(b, countAbove(c.bigs, 1.5 * QUAL.lod * (dCam < 1 ? BAKE * QUAL.lod : dCam + BAKE * 0.35)));
+    if (a && !c.near) { if (!c.wantNear) { c.wantNear = true; bakeQueue.add(c); } a = 0; }
+    const casts = sh && dBall < shade, from = a ? far.end[a - 1] : 0, to = b ? far.end[b - 1] : 0;
+    far.mesh.visible = to > from;
+    if (to > from) { far.mesh.geometry.setDrawRange(from, to - from); far.mesh.castShadow = casts; }
+    if (c.near) {
+      const upTo = a ? c.near.end[a - 1] : 0;
+      c.near.mesh.visible = upTo > 0;
+      if (upTo) { c.near.mesh.geometry.setDrawRange(0, upTo); c.near.mesh.castShadow = casts; }
+    }
+    shown += b;
+  }
+  return shown;
+}
 function drawWorld() {
   camera.updateMatrixWorld();
   showGrass();
@@ -674,11 +863,12 @@ function drawWorld() {
   for (const b of batches.values()) { b.n = 0; b.from = -1; }
   DRAW.far = 0;
   const inGame = S.state !== 'menu' && S.state !== 'dex';      // behind the menu everything is shown, from far above
-  let things = 0;
   const pxH = renderer.domElement.height || 1080;
+  bakeSome(S.state === 'play' ? 1.5 : 6);
+  let things = DRAW.props = drawProps(inGame, pxH);
   for (const o of S.objects) {
     const g = o.group;
-    if (o.understudy || (inGame && !g.visible)) continue;      // (understudied: its animated model is being drawn instead)
+    if (o.baked || o.understudy || (inGame && !g.visible)) continue;      // (baked: it is in its cell's mesh. Understudied: its animated model is being drawn instead)
     const geo = g.geometry, p = g.position, sc = g.scale.x, casts = inGame && !!o.casts;
     if (geo === noGeo) {
       // A critter whose model has not been fetched: nothing to draw yet. Fetch it if it is in view, and (from high
@@ -959,6 +1149,7 @@ function populate(seed = (Math.random() * 2 ** 31) | 0) {
 }
 function populateSeeded(seed) {
   worldGroup.clear();
+  resetBake();
   while (ball.children.length > 1) ball.remove(ball.children[1]);
   S.objects = []; S.attached = []; S.byId = new Map(); S.nextId = 1;
   const solids = [];
@@ -976,6 +1167,7 @@ function populateSeeded(seed) {
     worldGroup.add(group);
     const o = { id: opt.id ?? S.nextId, kind: e.kind, spec: e.spec, size, rad, group, bonus: opt.bonus ?? 1, on: false, fly: null, cool: 0, contrib: 0, ldist: 0, vis: size, lump: new V3(), spawnT: 0 };
     S.nextId = Math.max(S.nextId, o.id) + 1; S.byId.set(o.id, o);
+    thingOf.set(group, o);
     if (e.kind === 'creature') group.rotation.order = 'YXZ';       // so a critter can tip forward whichever way it faces
     if (e.kind === 'creature') Object.assign(o, { ai: 'idle', timer: rand() * 3, home: [x, z], tx: x, tz: z, phase: rand() * 6.28, leader: null });
     else if (size >= 0.5 && !e.spec.flat) solids.push({ x, z, rad });
@@ -1028,6 +1220,7 @@ function populateSeeded(seed) {
   S.initial = S.objects.map((o) => ({ o, id: o.spec.id, x: o.group.position.x, z: o.group.position.z, rot: o.group.rotation.y }));
   S.spawn = { put, herd };
   S.titansOut = false; S.live = false;
+  for (const o of S.objects) if (bakeable(o)) settle(o);       // the props are baked into the map, cell by cell (see settle)
   { let cs = S.objects.length; for (const o of S.objects) cs = (cs * 31 + Math.round(o.group.position.x * 8) + Math.round(o.group.position.z * 8) * 7) | 0; S.layoutSum = cs; }
   buildUnlocks();
 }
@@ -1402,6 +1595,7 @@ function stick(ballGroup, o, cx, cy, cz, r) {
   if (tmpV.lengthSq() < 1e-10) tmpV.set(0, 1, 0);
   tmpV.normalize();
   if (o.group.geometry === noGeo) askModel(o.group);
+  unsettle(o);
   o.group.visible = true;
   o.group.quaternion.setFromUnitVectors(UP, tmpV);
   axis.set(rand() - 0.5, rand() - 0.5, rand() - 0.5).normalize();
@@ -1564,7 +1758,7 @@ function takeFrom(Bq, n, crittersOnly) {
   growBall(Bq, 0);
   return out;
 }
-function removeThing(o) { const i = S.objects.indexOf(o); if (i >= 0) S.objects.splice(i, 1); worldGroup.remove(o.group); o.gone = true; S.byId.delete(o.id); netAll(['rm', o.id]); }
+function removeThing(o) { unsettle(o); const i = S.objects.indexOf(o); if (i >= 0) S.objects.splice(i, 1); worldGroup.remove(o.group); o.gone = true; S.byId.delete(o.id); netAll(['rm', o.id]); }
 const goldMat = new THREE.MeshLambertMaterial({ color: 0xffd23f, emissive: 0xd99a00, emissiveIntensity: 0.55 });
 // What events (events.js) are given to work with. See the top of events.js for how each is used.
 const H = {
@@ -2831,7 +3025,7 @@ function dropToMenu(msg) { stopBattle(); $('count').className = ''; toMenu(); me
 function leaveRoom(msg) { const room = NET.room; NET.room = null; if (room) room.close(); dropToMenu(msg); }
 S.net = NET; S.lob = LOB; S.netClaim = claim;      // debug hooks
 // (gfx.loose(true) draws the things stuck to balls one by one, as they were before they went through the batches)
-S.gfx = { renderer, scene, camera, worldGroup, sun, setQuality, drawWorld, batches, DRAW, QUALITY, terrainChunks, get watchFps() { return watchFps; }, get FPS() { return FPS; }, get level() { return qualLevel; } };      // debug hooks for measuring drawing cost
+S.gfx = { renderer, scene, camera, worldGroup, sun, setQuality, drawWorld, batches, DRAW, QUALITY, terrainChunks, get cells() { return bakeCells; }, bakeQueue, get watchFps() { return watchFps; }, get FPS() { return FPS; }, get level() { return qualLevel; } };      // debug hooks for measuring drawing cost
 
 // ---------- main update ----------
 const rollAxis = new V3();
@@ -2934,6 +3128,7 @@ function update(dt) {
   for (let i = S.objects.length - 1; i >= 0; i--) {
     const o = S.objects[i], p = o.group.position;
     if (o.fly) {                                 // knocked loose, in the air
+      if (o.cell) unsettle(o);
       o.fly.vy -= 9.8 * dt;
       p.x = clamp(p.x + o.fly.vx * dt, BOUNDS.x1 + 5, BOUNDS.x2 - 5); p.y += o.fly.vy * dt; p.z = clamp(p.z + o.fly.vz * dt, BOUNDS.z1 + 5, BOUNDS.z2 - 5);
       o.group.rotation.x += dt * 7;
@@ -2949,6 +3144,16 @@ function update(dt) {
       continue;
     }
     if (o.due > S.time) continue;                // asleep
+    if (o.kind === 'item') {
+      // A prop baked into the map that something has moved, resized or begun to grow comes out of it; a loose one
+      // that has stood still for a second and a half goes (back) in. (See settle, above drawWorld.)
+      const g = o.group, rot = g.rotation;
+      if (o.baked) { if (o.spawnT > 0 || p.x !== o.bx || p.y !== o.by || p.z !== o.bz || g.scale.x !== o.bs || rot.x !== o.brx || rot.y !== o.bry || rot.z !== o.brz || g.material !== itemMat) unsettle(o); }
+      else if (!o.cell) {
+        if (p.x !== o.rx || p.y !== o.ry || p.z !== o.rz || g.scale.x !== o.rs || rot.y !== o.rr || o.restT === undefined) { o.rx = p.x; o.ry = p.y; o.rz = p.z; o.rs = g.scale.x; o.rr = rot.y; o.restT = S.time; }
+        else if (S.time - o.restT > 1.5 && !(o.cool > 0) && bakeable(o)) settle(o);
+      }
+    }
     if (o.cool > 0) o.cool -= dt;
     if (o.spawnT > 0) {                          // materialising: grows in with a wobble, and cannot be rolled up for a moment
       o.spawnT -= dt;
@@ -2964,7 +3169,7 @@ function update(dt) {
     r = S.d / 2;
     const reach = r + o.rad;
     // how far the player's ball is from mattering to it: from touching it, from its shadow showing, from it coming into or going out of sight
-    let spare = Math.min(dist - reach - S.d, QUAL.shadows ? dist - shade : 1e9, Math.abs(dist - seen));
+    let spare = o.baked ? dist - reach - S.d : Math.min(dist - reach - S.d, QUAL.shadows ? dist - shade : 1e9, Math.abs(dist - seen));      // (a baked prop is drawn by its cell: only touching it matters)
     if (NET.client) { if (o.kind === 'creature' || o.ntx !== undefined) puppetThing(o, dt, dist); if (o.ntx !== undefined || (o.kind === 'creature' && dist < 150 + S.d * 12)) spare = 0; }      // the host moves the critters; here they glide to where it says
     else if (o.kind === 'creature') {                 // it minds the nearest ball, whoever is pushing it
       let B = S, gap = dist - S.d;
