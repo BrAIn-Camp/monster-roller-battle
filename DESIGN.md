@@ -144,7 +144,8 @@ Three additions to the round, made together so that each explains the others.
   (that gate is by size, not height), and the CPUs do not use it (they only jump to free themselves). Set it to a number
   and a jump may only mount ground that many times higher than the ball could have rolled up: the Green is then left at
   88 cm divided by the number (1.25: at 70 cm), at the price of a ball being stopped in mid-air by a ledge it has
-  visibly cleared. Which of the two the map should be is an open question.
+  visibly cleared. Decided (23 Nov 2026): it stays as built. A jump clears what it clears, and the ledges gate rolling,
+  not jumping; "grow to 90 cm" is still what it takes to roll out of the Green.
 - **The ram.** A critter up to 1.3 times the biggest the ball can roll up (so up to 0.65 of the ball's width) is stunned
   for four seconds by a dash burst into it, and while it is stunned any ball that could have stunned it can roll it up.
   Three stars circle its head and go out one at a time, so what is left of the four seconds can be read at a glance. The
