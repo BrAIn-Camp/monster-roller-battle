@@ -26,13 +26,18 @@ import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometr
 // localStorage -- either an absolute URL or a path relative to the page. That lets the
 // folder live outside the project (another drive, a shared folder) while the checkout
 // stays clean.
-function basePath() {
+//
+// Left alone, there are two places to look, in this order: models/pbr/ (the Battle Revolution set made by
+// tools/pbr, which runs to slot 493) and models/stadium/ (the Stadium set, the first 151). The first that has a
+// meta.json is the set used for everything; BASE is only known once stadiumMeta() has resolved.
+function basePaths() {
   let p = null;
   try { p = new URLSearchParams(location.search).get('stadium') || localStorage.getItem('stadiumPath') || null; } catch (e) { /* no DOM, or storage blocked */ }
-  if (p) return new URL(p.endsWith('/') ? p : p + '/', location.href).href;
-  return new URL('../models/stadium/', import.meta.url).href;
+  if (p) return [new URL(p.endsWith('/') ? p : p + '/', location.href).href];
+  return [new URL('../models/pbr/', import.meta.url).href, new URL('../models/stadium/', import.meta.url).href];
 }
-const BASE = basePath();
+const BASES = basePaths();
+let BASE = BASES[BASES.length - 1];
 export const stadiumBase = () => BASE;
 const loader = new GLTFLoader(), texLoader = new THREE.TextureLoader();
 const modelCache = new Map(), texCache = new Map();
@@ -41,7 +46,12 @@ let metaP;
 // The whole set's animation and eye-swap data, ~430 KB. Resolves to null when the
 // models have not been extracted, which is the normal case for a fresh checkout.
 export function stadiumMeta() {
-  if (!metaP) metaP = fetch(BASE + 'meta.json').then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  if (!metaP) metaP = (async () => {
+    for (const base of BASES) {
+      try { const r = await fetch(base + 'meta.json'); if (r.ok) { const meta = await r.json(); BASE = base; return meta; } } catch (e) { /* not there: try the next */ }
+    }
+    return null;
+  })();
   return metaP;
 }
 

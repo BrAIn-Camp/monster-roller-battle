@@ -3,12 +3,12 @@
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import path from 'node:path';
-const TYPES = ['normal','fire','water','grass','electric','ice','fighting','poison','ground','flying','psychic','bug','rock','ghost','dragon'];
+const TYPES = ['normal','fire','water','grass','electric','ice','fighting','poison','ground','flying','psychic','bug','rock','ghost','dragon','dark','steel'];
 const HABITATS = ['town','beach','tidepool','sea','farm','marsh','forest','gorge','plain','canyon','mountain','summit','volcano','ruins','islet'];
 const MOVES = ['walk','hop','fly','float','swim','slither','still'], TEMPERS = ['timid','calm','curious','bold'], RARITIES = ['common','uncommon','rare','unique'];
 const SHAPES = ['sph','box','cyl','cone','taper','torus','rock','hemi'];
 const slots = JSON.parse(readFileSync(new URL('./slots.json', import.meta.url), 'utf8'));
-const file = process.argv[2], first = +process.argv[3] || 1, last = +process.argv[4] || 151;
+const file = process.argv[2], first = +process.argv[3] || 1, last = +process.argv[4] || 251;
 const list = (await import(pathToFileURL(path.resolve(file)).href)).default;
 const problems = [], seen = new Set(), ids = new Set();
 const num3 = (a) => Array.isArray(a) && a.length === 3 && a.every((n) => typeof n === 'number' && isFinite(n));

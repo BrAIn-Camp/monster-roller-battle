@@ -37,6 +37,7 @@ const SND = {                 // [wave, from Hz, to Hz, seconds] for a hit of ea
   normal: ['triangle', 330, 190, 0.09], fire: ['sawtooth', 430, 150, 0.16], water: ['sine', 540, 250, 0.14], grass: ['triangle', 720, 480, 0.1], electric: ['square', 1500, 650, 0.08],
   ice: ['sine', 1750, 1150, 0.1], fighting: ['square', 190, 85, 0.1], poison: ['sawtooth', 310, 210, 0.14], ground: ['sawtooth', 125, 55, 0.17], flying: ['sine', 880, 1320, 0.1],
   psychic: ['sine', 980, 1480, 0.16], bug: ['square', 920, 600, 0.05], rock: ['sawtooth', 155, 68, 0.14], ghost: ['sine', 300, 520, 0.2], dragon: ['sawtooth', 250, 520, 0.18],
+  dark: ['sawtooth', 210, 120, 0.15], steel: ['square', 1250, 900, 0.07],
 };
 // shapes shared by every fight (built once, never disposed)
 const GEO = {

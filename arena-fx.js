@@ -8,8 +8,8 @@
 //   fx.step(dt)                   once a frame
 import * as THREE from 'three';
 
-export const TYPE_HEX = { normal: 0xd8d2c0, fire: 0xff7a2a, water: 0x4aa8ff, grass: 0x5fd058, electric: 0xffe34a, ice: 0x9fe8f5, fighting: 0xe2603a, poison: 0xb866d8, ground: 0xd9aa55, flying: 0xa8c4ff, psychic: 0xff6fa8, bug: 0xb4d83a, rock: 0xb09a70, ghost: 0x8a6fd0, dragon: 0x7a6aff };
-export const TYPE_GLOW = { normal: 0xffffff, fire: 0xffd23f, water: 0xbfe6ff, grass: 0xc8ff8a, electric: 0xffffff, ice: 0xffffff, fighting: 0xffc09a, poison: 0xe6a8ff, ground: 0xffe2a0, flying: 0xffffff, psychic: 0xffc2dc, bug: 0xe8ff9a, rock: 0xe6d6b0, ghost: 0xc9b6ff, dragon: 0xc4bcff };
+export const TYPE_HEX = { normal: 0xd8d2c0, fire: 0xff7a2a, water: 0x4aa8ff, grass: 0x5fd058, electric: 0xffe34a, ice: 0x9fe8f5, fighting: 0xe2603a, poison: 0xb866d8, ground: 0xd9aa55, flying: 0xa8c4ff, psychic: 0xff6fa8, bug: 0xb4d83a, rock: 0xb09a70, ghost: 0x8a6fd0, dragon: 0x7a6aff, dark: 0x6a5568, steel: 0xb4bece };
+export const TYPE_GLOW = { normal: 0xffffff, fire: 0xffd23f, water: 0xbfe6ff, grass: 0xc8ff8a, electric: 0xffffff, ice: 0xffffff, fighting: 0xffc09a, poison: 0xe6a8ff, ground: 0xffe2a0, flying: 0xffffff, psychic: 0xffc2dc, bug: 0xe8ff9a, rock: 0xe6d6b0, ghost: 0xc9b6ff, dragon: 0xc4bcff, dark: 0xb89ab4, steel: 0xffffff };
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const easeOut = (k) => 1 - (1 - k) * (1 - k);

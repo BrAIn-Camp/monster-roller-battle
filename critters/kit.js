@@ -87,7 +87,7 @@ export function buildCritterGeometry(spec, fine = false) {
 export const critterMaterial = new THREE.MeshLambertMaterial({ vertexColors: true });
 
 // Checks a critter entry and returns a list of problems (empty = fine). No three.js needed by callers.
-export const TYPES = ['normal', 'fire', 'water', 'grass', 'electric', 'ice', 'fighting', 'poison', 'ground', 'flying', 'psychic', 'bug', 'rock', 'ghost', 'dragon'];
+export const TYPES = ['normal', 'fire', 'water', 'grass', 'electric', 'ice', 'fighting', 'poison', 'ground', 'flying', 'psychic', 'bug', 'rock', 'ghost', 'dragon', 'dark', 'steel'];
 export const HABITATS = ['town', 'beach', 'tidepool', 'sea', 'farm', 'marsh', 'forest', 'gorge', 'plain', 'canyon', 'mountain', 'summit', 'volcano', 'ruins', 'islet'];
 export const MOVES = ['walk', 'hop', 'fly', 'float', 'swim', 'slither', 'still'];
 export const TEMPERS = ['timid', 'calm', 'curious', 'bold'];

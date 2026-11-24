@@ -2,7 +2,7 @@
 // arena.js and the fight's HUD in arena-battle.js).
 export const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 export const HAS_DOM = typeof document !== 'undefined';
-export const TYPE_FALLBACK = { normal: '#a8a090', fire: '#f2743a', water: '#4a9be8', grass: '#57b65a', electric: '#e9bf2a', ice: '#7fd0d8', fighting: '#c0503a', poison: '#a05ab8', ground: '#c9a35a', flying: '#8fa8e8', psychic: '#f06a9a', bug: '#9bbf3b', rock: '#a08b6a', ghost: '#6f5aa8', dragon: '#6a5ae0' };
+export const TYPE_FALLBACK = { normal: '#a8a090', fire: '#f2743a', water: '#4a9be8', grass: '#57b65a', electric: '#e9bf2a', ice: '#7fd0d8', fighting: '#c0503a', poison: '#a05ab8', ground: '#c9a35a', flying: '#8fa8e8', psychic: '#f06a9a', bug: '#9bbf3b', rock: '#a08b6a', ghost: '#6f5aa8', dragon: '#6a5ae0', dark: '#5a4a52', steel: '#9aa4b4' };
 export const typeColor = (t) => ((typeof window !== 'undefined' && window.ROLLUP_DATA && window.ROLLUP_DATA.TYPE_COLORS) || TYPE_FALLBACK)[t] || '#888';
 export const chip = (t) => `<span class="ar-chip" style="background:${typeColor(t)}">${t}</span>`;
 export const css = (hex) => '#' + hex.toString(16).padStart(6, '0');

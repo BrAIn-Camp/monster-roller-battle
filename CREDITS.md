@@ -9,9 +9,15 @@ no attribution required. Credit is given here anyway.
 > machine from a cartridge you own. The game runs normally without it. Do not commit or publish it.
 > See `models/stadium/README.md`.
 
+> **The same goes for `models/pbr/`** (24 November 2026): creature models for slots 1-493, made on your own machine
+> from a Pokémon Battle Revolution disc you own by the tools in `tools/pbr/` (see its README). The folder is in
+> `.gitignore`. When it is there the game uses it in place of `models/stadium/`; when neither is there the game
+> draws the generated critters below.
+
 ## Critters
 
-All 151 critters are generated in code from the parts lists in `critters/critters_*.js` (format in `critters/kit.js`).
+All 251 critters are generated in code from the parts lists in `critters/critters_*.js` (format in `critters/kit.js`).
+Slots 152-251 are written by `tools/make-critters-152-251.mjs` from a dozen body plans and a kit of ears, tails and horns.
 They are original designs; no model files are used for them. The Quaternius creature models used in an earlier
 version have been removed.
 
@@ -37,7 +43,7 @@ from simple shapes in `main.js`, as is the fallback shape for any item whose mod
 
 ## Data
 
-Species categories, types and heights in `critters/slots.json` come from the open PokéAPI data set
+Species categories, types and heights in `critters/slots.json`, and the base stats in `critters/battle-data.js`, come from the open PokéAPI data set
 (https://github.com/PokeAPI/pokeapi). They are facts used to size and classify the stand-ins.
 
 ## Added 19 November 2026

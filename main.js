@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
-import { BOUNDS, STARTS, BIOMES, B, PLACES, REHOME, GUESTS, R_HUB, scenery, layout, ITEMS as MAP_ITEMS, SHAPES as MAP_SHAPES } from './map.js';
+import { BOUNDS, STARTS, BIOMES, B, PLACES, REHOME, GUESTS, R_HUB, scenery, layout, ITEMS as MAP_ITEMS, SHAPES as MAP_SHAPES, MAP_ID, MAP_NAME, MAP_LIST, ROSTER, ROUTES, EVENT, DENSITY as MAP_DENSITY, switchMap } from './map-select.js';   // the map this page is playing (map.js or map2.js)
 import { createTerrain, vnoise, SEA_LEVEL, SEA_MIN_D } from './terrain.js';
 import { buildCritterGeometry, critterMaterial } from './critters/kit.js';
 import * as LOCAL from './critters/local-mode.js';   // the local Stadium-model build; inert while its switch is off
@@ -13,10 +13,16 @@ import { openRoom, openPublicRoom, cleanCode } from './net.js';
 import crittersA from './critters/critters_1.js';
 import crittersB from './critters/critters_2.js';
 import crittersC from './critters/critters_3.js';
+import crittersD from './critters/critters_4.js';
+import crittersE from './critters/critters_5.js';
 
 const { LEVEL, TYPE_COLORS, RARITY } = window.ROLLUP_DATA;
+LEVEL.name = MAP_NAME;
+const HUB_NAME = 'the ' + EVENT.HUB[0];                    // "the Green", "the Square": the bowl in the middle of the map
 const ITEMS = [...window.ROLLUP_DATA.ITEMS, ...MAP_ITEMS];
-const CREATURES = [...crittersA, ...crittersB, ...crittersC].sort((a, b) => a.dex - b.dex);
+// Each map has its own run of slots (ROSTER in the map's file), and those are the only critters there are while it is
+// being played: the dex, the size curve below and the titans all go by this list.
+const CREATURES = [...crittersA, ...crittersB, ...crittersC, ...crittersD, ...crittersE].filter((sp) => sp.dex >= ROSTER[0] && sp.dex <= ROSTER[1]).sort((a, b) => a.dex - b.dex);
 // The size curve (23 November 2026). The critters' heights as written (0.2 m to 8.8 m) have most species between 1
 // and 2 m, so a ball of 4 m could roll up all but a handful and there was nothing left to be too big. In the world
 // each is now drawn bigger by where it ranks: the smallest as it was, the middle one half as big again, the biggest
@@ -79,7 +85,7 @@ const CRITTER_DENSITY = 1.8;    // scales how many groups of each species the ma
 const REFILL_AT = 45;     // seconds from the end at which everything rolled up so far is put back for a final push
 // The round's four phases, by seconds left when each begins. `sky` is what the sky turns to during it.
 const PHASES = [
-  { from: 300, name: 'Scramble',   sub: 'Race for the feast, then grow to 90 cm to climb out of the Green', sky: 0x9ad8f5 },
+  { from: 300, name: 'Scramble',   sub: 'Race for the feast, then grow to 90 cm to climb out of ' + HUB_NAME, sky: 0x9ad8f5 },
   { from: 225, name: 'Expedition', sub: 'Every habitat is open. New critters have arrived. Watch for events!', sky: 0xa8dcf0 },
   { from: 120, name: 'Frenzy',     sub: 'Two minutes left. More critters are appearing: build your team!', sky: 0xf6dca8 },
   { from: 45,  name: 'Titan Hour', short: 'Titans', sub: 'Titans walk the outer lands, and everything rolled up so far is back!', sky: 0xf7a985 },
@@ -1326,11 +1332,8 @@ function critterSpot(sp, hab = habOf(sp), far = null) {
 }
 // Where a ball should be heading for its size: nowhere while it is still growing in the Green, then the heart of its
 // chosen wedge's inner habitat, then the outer one. Big balls move on to a neighbouring wedge after a while.
-// Each entry: [inner place, outer place, ball size needed for the outer one], by wedge from north clockwise.
-const ROUTES = [
-  [PLACES.frozenLake, [0, -140], 3.4], [PLACES.yard, [106, -106], 3.4], [PLACES.hotSprings, [140, 0], 3.4], [PLACES.oasis, [112, 100], 3],
-  [[0, 96], [30, 140], 2.8], [PLACES.bog, [-108, 112], 3], [PLACES.grove, [-150, 2], 3], [PLACES.barnyard, [-110, -110], 2.8],
-];
+// Each entry of ROUTES (in the map's file): [inner place, outer place, ball size needed for the outer one], by wedge
+// from north clockwise.
 function routeGoal(st, x, z, d, dt) {
   if (st.wedge === undefined || d < 0.95) return null;
   const out = d >= ROUTES[st.wedge][2];
@@ -1416,7 +1419,7 @@ function populateSeeded(seed) {
   }
   for (const sp of CREATURES) {
     const [groups, per] = RARITY[sp.rarity] || [1, 1], hab = habOf(sp);
-    const n = Math.max(1, Math.round(groups * (hab === 'town' ? 2 : 1) * (sp.height0 <= 0.45 ? 1.6 : 1) * CRITTER_DENSITY));
+    const n = Math.max(1, Math.round(groups * (hab === 'town' ? 2 : 1) * (sp.height0 <= 0.45 ? 1.6 : 1) * CRITTER_DENSITY * MAP_DENSITY));
     for (let k = 0; k < n; k++) herd(sp, critterSpot(sp, hab), per);
   }
   for (const hab in GUESTS) for (const id of GUESTS[hab]) { const sp = SPECS[id] && SPECS[id].spec; if (sp) for (let k = 0; k < (hab === 'town' ? 3 : 1); k++) herd(sp, critterSpot(sp, hab, 0.15), 3); }
@@ -1839,7 +1842,7 @@ function updateSeek(dt, hx, hz) {          // the habitat banner, and the pointe
     if (S.ev) { el.style.display = 'none'; $('evdist').innerHTML = `<span class="arr" style="transform:rotate(${rel.toFixed(2)}rad)">↑</span>${Math.round(md)} m`; }
     else { el.style.display = 'block'; el.innerHTML = `<span class="arr" style="transform:rotate(${rel.toFixed(2)}rad);color:${mk.css}">↑</span> <b>${mk.label}</b> ${Math.round(md)} m`; }
   } else if (S.mode === 'timed' && S.state === 'play' && S.d < 0.9 && Math.hypot(S.x, S.z) < R_HUB + 4 && S.time > 6) {
-    el.style.display = 'block'; el.innerHTML = 'Grow to <b>90 cm</b> to climb out of the Green';
+    el.style.display = 'block'; el.innerHTML = 'Grow to <b>90 cm</b> to climb out of ' + HUB_NAME;
   } else el.style.display = 'none';
   if (!mk && S.ev && $('evdist').innerHTML) $('evdist').innerHTML = '';
 }
@@ -2295,7 +2298,7 @@ function removeThing(o) { unsettle(o); const i = S.objects.indexOf(o); if (i >= 
 const goldMat = new THREE.MeshLambertMaterial({ color: 0xffd23f, emissive: 0xd99a00, emissiveIntensity: 0.55 });
 // What events (events.js) are given to work with. See the top of events.js for how each is used.
 const H = {
-  THREE, S, T, MODS, PLACES, BIOMES, B, CREATURES, TITANS, SPECS, TEAMS, STARTS, BOUNDS, P, G, mat, goldMat,
+  THREE, S, T, MODS, PLACES, BIOMES, B, EVENT, HUB_NAME, CREATURES, TITANS, SPECS, TEAMS, STARTS, BOUNDS, P, G, mat, goldMat,
   fx: { add(o) { fx.add(o); if (NET.host) NET.fxRoots.set(o, { key: NET.fxKey++, n: -1, sigs: [] }); }, remove(o) { fx.remove(o); const e = NET.fxRoots.get(o); if (e) { NET.fxRoots.delete(o); netAll(['fxr', e.key]); } } },
   rand: () => rand(), clamp, topSpeed, groundAt, waterAt: T.waterAt, biomeAt, sampleBiome: T.sampleBiome, critterSpot, habOf, baseOf,
   balls: allBalls, isPlayer: (Bq) => Bq === S, isHuman: (Bq) => Bq === S || !!Bq.human, ballName, who: (Bq) => `${TOK}W${Bq.team}${TOK}`, teamOf: (Bq) => TEAMS[Bq.team], pickRatio,
@@ -2866,7 +2869,7 @@ function enterPhase(ph) {
   else if (ph === 1 || ph === 2) spawnWave();
   if (ph === 1 && !NET.client) for (const b of allBalls()) if (b.d < 1) {            // nobody is left stuck in the Green: a ball still under 1 m gets a leg up
     growBall(b, 1 - b.vol3);
-    if (b === S) { sub = 'You got a leg up to 1 m: climb out of the Green! ' + sub; toast('Late bloomer: boosted to 1 m'); }
+    if (b === S) { sub = 'You got a leg up to 1 m: climb out of ' + HUB_NAME + '! ' + sub; toast('Late bloomer: boosted to 1 m'); }
   }
   if (ph === 3 && !NET.client) { spawnTitans(); refillMap(); $('timer').classList.add('hot'); }
   if (ph > 0) { announce(P2.name.toUpperCase(), sub, ph === 3 ? '#ff8a6a' : '#ffe169', `Phase ${ph + 1} of ${PHASES.length}`); [523, 659, 784, 1047].forEach((f, i) => tone(f, f, 0.2, 'triangle', 0.16, i * 0.1)); }
@@ -3331,7 +3334,12 @@ function fxDrop(key) {
 function clientMsg(m) {
   const k2 = m[0];
   if (k2 === 'full') { leaveRoom('That room is full'); return; }
-  if (k2 === 'lob') { LOB.kinds = m[1]; LOB.seat = m[2]; LOB.diff = m[3]; LOB.auto = m[4] ?? null; LOB.autoAt = performance.now(); if (!NET.on) { renderLobby(); if (S.state === 'menu') menuView('mvLobby'); } return; }
+  if (k2 === 'lob') {
+    // The host's map comes with the lobby. A map is built at load (map-select.js), so a guest on another one reloads
+    // into the host's and, in a private room, walks straight back in by its code.
+    if (m[5] && m[5] !== MAP_ID && !NET.on) { const room = NET.room, code = room && !room.public ? room.code : null; switchMap(m[5], code ? { room: code } : {}); return; }
+    LOB.kinds = m[1]; LOB.seat = m[2]; LOB.diff = m[3]; LOB.auto = m[4] ?? null; LOB.autoAt = performance.now(); if (!NET.on) { renderLobby(); if (S.state === 'menu') menuView('mvLobby'); } return;
+  }
   if (k2 === 'go') { beginMatch(m[1], m[2]); return; }
   if (!NET.on) return;
   switch (k2) {
@@ -3505,7 +3513,7 @@ function sendLobby() {
   const room = NET.room;
   if (!room || !room.host) return;
   LOB.diff = room.public ? 'normal' : save.difficulty;
-  for (let t = 1; t < TEAMS.length; t++) if (LOB.peers[t]) room.send(LOB.peers[t], [['lob', LOB.kinds, t, LOB.diff, autoLeft()]]);
+  for (let t = 1; t < TEAMS.length; t++) if (LOB.peers[t]) room.send(LOB.peers[t], [['lob', LOB.kinds, t, LOB.diff, autoLeft(), MAP_ID]]);
 }
 // (public host) The countdown to a public game: it runs while two or more players are waiting in the lobby.
 function lobbyAuto() {
@@ -3957,7 +3965,10 @@ S.autoplay = (seconds, everySec = 30) => {
       for (const o of S.objects) {
         if (o.fly || o.cool > 0 || o.noPick || o.size > S.d * PICK_RATIO || o.size < S.d * 0.08) continue;
         const p = o.group.position, dx = p.x - S.x, dz = p.z - S.z, d = Math.hypot(dx, dz) * (o.kind === 'creature' ? 0.6 : 1);
-        if (d < bd && d < 45 + S.d * 5 && Math.abs(groundAt(p.x, p.z) - g0) < S.d * 0.25 + 0.05 && (S.d >= SEA_MIN_D || T.waterAt(p.x, p.z) !== 2)) { bd = d; best = [dx, dz]; }
+        // (within a step the ball can roll up: just under the 0.4 of its width that terrainContact allows, as the CPU
+        // teams judge it. It was a quarter of the width, which on terraced ground, a third of a metre a step, left a
+        // small ball seeing almost nothing to go for.)
+        if (d < bd && d < 45 + S.d * 5 && Math.abs(groundAt(p.x, p.z) - g0) < Math.max(S.d * 0.25 + 0.05, S.d * 0.38) && (S.d >= SEA_MIN_D || T.waterAt(p.x, p.z) !== 2)) { bd = d; best = [dx, dz]; }
       }
       if (!best) { wander = 150; wh = rand() * 6.28; }
     }
@@ -4146,9 +4157,16 @@ S.openDex = openDex;    // S.openDex(true) from the console shows every critter,
 S.grab = (n = 1) => { const near = S.objects.filter((o) => o.kind === 'creature' && !o.on && !o.gone)
   .sort((a, b) => Math.hypot(a.group.position.x - S.x, a.group.position.z - S.z) - Math.hypot(b.group.position.x - S.x, b.group.position.z - S.z));
   let k = 0; for (const o of near.slice(0, n)) { attach(o); k++; } return k + ' rolled up'; };   // S.grab(5) from the console, for testing pick-ups
-S.dexPop = (n) => showDexPop(CREATURES[Math.max(1, Math.min(151, n)) - 1], true, 1);   // S.dexPop(4) from the console shows one entry's card
+S.dexPop = (n) => showDexPop(CREATURES.find((sp) => sp.dex === n) || CREATURES[0], true, 1);   // S.dexPop(4) from the console shows one slot's card
 
 // ---------- wiring ----------
+// The map: the button names the one being played and moves on to the next, which is a reload (see map-select.js).
+{ const el = $('btnMap');
+  if (el) {
+    el.textContent = 'Map: ' + MAP_NAME;
+    el.title = MAP_LIST.map((mp) => mp.name + ': ' + mp.blurb).join('\n');
+    el.onclick = () => { const i = MAP_LIST.findIndex((mp) => mp.id === MAP_ID); switchMap(MAP_LIST[(i + 1) % MAP_LIST.length].id); };
+  } }
 $('btnTimed').onclick = () => start('timed');
 $('btnFree').onclick = () => start('free');
 $('btnDex').onclick = () => openDex(false);
@@ -4215,6 +4233,7 @@ LOCAL.init({ scene, camera, renderer, S, baseOf, mat, TEAMS, CREATURES, TITANS }
     cv.width = cv.height = px;
     for (const sp of CREATURES) {
       const i = sp.dex - 1;
+      if ((Math.floor(i / LOCAL.FACE_COLS) + 1) * px > img.height) continue;      // (a sheet drawn for fewer slots: this one's portrait comes from its model instead)
       cx.clearRect(0, 0, px, px); cx.drawImage(img, (i % LOCAL.FACE_COLS) * px, Math.floor(i / LOCAL.FACE_COLS) * px, px, px, 0, 0, px, px);
       const url = cv.toDataURL(); thumbs[sp.id] = url; faces.set(sp.dex, url);
     }

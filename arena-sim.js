@@ -114,6 +114,8 @@ export const MOVES = {
   rock:     { name: 'Rock Slide',    shape: 'blast',  reach: 9.5, size: 3.5, power: 2.0, kb: 1.6, stun: 0.8, wind: 1.1 },
   ghost:    { name: 'Shadow Strike', shape: 'strike', reach: 13, blink: true, power: 3.0, kb: 2.4, wind: 0.7 },
   dragon:   { name: 'Dragon Beam',   shape: 'beam',   reach: 14, width: 1.7, power: 2.0, kb: 2.2, wind: 1.0 },
+  dark:     { name: 'Night Ambush',  shape: 'strike', reach: 11, blink: true, power: 2.6, kb: 1.8, stun: 0.5, wind: 0.6 },
+  steel:    { name: 'Iron Charge',   shape: 'rush',   reach: 9, width: 1.5, power: 2.2, kb: 3.6, speed: 0.6, wind: 0.8 },
   normal:   { name: 'Stampede',      shape: 'rush',   reach: 10, width: 1.2, power: 1.8, kb: 3.2, speed: 0.75, wind: 0.6 },
 };
 // which of a monster's types its signature move comes from: the first, unless that is "normal" and it has another

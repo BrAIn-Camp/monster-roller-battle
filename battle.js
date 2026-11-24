@@ -77,7 +77,7 @@ export function createBattle({ teams, buildMesh }) {
   const B = { t: 0, finished: false, winner: -1, fought: 0 };
   const effCache = new Map();
   const bestEff = (u, v) => {                                   // the best multiplier any of u's types gets against v
-    const key = u.spec.dex * 200 + v.spec.dex;
+    const key = u.spec.dex * 1000 + v.spec.dex;
     let e = effCache.get(key);
     if (e === undefined) { e = Math.max(...u.spec.types.map((t) => typeMult(t, v.spec.types))); effCache.set(key, e); }
     return e;

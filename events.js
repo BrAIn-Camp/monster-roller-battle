@@ -86,23 +86,15 @@ function findSite(H, q) {
   }
   return [0, 24];
 }
-// Named places, for banners. [short name, name in a sentence]
-const PLACE_INFO = {
-  frozenLake: ['Frozen Lake', 'the Frozen Lake'], yard: ['Stormworks', 'the Stormworks yard'], hotSprings: ['Hot Springs', 'the Hot Springs'],
-  oasis: ['Oasis', 'the Oasis'], pier: ['Pier', 'the Pier'], bog: ['Bog', 'the Big Bog'], grove: ['Grove', 'the Sunny Grove'], barnyard: ['Barnyard', 'the Barnyard'],
-  temple: ['Temple', 'the Temple of Echoes'], crypt: ['Crypt', 'the Gloomrest crypt'], lighthouse: ['Lighthouse', 'the Lighthouse'], windmillHill: ['Windmill', 'Windmill Hill'],
-  gorgeMouth: ['Gorge', 'the mouth of Echo Gorge'], dam: ['Dam', 'the Stormworks dam'], craterFoot: ['Crater', 'the foot of Mount Kiln'], peakFoot: ['Summit', 'the foot of Rimepeak'],
-};
-const EXTRA_PLACES = { craterFoot: [128, 0], peakFoot: [0, -128] };
-const INNER_PLACES = ['frozenLake', 'yard', 'hotSprings', 'oasis', 'pier', 'bog', 'grove', 'barnyard'];
-const OUTER_PLACES = ['temple', 'crypt', 'lighthouse', 'windmillHill', 'gorgeMouth', 'dam', 'craterFoot', 'peakFoot'];
+// Named places, for banners, come from the map (H.EVENT: see EVENT in map.js): PLACE_INFO [short name, name in a
+// sentence], EXTRA_PLACES, and the lists INNER_PLACES and OUTER_PLACES.
 function shuffled(H, list) { const a = list.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.min(i, Math.floor(H.rand() * (i + 1))); [a[i], a[j]] = [a[j], a[i]]; } return a; }
 // A clear, level, reachable spot at (or a few metres from) one of the named places. -> { x, z, short, long } | null
 function placeSite(H, keys, d, clear, gap, ignore) {
   const balls = H.balls();
   for (const key of shuffled(H, keys)) {
-    const at = H.PLACES[key] || EXTRA_PLACES[key];
-    if (!at || typeof at[0] !== 'number') continue;
+    const at = H.PLACES[key] || H.EVENT.EXTRA_PLACES[key], PLACE_INFO = H.EVENT.PLACE_INFO;
+    if (!at || typeof at[0] !== 'number' || !PLACE_INFO[key]) continue;
     for (let k = 0; k < 25; k++) {
       const rr = k === 0 ? 0 : 7 + 6 * Math.floor((k - 1) / 8), dir = DIRS[((k - 1) * 2 + 16) % 16];
       const x = at[0] + dir[0] * rr, z = at[1] + dir[1] * rr;
@@ -117,9 +109,9 @@ function placeSite(H, keys, d, clear, gap, ignore) {
 function namedSite(H, s, clear, gap, outerChance = 0.6) {
   let site = null;
   const ignore = 0.5 * s.min;                              // anything every ball can roll up is not in the way
-  if (!s.hub && s.go >= 1.6 && H.rand() < outerChance) site = placeSite(H, OUTER_PLACES, s.go, clear, gap, ignore);
-  if (!site && !s.hub) site = placeSite(H, INNER_PLACES, s.go, clear, gap, ignore);
-  if (!site) { const p = findSite(H, { rMin: 15, rMax: 40, d: 0.5, clear, gap, ignore }); site = { x: p[0], z: p[1], short: 'Green', long: 'Crossway Green' }; }
+  if (!s.hub && s.go >= 1.6 && H.rand() < outerChance) site = placeSite(H, H.EVENT.OUTER_PLACES, s.go, clear, gap, ignore);
+  if (!site && !s.hub) site = placeSite(H, H.EVENT.INNER_PLACES, s.go, clear, gap, ignore);
+  if (!site) { const p = findSite(H, { rMin: 15, rMax: 40, d: 0.5, clear, gap, ignore }); site = { x: p[0], z: p[1], short: H.EVENT.HUB[0], long: H.EVENT.HUB[1] }; }
   return site;
 }
 
@@ -346,7 +338,7 @@ const stampede = {
     }
     D.cpuT = 0;
     ev.title = cap(type) + ' Stampede';
-    ev.sub = `A herd of <b>${type.toUpperCase()}</b> critters is charging ${s.hub ? 'across' : 'through'} the Green: roll into the column!`;
+    ev.sub = `A herd of <b>${type.toUpperCase()}</b> critters is charging ${s.hub ? 'across' : 'through'} ${H.HUB_NAME}: roll into the column!`;
     mk(H, ev, 'stampede', D.ax + D.ux * D.col, D.az + D.uz * D.col, { label: 'Stampede', color: hexOf(stampede.color), radius: Math.max(4, gap * 2) });
     H.cpuGoto(D.ax + D.ux * D.col * 0.5, D.az + D.uz * D.col * 0.5, stampede.duration, 0.7);
     if (kinds[0]) H.sfx.cry(kinds[0], 0.09);
@@ -384,7 +376,7 @@ const swarm = {
   id: 'swarm', name: 'Elemental Surge', sub: 'Critters of one type are swarming one habitat: get there!', color: '#ff5fa2', duration: 35, weight: 1.2,
   start(H, ev) {
     const D = begin(H, ev), s = D.s;
-    const zones = s.hub ? ['hub'] : ['tundra', 'works', 'ashflats', 'canyon', 'beach', 'marsh', 'forest', 'farm'];
+    const zones = s.hub ? ['hub'] : H.EVENT.SURGE;
     let opts = [];
     for (const zid of zones) {
       const bi = H.B[zid], biome = H.BIOMES[bi], byType = {};
@@ -818,6 +810,7 @@ const coldSnap = {
   start(H, ev) {
     const D = begin(H, ev), s = D.s;
     D.world = true;
+    { const bay = H.BIOMES[H.B.sea]; if (bay) ev.sub = `The sea has frozen! Any ball can cross ${bay.name}: ice and water critters are out on the ice`; }
     H.setIce(true); H.setSky(0xdff3fa);
     const isl = H.PLACES.islets;
     let mx = 0, mz = 0;

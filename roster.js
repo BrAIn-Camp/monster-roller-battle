@@ -12,7 +12,7 @@
     TYPE_COLORS: {
       normal: '#a8a090', fire: '#f2743a', water: '#4a9be8', grass: '#57b65a', electric: '#e9bf2a', ice: '#7fd0d8',
       fighting: '#c0503a', poison: '#a05ab8', ground: '#c9a35a', flying: '#8fa8e8', psychic: '#f06a9a', bug: '#9bbf3b',
-      rock: '#a08b6a', ghost: '#6f5aa8', dragon: '#6a5ae0',
+      rock: '#a08b6a', ghost: '#6f5aa8', dragon: '#6a5ae0', dark: '#5a4a52', steel: '#9aa4b4',
     },
     // rarity -> [number of groups, critters per group]
     RARITY: { common: [3, 3], uncommon: [2, 3], rare: [2, 1], unique: [1, 1] },

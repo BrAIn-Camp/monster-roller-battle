@@ -1,2 +1,4 @@
 node_modules/
 __pycache__/
+# models made on this machine by tools/pbr from a disc the player owns: never committed
+models/pbr/

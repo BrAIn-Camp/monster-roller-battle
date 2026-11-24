@@ -23,9 +23,12 @@
 <div id="say">Loading the models...</div>
 <script type="module">
 import * as THREE from 'three';
-import { stadiumMeta, loadStadium, makeStadiumInstance } from '../critters/stadium.js';
+import { stadiumMeta, loadStadium, makeStadiumInstance, stadiumBase } from '../critters/stadium.js';
 
-const PX = 112, COLS = 16, N = 151, say = document.getElementById('say');
+// as many as the model set in use has: 151 for the Stadium set, 493 for the Battle Revolution one
+const meta = await stadiumMeta();
+const PX = 112, COLS = 16, N = meta ? Math.max(...Object.keys(meta).map(Number)) : 151, say = document.getElementById('say');
+const set = /\/models\/pbr\/$/.test(stadiumBase()) ? 'pbr' : 'stadium';
 const r = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
 r.setSize(PX, PX);
 const sc = new THREE.Scene(), cam = new THREE.PerspectiveCamera(30, 1, 0.05, 80);
@@ -47,21 +50,25 @@ function shoot(loaded, dex) {
   sc.remove(inst.root); inst.dispose();
 }
 
-const meta = await stadiumMeta();
-if (!meta) say.textContent = 'No models here (models/stadium/meta.json is missing).';
+if (!meta) say.textContent = 'No models here (models/pbr/meta.json and models/stadium/meta.json are both missing).';
 else {
-  const all = [];
-  for (let d = 1; d <= N; d++) all.push(loadStadium(d).then((l) => ({ d, l })));
-  const got = (await Promise.all(all)).filter((q) => q.l);
+  // a few dozen at a time: every model at once is 493 files on the go and a lot of memory
+  const got = [];
+  for (let from = 1; from <= N; from += 40) {
+    const batch = [];
+    for (let d = from; d < from + 40 && d <= N; d++) batch.push(loadStadium(d).then((l) => ({ d, l })));
+    for (const q of await Promise.all(batch)) if (q.l) got.push(q);
+    say.textContent = `Loading the models... ${Math.min(N, from + 39)} of ${N}`;
+  }
   // twice, a moment apart: a texture can still be on its way to the graphics card the first time, and come out black
   for (const q of got) shoot(q.l, q.d);
   await new Promise((res) => setTimeout(res, 1500));
   for (const q of got) shoot(q.l, q.d);
   document.body.appendChild(sheet);
   const blob = await new Promise((res) => sheet.toBlob(res, 'image/png'));
-  const link = `<a download="faces.png" href="${URL.createObjectURL(blob)}">Save it as models/stadium/faces.png</a>`;
+  const link = `<a download="faces.png" href="${URL.createObjectURL(blob)}">Save it as models/${set}/faces.png</a>`;
   let saved = '';
-  try { const res = await fetch('/tools/save-faces', { method: 'POST', body: blob }); if (res.ok) saved = 'Saved to models/stadium/faces.png. '; } catch (e) { /* not the dev server */ }
+  try { const res = await fetch('/tools/save-faces' + (set === 'pbr' ? '?set=pbr' : ''), { method: 'POST', body: blob }); if (res.ok) saved = `Saved to models/${set}/faces.png. `; } catch (e) { /* not the dev server */ }
   say.innerHTML = `${got.length} of ${N} portraits, ${Math.round(blob.size / 1024)} KB. ${saved || link}`;
   window.__faces = { n: got.length, bytes: blob.size, saved: !!saved };
 }

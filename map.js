@@ -22,6 +22,8 @@ import * as eastSet from './habitats/east.js';
 import * as southSet from './habitats/south.js';
 import * as westSet from './habitats/west.js';
 
+export const ID = 'crossway', NAME = 'Crossway Continent';
+export const ROSTER = [1, 151];                            // the slots that live here
 export const BOUNDS = { x1: -240, x2: 240, z1: -240, z2: 240 };
 export const STARTS = [[-21, 21], [21, 21], [21, -21], [-21, -21]];      // team 0 (the player) first; all 30 m from the feast
 export const START = { x: STARTS[0][0], z: STARTS[0][1] };
@@ -85,6 +87,28 @@ export const PLACES = {
   bog: [-62, 62], crypt: [-133, 133],
   grove: [-86, 4], falls: [-166, -18], gorgeMouth: [-124, 0],
   barnyard: [-62, -64], windmillHill: [-134, -134],
+};
+
+// Where a ball should be heading for its size, by wedge from north clockwise: [inner place, outer place, ball size
+// needed for the outer one]. (The CPU teams and the autoplay steer by these: routeGoal in main.js.)
+export const ROUTES = [
+  [PLACES.frozenLake, [0, -140], 3.4], [PLACES.yard, [106, -106], 3.4], [PLACES.hotSprings, [140, 0], 3.4], [PLACES.oasis, [112, 100], 3],
+  [[0, 96], [30, 140], 2.8], [PLACES.bog, [-108, 112], 3], [PLACES.grove, [-150, 2], 3], [PLACES.barnyard, [-110, -110], 2.8],
+];
+// What the events (events.js) are told about this map: names for banners [short, in a sentence], the hearts of the
+// inner habitats, the landmarks, and which biomes an Elemental Surge can happen in.
+export const EVENT = {
+  HUB: ['Green', 'Crossway Green'],
+  SURGE: ['tundra', 'works', 'ashflats', 'canyon', 'beach', 'marsh', 'forest', 'farm'],
+  PLACE_INFO: {
+    frozenLake: ['Frozen Lake', 'the Frozen Lake'], yard: ['Stormworks', 'the Stormworks yard'], hotSprings: ['Hot Springs', 'the Hot Springs'],
+    oasis: ['Oasis', 'the Oasis'], pier: ['Pier', 'the Pier'], bog: ['Bog', 'the Big Bog'], grove: ['Grove', 'the Sunny Grove'], barnyard: ['Barnyard', 'the Barnyard'],
+    temple: ['Temple', 'the Temple of Echoes'], crypt: ['Crypt', 'the Gloomrest crypt'], lighthouse: ['Lighthouse', 'the Lighthouse'], windmillHill: ['Windmill', 'Windmill Hill'],
+    gorgeMouth: ['Gorge', 'the mouth of Echo Gorge'], dam: ['Dam', 'the Stormworks dam'], craterFoot: ['Crater', 'the foot of Mount Kiln'], peakFoot: ['Summit', 'the foot of Rimepeak'],
+  },
+  EXTRA_PLACES: { craterFoot: [128, 0], peakFoot: [0, -128] },
+  INNER_PLACES: ['frozenLake', 'yard', 'hotSprings', 'oasis', 'pier', 'bog', 'grove', 'barnyard'],
+  OUTER_PLACES: ['temple', 'crypt', 'lighthouse', 'windmillHill', 'gorgeMouth', 'dam', 'craterFoot', 'peakFoot'],
 };
 
 // ---- the shape of the land ----
